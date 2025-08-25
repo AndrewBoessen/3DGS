@@ -3,6 +3,7 @@
 #include "dataloader/colmap.hpp"
 
 #include <fstream>
+#include <iostream>
 
 namespace colmap {
 
