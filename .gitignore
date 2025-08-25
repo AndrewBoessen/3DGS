@@ -50,3 +50,6 @@
 
 # build directory
 build
+
+# lsp
+compile_commands.json
