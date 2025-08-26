@@ -10,6 +10,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Find the Eigen3 library
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
+# ===================================================================
+# LIBRARY DEFINITION
+# ===================================================================
 add_library(colmap src/colmap.cpp)
 
 target_include_directories(colmap
@@ -17,6 +20,14 @@ target_include_directories(colmap
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
     ${EIGEN3_INCLUDE_DIR}
 )
+
+# ===================================================================
+# MAIN EXECUTABLE
+# ===================================================================
+add_executable(gaussian_splatting src/main.cpp)
+
+# Link the main executable against our library
+target_link_libraries(gaussian_splatting PRIVATE colmap)
 
 # ===================================================================
 # TESTING SETUP

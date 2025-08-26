@@ -53,3 +53,4 @@ build
 
 # lsp
 compile_commands.json
+.cache
