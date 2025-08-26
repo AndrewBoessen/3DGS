@@ -21,6 +21,14 @@ target_include_directories(colmap
     ${EIGEN3_INCLUDE_DIR}
 )
 
+add_library(gaussian src/gaussian.cpp)
+
+target_include_directories(gaussian
+  PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    ${EIGEN3_INCLUDE_DIR}
+)
+
 # ===================================================================
 # MAIN EXECUTABLE
 # ===================================================================
