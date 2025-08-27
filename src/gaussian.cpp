@@ -2,9 +2,7 @@
 
 #include "gsplat/gaussian.hpp"
 
-#include <algorithm>
 #include <cassert>
-#include <numeric>
 
 /**
  * @brief Initialize Gaussians on points in Point3D.
@@ -25,7 +23,7 @@ Gaussians Gaussians::Initialize(const std::unordered_map<uint64_t, colmap::Point
   quaternion_vec.reserve(num_points);
 
   for (const auto &[id, point] : points) {
-    xyz_vec.push_back(point.xyz);
+    xyz_vec.push_back(point.xyz.cast<float>());
     rgb_vec.push_back(Eigen::Vector3f(point.rgb[0], point.rgb[1], point.rgb[2]) / 255.0f);
     opacity_vec.push_back(0.1f);
     scale_vec.push_back(Eigen::Vector3f(0.01f, 0.01f, 0.01f));
