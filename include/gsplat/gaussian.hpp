@@ -1,3 +1,5 @@
+// gaussian.hpp
+
 #pragma once
 
 #include <dataloader/colmap.hpp>
@@ -28,7 +30,8 @@ public:
   std::vector<Eigen::Quaternionf> quaternion;
 
   /// @brief Optional Spherical Harmonics (SH) coefficients.
-  std::optional<std::vector<float>> sh;
+  /// Each Eigen::VectorXf contains all coefficients for a single Gaussian.
+  std::optional<std::vector<Eigen::VectorXf>> sh;
 
   /**
    * @brief Default constructor. Creates an empty Gaussians object.
@@ -40,7 +43,8 @@ public:
    */
   Gaussians(std::vector<Eigen::Vector3f> &&xyz_in, std::vector<Eigen::Vector3f> &&rgb_in,
             std::vector<float> &&opacity_in, std::vector<Eigen::Vector3f> &&scale_in,
-            std::vector<Eigen::Quaternionf> &&quaternion_in, std::optional<std::vector<float>> &&sh_in = std::nullopt)
+            std::vector<Eigen::Quaternionf> &&quaternion_in,
+            std::optional<std::vector<Eigen::VectorXf>> &&sh_in = std::nullopt)
       : xyz(std::move(xyz_in)), rgb(std::move(rgb_in)), opacity(std::move(opacity_in)), scale(std::move(scale_in)),
         quaternion(std::move(quaternion_in)), sh(std::move(sh_in)) {}
 
