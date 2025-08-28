@@ -26,11 +26,12 @@ target_include_directories(dataloader
 # ===================================================================
 # GSPLAT LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat src/utils.cpp)
+add_library(gsplat src/utils.cpp src/gaussian.cpp)
 
 target_include_directories(gsplat
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    ${EIGEN3_INCLUDE_DIR}
 )
 target_link_libraries(gsplat PUBLIC yaml-cpp)
 
