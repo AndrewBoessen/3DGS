@@ -14,10 +14,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install System Dependencies (CMake, Eigen)
+      - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libeigen3-dev
+          sudo apt-get install -y cmake build-essential libeigen3-dev libyaml-cpp-dev
 
       - name: Set up CUDA repository
         run: |

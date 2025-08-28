@@ -58,7 +58,7 @@ public:
    * @param points Set of points in point cloud.
    * @return Gaussians with default parameters.
    */
-  static Gaussians Initialize(const std::unordered_map<uint64_t, colmap::Point3D> &points);
+  static Gaussians Initialize(const std::unordered_map<uint64_t, Point3D> &points);
 
   /**
    * @brief Appends new Gaussians from another Gaussians object.

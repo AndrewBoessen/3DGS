@@ -7,7 +7,7 @@
 /**
  * @brief Initialize Gaussians on points in Point3D.
  */
-Gaussians Gaussians::Initialize(const std::unordered_map<uint64_t, colmap::Point3D> &points) {
+Gaussians Gaussians::Initialize(const std::unordered_map<uint64_t, Point3D> &points) {
   size_t num_points = points.size();
 
   // Pre-allocate memory for efficiency
