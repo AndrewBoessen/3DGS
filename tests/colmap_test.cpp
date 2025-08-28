@@ -5,7 +5,7 @@ const std::string TEST_DATA_PATH = TEST_DATA_DIR;
 
 // Test suite for the ReadCamerasBinary function
 TEST(ColmapIoTest, ReadCamerasBinary) {
-  const auto cameras_optional = colmap::ReadCamerasBinary(TEST_DATA_PATH + "/cameras.bin");
+  const auto cameras_optional = ReadCamerasBinary(TEST_DATA_PATH + "/cameras.bin");
 
   // 1. Ensure the file was opened and read successfully
   ASSERT_TRUE(cameras_optional.has_value());
@@ -29,7 +29,7 @@ TEST(ColmapIoTest, ReadCamerasBinary) {
 
 // Test suite for the ReadImagesBinary function
 TEST(ColmapIoTest, ReadImagesBinary) {
-  const auto images_optional = colmap::ReadImagesBinary(TEST_DATA_PATH + "/images.bin");
+  const auto images_optional = ReadImagesBinary(TEST_DATA_PATH + "/images.bin");
 
   ASSERT_TRUE(images_optional.has_value());
   const auto &images = images_optional.value();
@@ -54,7 +54,7 @@ TEST(ColmapIoTest, ReadImagesBinary) {
 
 // Test suite for the ReadPoints3DBinary function
 TEST(ColmapIoTest, ReadPoints3DBinary) {
-  const auto points_optional = colmap::ReadPoints3DBinary(TEST_DATA_PATH + "/points3D.bin");
+  const auto points_optional = ReadPoints3DBinary(TEST_DATA_PATH + "/points3D.bin");
 
   ASSERT_TRUE(points_optional.has_value());
   const auto &points = points_optional.value();

@@ -13,8 +13,6 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
-namespace colmap {
-
 struct CameraModel {
   int model_id;
   std::string model_name;
@@ -77,5 +75,3 @@ std::optional<std::unordered_map<int, Image>> ReadImagesBinary(const std::filesy
  * Returns std::nullopt if the file cannot be opened or read.
  */
 std::optional<std::unordered_map<uint64_t, Point3D>> ReadPoints3DBinary(const std::filesystem::path &path);
-
-} // namespace colmap
