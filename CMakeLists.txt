@@ -35,7 +35,7 @@ target_include_directories(gaussian
 add_executable(gaussian_splatting src/main.cpp)
 
 # Link the main executable against our library
-target_link_libraries(gaussian_splatting PRIVATE colmap)
+target_link_libraries(gaussian_splatting PRIVATE colmap gaussian)
 
 # ===================================================================
 # TESTING SETUP

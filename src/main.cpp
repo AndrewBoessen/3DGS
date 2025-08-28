@@ -1,7 +1,7 @@
 #include "dataloader/colmap.hpp"
+#include "gsplat/gaussian.hpp"
 #include <iostream>
 #include <string>
-#include <vector>
 
 int main(int argc, char *argv[]) {
   // 1. Check for the correct number of command-line arguments.
@@ -50,6 +50,15 @@ int main(int argc, char *argv[]) {
   } else {
     std::cerr << "Error: Could not read points3D file at " << points3D_path << std::endl;
     return 1;
+  }
+
+  // Initilaize Gaussians
+  if (points_optional) {
+    const auto &points = points_optional.value();
+
+    // Initialize Gaussians with the loaded 3D points
+    Gaussians gaussians = Gaussians::Initialize(points);
+    std::cout << "Successfully initialized " << gaussians.xyz.size() << " Gaussians." << std::endl;
   }
 
   return 0; // Success
