@@ -32,7 +32,7 @@ target_include_directories(gsplat
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat PUBLIC yaml-cpp::yaml-cpp)
+target_link_libraries(gsplat PUBLIC yaml-cpp)
 
 # ===================================================================
 # MAIN EXECUTABLE
