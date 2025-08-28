@@ -17,7 +17,7 @@ jobs:
       - name: Install System Dependencies (CMake, Eigen)
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libeigen3-dev
+          sudo apt-get install -y cmake build-essential libeigen3-dev libyaml-cpp-dev
 
       - name: Set up CUDA repository
         run: |
