@@ -46,28 +46,29 @@ target_link_libraries(gaussian_splatting PRIVATE dataloader gsplat)
 # ===================================================================
 # TESTING SETUP
 # ===================================================================
-
-# Enable testing for the project
 enable_testing()
-
-# Download and configure GoogleTest using FetchContent
 include(FetchContent)
 FetchContent_Declare(
-  googletest
-  URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
 )
-# Make the googletest targets available
 FetchContent_MakeAvailable(googletest)
-
-# Add the test executable
-add_executable(colmap_tests tests/colmap_test.cpp)
-
-# Pass the full path to the test data directory
-target_compile_definitions(colmap_tests PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test_data")
-
-# Link the test executable against our library and GoogleTest
-target_link_libraries(colmap_tests PRIVATE dataloader gtest_main)
-
-# Add the test to CTest
 include(GoogleTest)
-gtest_discover_tests(colmap_tests)
+
+# Helper function to reduce boilerplate when adding a new GTest target.
+# Usage: add_gtest_executable(<test_name> <source_file> [LIBS...])
+function(add_gtest_executable test_name source_file)
+  add_executable(${test_name} ${source_file})
+  target_link_libraries(${test_name} PRIVATE gtest_main ${ARGN})
+  gtest_discover_tests(${test_name})
+endfunction()
+
+# --- Dataloader Tests ---
+add_gtest_executable(dataloader_tests tests/colmap_test.cpp dataloader)
+target_compile_definitions(dataloader_tests PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test_data")
+
+# --- Utils Tests ---
+add_gtest_executable(utils_tests tests/utils_test.cpp gsplat)
+
+# --- Gaussians Tests ---
+add_gtest_executable(gaussian_tests tests/gaussian_test.cpp gsplat dataloader)
