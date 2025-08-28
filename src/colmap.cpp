@@ -5,14 +5,10 @@
 #include <fstream>
 #include <iostream>
 
-namespace colmap {
-
-namespace {
 // Helper template to read a data type from a binary stream.
 template <typename T> bool ReadBinary(std::ifstream &stream, T &value) {
   return static_cast<bool>(stream.read(reinterpret_cast<char *>(&value), sizeof(T)));
 }
-} // namespace
 
 const std::unordered_map<int, CameraModel> &GetCameraModels() {
   static const std::unordered_map<int, CameraModel> CAMERA_MODELS = {
@@ -177,4 +173,3 @@ std::optional<std::unordered_map<uint64_t, Point3D>> ReadPoints3DBinary(const st
   }
   return points3D;
 }
-} // namespace colmap

@@ -1,20 +1,25 @@
 #include "dataloader/colmap.hpp"
+#include "gsplat/utils.hpp"
 #include <iostream>
 #include <string>
-#include <vector>
 
 int main(int argc, char *argv[]) {
   // 1. Check for the correct number of command-line arguments.
-  if (argc != 4) {
-    std::cerr << "Usage: " << argv[0] << " <path_to_cameras.bin> <path_to_images.bin> <path_to_points3D.bin>"
+  if (argc != 5) {
+    std::cerr << "Usage: " << argv[0]
+              << "<path_to_config_file.yaml> <path_to_cameras.bin> <path_to_images.bin> <path_to_points3D.bin>"
               << std::endl;
     return 1; // Return an error code
   }
 
   // 2. Get file paths from the arguments.
-  const std::string cameras_path = argv[1];
-  const std::string images_path = argv[2];
-  const std::string points3D_path = argv[3];
+  const std::string config_path = argv[1];
+  const std::string cameras_path = argv[2];
+  const std::string images_path = argv[3];
+  const std::string points3D_path = argv[4];
+
+  // Read config file and load parameters
+  ConfigParameters config = parseConfig(config_path);
 
   std::cout << "Attempting to read COLMAP binary files..." << std::endl;
   std::cout << "Cameras file: " << cameras_path << std::endl;
@@ -23,7 +28,7 @@ int main(int argc, char *argv[]) {
   std::cout << std::endl;
 
   // 3. Read the cameras.bin file.
-  const auto cameras_optional = colmap::ReadCamerasBinary(cameras_path);
+  const auto cameras_optional = ReadCamerasBinary(cameras_path);
   if (cameras_optional) {
     const auto &cameras = cameras_optional.value();
     std::cout << "Successfully read " << cameras.size() << " cameras." << std::endl;
@@ -33,7 +38,7 @@ int main(int argc, char *argv[]) {
   }
 
   // 4. Read the images.bin file.
-  const auto images_optional = colmap::ReadImagesBinary(images_path);
+  const auto images_optional = ReadImagesBinary(images_path);
   if (images_optional) {
     const auto &images = images_optional.value();
     std::cout << "Successfully read " << images.size() << " images." << std::endl;
@@ -43,7 +48,7 @@ int main(int argc, char *argv[]) {
   }
 
   // 5. Read the points3D.bin file.
-  const auto points_optional = colmap::ReadPoints3DBinary(points3D_path);
+  const auto points_optional = ReadPoints3DBinary(points3D_path);
   if (points_optional) {
     const auto &points = points_optional.value();
     std::cout << "Successfully read " << points.size() << " 3D points." << std::endl;
