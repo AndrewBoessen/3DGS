@@ -1,5 +1,6 @@
-#ifndef UTILS_HPP
-#define UTILS_HPP
+// utils.hpp
+
+#pragma once
 
 #include <string>
 
@@ -85,5 +86,3 @@ struct ConfigParameters {
  * @return A ConfigParameters struct containing the parsed values.
  */
 ConfigParameters parseConfig(const std::string &filename);
-
-#endif // UTILS_HPP
