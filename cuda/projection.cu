@@ -1,5 +1,5 @@
 #include "checks.cuh"
-#include "gsplat/cuda_functions.hpp"
+#include "gsplat/cuda_forward.hpp"
 
 __global__ void cam_intr_proj_kernel(const float *__restrict__ xyz, const float *__restrict__ K, const int N,
                                      float *uv) {
