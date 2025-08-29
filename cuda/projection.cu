@@ -1,14 +1,6 @@
 #include "checks.cuh"
-#include <cuda.h>
-#include <cuda_runtime.h>
+#include "gsplat/cuda_functions.hpp"
 
-/**
- * @brief CUDA kernel to project 3D points to 2D image coordinates using a camera intrinsic matrix.
- * @param[in]  xyz  A pointer to the input array of 3D points (in camera coordinates).
- * @param[in]  K    A pointer to the 3x3 camera intrinsic matrix.
- * @param[in]  N    The total number of 3D points to project.
- * @param[out] uv   A pointer to the output array where the 2D projected coordinates will be stored.
- */
 __global__ void cam_intr_proj_kernel(const float *__restrict__ xyz, const float *__restrict__ K, const int N,
                                      float *uv) {
   constexpr int XYZ_STRIDE = 3;
@@ -32,13 +24,6 @@ __global__ void cam_intr_proj_kernel(const float *__restrict__ xyz, const float 
   }
 }
 
-/**
- * @brief Launches the CUDA kernel for projecting 3D points to 2D image coordinates.
- * @param[in]  xyz  A device pointer to the input array of 3D points.
- * @param[in]  K    A device pointer to the camera intrinsic matrix.
- * @param[in]  N    The total number of points.
- * @param[out] uv   A device pointer to the output array for 2D coordinates.
- */
 void camera_intrinsic_projection(float *const xyz, const float *K, const int N, float *uv) {
   ASSERT_DEVICE_POINTER(xyz);
   ASSERT_DEVICE_POINTER(K);
