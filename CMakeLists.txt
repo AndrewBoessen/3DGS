@@ -1,11 +1,12 @@
 # CMakeLists.txt
 
 cmake_minimum_required(VERSION 3.20)
-project(ColmapReader)
+project(GuassianSplattingProject LANGUAGES CXX CUDA)
 
-# Use C++23 standard
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 # Find the Eigen3 library
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
@@ -34,6 +35,16 @@ target_include_directories(gsplat
     ${EIGEN3_INCLUDE_DIR}
 )
 target_link_libraries(gsplat PUBLIC yaml-cpp)
+
+# ===================================================================
+# GSPLAT CUDA LIBRARY DEFINITION
+# ===================================================================
+add_library(gsplat_cuda cuda/projection.cu cuda/culling.cu)
+
+target_include_directories(gsplat_cuda
+  PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
 
 # ===================================================================
 # MAIN EXECUTABLE
@@ -72,3 +83,6 @@ add_gtest_executable(utils_tests tests/utils_test.cpp gsplat)
 
 # --- Gaussians Tests ---
 add_gtest_executable(gaussian_tests tests/gaussian_test.cpp gsplat dataloader)
+
+# --- CUDA Forward Tests ---
+add_gtest_executable(cuda_forward_tests tests/cuda_forward_test.cpp gsplat_cuda)

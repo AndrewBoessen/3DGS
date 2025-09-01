@@ -1,3 +1,5 @@
+// checks.cuh
+
 #pragma once
 
 #include <cuda.h>
@@ -11,7 +13,7 @@
  * @param file The source file where the assertion is made (usually __FILE__).
  * @param line The line number where the assertion is made (usually __LINE__).
  */
-void assertIsDevicePointer(const void *ptr, const char *file, int line) {
+inline void assertIsDevicePointer(const void *ptr, const char *file, int line) {
   if (ptr == nullptr) {
     fprintf(stderr, "Assertion failed at %s:%d: Pointer is null.\n", file, line);
     exit(EXIT_FAILURE);
