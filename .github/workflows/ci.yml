@@ -1,4 +1,4 @@
-name: CI — Build C++23 + CUDA 13.0
+name: CI — Build & Test C++23 + CUDA 13.0
 
 on:
   push:
@@ -42,3 +42,6 @@ jobs:
 
       - name: Build Project
         run: cmake --build build --parallel $(nproc)
+
+      - name: Run CTest
+        run: ctest --test-dir build --output-on-failure
