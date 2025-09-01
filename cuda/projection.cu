@@ -20,14 +20,16 @@ __global__ void cam_intr_proj_kernel(const float *__restrict__ xyz, const float 
   const float fy = __shfl_sync(0xffffffff, k_val, 4);
   const float cy = __shfl_sync(0xffffffff, k_val, 5);
 
-  if (i < N) {
-    const float x = xyz[i * XYZ_STRIDE + 0];
-    const float y = xyz[i * XYZ_STRIDE + 1];
-    const float z = xyz[i * XYZ_STRIDE + 2];
-
-    uv[i * UV_STRIDE + 0] = fx * x / z + cx;
-    uv[i * UV_STRIDE + 1] = fy * y / z + cy;
+  if (i >= N) {
+    return;
   }
+
+  const float x = xyz[i * XYZ_STRIDE + 0];
+  const float y = xyz[i * XYZ_STRIDE + 1];
+  const float z = xyz[i * XYZ_STRIDE + 2];
+
+  uv[i * UV_STRIDE + 0] = fx * x / z + cx;
+  uv[i * UV_STRIDE + 1] = fy * y / z + cy;
 }
 
 void camera_intrinsic_projection(float *const xyz, const float *K, const int N, float *uv) {

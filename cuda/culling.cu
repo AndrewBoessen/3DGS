@@ -1,7 +1,5 @@
 #include "checks.cuh"
 #include "gsplat/cuda_forward.hpp"
-#include <cuda.h>
-#include <cuda_runtime.h>
 
 __device__ __forceinline__ bool z_distance_culling(const float z, const float near_thresh, const float far_thresh) {
   return z >= near_thresh && z <= far_thresh;
@@ -19,14 +17,16 @@ __global__ void frustum_culling_kernel(const float *__restrict__ uv, const float
 
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
 
-  if (i < N) {
-    const float u = uv[i * UV_STRIDE + 0];
-    const float v = uv[i * UV_STRIDE + 1];
-
-    const float z = xyz[i * XYZ_STRIDE + 2];
-
-    mask[i] = !(z_distance_culling(z, near_thresh, far_thresh) || frustum_culling(u, v, padding, width, height));
+  if (i >= N) {
+    return;
   }
+
+  const float u = uv[i * UV_STRIDE + 0];
+  const float v = uv[i * UV_STRIDE + 1];
+
+  const float z = xyz[i * XYZ_STRIDE + 2];
+
+  mask[i] = !(z_distance_culling(z, near_thresh, far_thresh) || frustum_culling(u, v, padding, width, height));
 }
 
 void cull_gaussians(float *const uv, float *const xyz, const int N, const float near_thresh, const float far_thresh,
