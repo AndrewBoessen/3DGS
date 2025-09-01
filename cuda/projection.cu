@@ -7,21 +7,29 @@ __global__ void cam_intr_proj_kernel(const float *__restrict__ xyz, const float 
   constexpr int UV_STRIDE = 2;
 
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  const int lane_id = threadIdx.x & 0x1f;
 
-  if (i < N) {
-    const float x = xyz[i * XYZ_STRIDE + 0];
-    const float y = xyz[i * XYZ_STRIDE + 1];
-    const float z = xyz[i * XYZ_STRIDE + 2];
-
-    // K = [fx, 0, cx, 0, fy, cy, 0, 0, 1]
-    const float fx = K[0];
-    const float cx = K[2];
-    const float fy = K[4];
-    const float cy = K[5];
-
-    uv[i * UV_STRIDE + 0] = fx * x / z + cx;
-    uv[i * UV_STRIDE + 1] = fy * y / z + cy;
+  // load and broadcast K to all threads in warp
+  float k_val = 0.0f;
+  if (lane_id < 9) {
+    k_val = K[lane_id];
   }
+  // K = [fx, 0, cx, 0, fy, cy, 0, 0, 1]
+  const float fx = __shfl_sync(0xffffffff, k_val, 0);
+  const float cx = __shfl_sync(0xffffffff, k_val, 2);
+  const float fy = __shfl_sync(0xffffffff, k_val, 4);
+  const float cy = __shfl_sync(0xffffffff, k_val, 5);
+
+  if (i >= N) {
+    return;
+  }
+
+  const float x = xyz[i * XYZ_STRIDE + 0];
+  const float y = xyz[i * XYZ_STRIDE + 1];
+  const float z = xyz[i * XYZ_STRIDE + 2];
+
+  uv[i * UV_STRIDE + 0] = fx * x / z + cx;
+  uv[i * UV_STRIDE + 1] = fy * y / z + cy;
 }
 
 void camera_intrinsic_projection(float *const xyz, const float *K, const int N, float *uv) {
