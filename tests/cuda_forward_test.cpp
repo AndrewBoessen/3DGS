@@ -160,3 +160,80 @@ TEST_F(CudaKernelTest, GaussianCulling) {
   CUDA_CHECK(cudaFree(d_uv));
   CUDA_CHECK(cudaFree(d_mask));
 }
+
+// Test case for the camera_extrinsic_projection function.
+TEST_F(CudaKernelTest, CameraExtrinsicProjection) {
+  const int N = 3; // Number of points
+
+  // Host-side data
+  // Extrinsic matrix T = [R|t] is 3x4.
+  // R is identity, t = [10, 20, 30].
+  // Stored in column-major order for CUBLAS.
+  const std::vector<float> h_T = {
+      1.0f,  0.0f,  0.0f, // col 1 (R)
+      0.0f,  1.0f,  0.0f, // col 2 (R)
+      0.0f,  0.0f,  1.0f, // col 3 (R)
+      10.0f, 20.0f, 30.0f // col 4 (t)
+  };
+
+  // World coordinates (x, y, z)
+  const std::vector<float> h_xyz_w = {
+      1.0f,  2.0f, 3.0f,  // Point 0
+      -5.0f, 4.0f, -1.0f, // Point 1
+      0.0f,  0.0f, 0.0f   // Point 2
+  };
+
+  // Convert to homogeneous coordinates [x, y, z, 1] for the matrix multiplication.
+  std::vector<float> h_xyz_w_hom(N * 4);
+  for (int i = 0; i < N; ++i) {
+    h_xyz_w_hom[i * 4 + 0] = h_xyz_w[i * 3 + 0];
+    h_xyz_w_hom[i * 4 + 1] = h_xyz_w[i * 3 + 1];
+    h_xyz_w_hom[i * 4 + 2] = h_xyz_w[i * 3 + 2];
+    h_xyz_w_hom[i * 4 + 3] = 1.0f;
+  }
+
+  // This will store the output camera coordinates.
+  std::vector<float> h_xyz_c(N * 3);
+
+  // Device-side data pointers
+  float *d_T, *d_xyz_w_hom, *d_xyz_c;
+
+  // Allocate memory on the device
+  CUDA_CHECK(cudaMalloc(&d_T, h_T.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_xyz_w_hom, h_xyz_w_hom.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_xyz_c, h_xyz_c.size() * sizeof(float)));
+
+  // Copy input data from host to device
+  CUDA_CHECK(cudaMemcpy(d_T, h_T.data(), h_T.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_xyz_w_hom, h_xyz_w_hom.data(), h_xyz_w_hom.size() * sizeof(float), cudaMemcpyHostToDevice));
+
+  // Launch the function (which wraps a CUBLAS call)
+  camera_extrinsic_projection(d_xyz_w_hom, d_T, N, d_xyz_c);
+  CUDA_CHECK(cudaDeviceSynchronize()); // Wait for the kernel to finish
+
+  // Copy result data from device to host
+  CUDA_CHECK(cudaMemcpy(h_xyz_c.data(), d_xyz_c, h_xyz_c.size() * sizeof(float), cudaMemcpyDeviceToHost));
+
+  // Calculate expected results on the host
+  // xyz_c = R * xyz_w + t
+  std::vector<float> expected_xyz_c(N * 3);
+  for (int i = 0; i < N; ++i) {
+    const float x_w = h_xyz_w[i * 3 + 0];
+    const float y_w = h_xyz_w[i * 3 + 1];
+    const float z_w = h_xyz_w[i * 3 + 2];
+    // Since R is identity, this simplifies to x_c = x_w + t_x, etc.
+    expected_xyz_c[i * 3 + 0] = x_w + h_T[9];  // t_x
+    expected_xyz_c[i * 3 + 1] = y_w + h_T[10]; // t_y
+    expected_xyz_c[i * 3 + 2] = z_w + h_T[11]; // t_z
+  }
+
+  // Compare results
+  for (int i = 0; i < N * 3; ++i) {
+    ASSERT_NEAR(h_xyz_c[i], expected_xyz_c[i], 1e-5);
+  }
+
+  // Free device memory
+  CUDA_CHECK(cudaFree(d_T));
+  CUDA_CHECK(cudaFree(d_xyz_w_hom));
+  CUDA_CHECK(cudaFree(d_xyz_c));
+}
