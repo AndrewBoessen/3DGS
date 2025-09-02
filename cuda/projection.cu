@@ -32,6 +32,26 @@ __global__ void cam_intr_proj_kernel(const float *__restrict__ xyz, const float 
   uv[i * UV_STRIDE + 1] = fy * y / z + cy;
 }
 
+void camera_extrinsic_projection(float *const xyz_w, const float *T, const int N, float *xyz_c) {
+  ASSERT_DEVICE_POINTER(xyz_w);
+  ASSERT_DEVICE_POINTER(T);
+  ASSERT_DEVICE_POINTER(xyz_c);
+
+  cublasHandle_t handle;
+  CHECK_CUBLAS(cublasCreate(&handle));
+
+  const float alpha = 1.0f;
+  const float beta = 0.0f;
+
+  // A is T (3x4), B is xyz_w (4x1), C is xyz_c (3x1)
+  const int m = 3; // Rows of T and xyz_c
+  const int n = 1; // Columns of xyz_w and xyz_c
+  const int k = 4; // Columns of T and rows of xyz_w
+
+  CHECK_CUBLAS(cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, T, m, 0, xyz_w, k, k, &beta,
+                                         xyz_c, m, m, N));
+}
+
 void camera_intrinsic_projection(float *const xyz, const float *K, const int N, float *uv) {
   ASSERT_DEVICE_POINTER(xyz);
   ASSERT_DEVICE_POINTER(K);

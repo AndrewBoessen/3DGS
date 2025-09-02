@@ -6,6 +6,15 @@
 #include <cuda_runtime.h>
 
 /**
+ * @brief Compute camera view of points from rotation matrix and translation vector
+ * @param[in]  xyz_w  A device pointer to world view of points
+ * @param[in]  T      A device pointer to camera extrinsic matrix
+ * @param[in]  N      The total number of points
+ * @param[out] xyz_c  A device porinter to output camera view
+ */
+void camera_extrinsic_projection(float *const xyz_w, const float *T, const int N, float *xyz_c);
+
+/**
  * @brief Launches the CUDA kernel for projecting 3D points to 2D image coordinates.
  * @param[in]  xyz  A device pointer to the input array of 3D points.
  * @param[in]  K    A device pointer to the camera intrinsic matrix.
