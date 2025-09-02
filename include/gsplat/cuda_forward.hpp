@@ -6,6 +6,15 @@
 #include <cuda_runtime.h>
 
 /**
+ * @brief Compute covariance matrix of Gaussian from quaternion and scale vector
+ * @param[in] quaternion A device pointer to Gaussian quaternion
+ * @param[in] scale A device pointer to scale vectors
+ * @param[in] N The total number of Gaussians
+ * @param[out] sigma A device pointer to ouput covariance matrix
+ */
+void compute_sigma(float *const quaternion, float *const scale, const int N, float *sigma);
+
+/**
  * @brief Compute camera view of points from rotation matrix and translation vector
  * @param[in]  xyz_w  A device pointer to world view of points
  * @param[in]  T      A device pointer to camera extrinsic matrix

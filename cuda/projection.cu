@@ -1,3 +1,5 @@
+// projection.cu
+
 #include "checks.cuh"
 #include "gsplat/cuda_forward.hpp"
 

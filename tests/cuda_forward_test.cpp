@@ -1,3 +1,5 @@
+
+#include <cmath>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <vector>
@@ -28,6 +30,61 @@ protected:
     ASSERT_GT(deviceCount, 0);
   }
 };
+
+// Test case for the compute_sigma function.
+// This test verifies the calculation of the covariance matrix Sigma = R * S^2 * R^T.
+TEST_F(CudaKernelTest, ComputeSigma) {
+  const int N = 2;
+
+  // Host-side input data
+  const std::vector<float> h_quaternion = {// Case 1: Identity rotation
+                                           1.0f, 0.0f, 0.0f, 0.0f,
+                                           // Case 2: 90-degree rotation around Z-axis
+                                           sqrtf(0.5f), 0.0f, 0.0f, sqrtf(0.5f)};
+
+  const std::vector<float> h_scale = {// Case 1: Scales for identity rotation
+                                      logf(2.0f), logf(3.0f), logf(4.0f),
+                                      // Case 2: Scales for rotated gaussian
+                                      logf(1.0f), logf(2.0f), logf(3.0f)};
+
+  std::vector<float> h_sigma(N * 9); // Each sigma is a 3x3 matrix
+
+  // Device-side data pointers
+  float *d_quaternion, *d_scale, *d_sigma;
+
+  // Allocate memory on the device
+  CUDA_CHECK(cudaMalloc(&d_quaternion, h_quaternion.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_scale, h_scale.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_sigma, h_sigma.size() * sizeof(float)));
+
+  // Copy input data from host to device
+  CUDA_CHECK(
+      cudaMemcpy(d_quaternion, h_quaternion.data(), h_quaternion.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_scale, h_scale.data(), h_scale.size() * sizeof(float), cudaMemcpyHostToDevice));
+
+  // Launch the function to be tested
+  compute_sigma(d_quaternion, d_scale, N, d_sigma);
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  // Copy result from device to host
+  CUDA_CHECK(cudaMemcpy(h_sigma.data(), d_sigma, h_sigma.size() * sizeof(float), cudaMemcpyDeviceToHost));
+
+  // Expected results calculated on the host
+  const std::vector<float> expected_sigma = {// Case 1: R=I, S=diag(2,3,4). Sigma = I*S^2*I^T = diag(4,9,16)
+                                             4.0f, 0.0f, 0.0f, 0.0f, 9.0f, 0.0f, 0.0f, 0.0f, 16.0f,
+                                             // Case 2: R=RotZ(90), S=diag(1,2,3). Sigma = R*S^2*R^T = diag(4,1,9)
+                                             4.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 9.0f};
+
+  // Compare results
+  for (size_t i = 0; i < h_sigma.size(); ++i) {
+    ASSERT_NEAR(h_sigma[i], expected_sigma[i], 1e-5);
+  }
+
+  // Free device memory
+  CUDA_CHECK(cudaFree(d_quaternion));
+  CUDA_CHECK(cudaFree(d_scale));
+  CUDA_CHECK(cudaFree(d_sigma));
+}
 
 // Test case for the camera_intrinsic_projection kernel.
 TEST_F(CudaKernelTest, CameraProjection) {
