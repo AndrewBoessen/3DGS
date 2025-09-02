@@ -12,6 +12,8 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 # Find YAML library
 find_package(yaml-cpp REQUIRED)
+# Find CUDA Toolkit and its libraries (cuBLAS, etc.)
+find_package(CUDAToolkit REQUIRED)
 
 # ===================================================================
 # DATALODER LIBRARY DEFINITION
@@ -45,6 +47,7 @@ target_include_directories(gsplat_cuda
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
+target_link_libraries(gsplat_cuda PUBLIC CUDA::cublas)
 
 # ===================================================================
 # MAIN EXECUTABLE
