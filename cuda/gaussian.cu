@@ -13,8 +13,8 @@ __global__ void form_scale_vector(const float *__restrict__ scale_in, const int 
   }
 
   float sx = expf(scale_in[SCALE_STRIDE * i + 0]);
-  float sy = expf(scale_in[SCALE_STRIDE * i + 2]);
-  float sz = expf(scale_in[SCALE_STRIDE * i + 3]);
+  float sy = expf(scale_in[SCALE_STRIDE * i + 1]);
+  float sz = expf(scale_in[SCALE_STRIDE * i + 2]);
 
   scale_out[SCALE_STRIDE * i + 0] = sx * sx;
   scale_out[SCALE_STRIDE * i + 1] = sy * sy;
