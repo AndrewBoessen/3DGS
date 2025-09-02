@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <cublas_v2.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <stdio.h>
@@ -35,6 +36,25 @@ inline void assertIsDevicePointer(const void *ptr, const char *file, int line) {
     exit(EXIT_FAILURE);
   }
 }
+
+// Simple CUDA/cuBLAS error checking macros for robustness
+#define CHECK_CUDA(call)                                                                                               \
+  do {                                                                                                                 \
+    cudaError_t err = call;                                                                                            \
+    if (err != cudaSuccess) {                                                                                          \
+      fprintf(stderr, "CUDA Error in %s at line %d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err));               \
+      exit(EXIT_FAILURE);                                                                                              \
+    }                                                                                                                  \
+  } while (0)
+
+#define CHECK_CUBLAS(call)                                                                                             \
+  do {                                                                                                                 \
+    cublasStatus_t status = call;                                                                                      \
+    if (status != CUBLAS_STATUS_SUCCESS) {                                                                             \
+      fprintf(stderr, "cuBLAS Error in %s at line %d\n", __FILE__, __LINE__);                                          \
+      exit(EXIT_FAILURE);                                                                                              \
+    }                                                                                                                  \
+  } while (0)
 
 // A simple macro to make calling the assertion function easier
 #define ASSERT_DEVICE_POINTER(p) assertIsDevicePointer(p, __FILE__, __LINE__)
