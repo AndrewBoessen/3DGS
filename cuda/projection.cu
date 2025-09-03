@@ -3,6 +3,47 @@
 #include "checks.cuh"
 #include "gsplat/cuda_forward.hpp"
 
+__global__ void cam_extr_proj_kernel(const float *__restrict__ xyz_w, const float *__restrict__ T, const int N,
+                                     float *xyz_c) {
+  constexpr int XYZ_STRIDE = 3;
+
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  const int lane_id = threadIdx.x & 0x1f; // lane_id in warp (0-31)
+
+  // Load and broadcast Extrinsic Matrix T (3x4) within warp
+  float t_val = 0.0f;
+  if (lane_id < 12) {
+    t_val = T[lane_id];
+  }
+  // T = [r00, r01, r02, t0, r10, r11, r12, t1, r20, r21, r22, t2]
+  const float t00 = __shfl_sync(0xffffffff, t_val, 0);
+  const float t01 = __shfl_sync(0xffffffff, t_val, 1);
+  const float t02 = __shfl_sync(0xffffffff, t_val, 2);
+  const float t03 = __shfl_sync(0xffffffff, t_val, 3);
+  const float t10 = __shfl_sync(0xffffffff, t_val, 4);
+  const float t11 = __shfl_sync(0xffffffff, t_val, 5);
+  const float t12 = __shfl_sync(0xffffffff, t_val, 6);
+  const float t13 = __shfl_sync(0xffffffff, t_val, 7);
+  const float t20 = __shfl_sync(0xffffffff, t_val, 8);
+  const float t21 = __shfl_sync(0xffffffff, t_val, 9);
+  const float t22 = __shfl_sync(0xffffffff, t_val, 10);
+  const float t23 = __shfl_sync(0xffffffff, t_val, 11);
+
+  if (i >= N) {
+    return;
+  }
+
+  // Load world-space point
+  const float wx = xyz_w[i * XYZ_STRIDE + 0];
+  const float wy = xyz_w[i * XYZ_STRIDE + 1];
+  const float wz = xyz_w[i * XYZ_STRIDE + 2];
+
+  // Matrix-vector multiply to get camera-space point xyz_c
+  xyz_c[i * XYZ_STRIDE + 0] = t00 * wx + t01 * wy + t02 * wz + t03;
+  xyz_c[i * XYZ_STRIDE + 1] = t10 * wx + t11 * wy + t12 * wz + t13;
+  xyz_c[i * XYZ_STRIDE + 2] = t20 * wx + t21 * wy + t22 * wz + t23;
+}
+
 __global__ void cam_intr_proj_kernel(const float *__restrict__ xyz, const float *__restrict__ K, const int N,
                                      float *uv) {
   constexpr int XYZ_STRIDE = 3;
@@ -39,19 +80,14 @@ void camera_extrinsic_projection(float *const xyz_w, const float *T, const int N
   ASSERT_DEVICE_POINTER(T);
   ASSERT_DEVICE_POINTER(xyz_c);
 
-  cublasHandle_t handle;
-  CHECK_CUBLAS(cublasCreate(&handle));
+  const int threads_per_block = 1024;
+  // Calculate the number of blocks needed to cover all N points
+  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
 
-  const float alpha = 1.0f;
-  const float beta = 0.0f;
+  dim3 gridsize(num_blocks, 1, 1);
+  dim3 blocksize(threads_per_block, 1, 1);
 
-  // A is T (3x4), B is xyz_w (4x1), C is xyz_c (3x1)
-  const int m = 3; // Rows of T and xyz_c
-  const int n = 1; // Columns of xyz_w and xyz_c
-  const int k = 4; // Columns of T and rows of xyz_w
-
-  CHECK_CUBLAS(cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha, T, m, 0, xyz_w, k, k, &beta,
-                                         xyz_c, m, m, N));
+  cam_extr_proj_kernel<<<gridsize, blocksize>>>(xyz_w, T, N, xyz_c);
 }
 
 void camera_intrinsic_projection(float *const xyz, const float *K, const int N, float *uv) {

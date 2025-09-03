@@ -92,7 +92,7 @@ TEST_F(CudaKernelTest, ComputeSigma) {
 }
 
 // Test case for the camera_intrinsic_projection kernel.
-TEST_F(CudaKernelTest, CameraProjection) {
+TEST_F(CudaKernelTest, CameraIntrinsicProjection) {
   const int N = 4; // Number of points
 
   // Host-side data
