@@ -123,8 +123,8 @@ void compute_sigma(float *const quaternion, float *const scale, const int N, flo
   const int k = 3;
 
   // Sigma = RS x (RS)^T
-  CHECK_CUBLAS(cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_T, m, n, k, &alpha, RS, m, m, RS, m, m, &beta,
-                                         sigma, m, m, N));
+  CHECK_CUBLAS(cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_T, m, n, k, &alpha, RS, m, m * k, RS, n, n * k,
+                                         &beta, sigma, m, m * n, N));
 
   CHECK_CUDA(cudaFree(RS));
   CHECK_CUDA(cudaFree(rotation));
