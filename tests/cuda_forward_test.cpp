@@ -1,4 +1,3 @@
-
 #include <cmath>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -32,7 +31,9 @@ protected:
 };
 
 // Test case for the compute_sigma function.
-// This test verifies the calculation of the covariance matrix Sigma = R * S^2 * R^T.
+// This test verifies the calculation of the covariance matrix Sigma = (R*S) * (R*S)^T,
+// where R is a rotation matrix and S is a diagonal scaling matrix.
+// The output Sigma matrix is stored in column-major order.
 TEST_F(CudaKernelTest, ComputeSigma) {
   const int N = 2;
 
@@ -70,10 +71,14 @@ TEST_F(CudaKernelTest, ComputeSigma) {
   CUDA_CHECK(cudaMemcpy(h_sigma.data(), d_sigma, h_sigma.size() * sizeof(float), cudaMemcpyDeviceToHost));
 
   // Expected results calculated on the host
-  const std::vector<float> expected_sigma = {// Case 1: R=I, S=diag(2,3,4). Sigma = I*S^2*I^T = diag(4,9,16)
+  // The output sigma is in COLUMN-MAJOR order.
+  const std::vector<float> expected_sigma = {// Case 1: R=I, S=diag(2,3,4). Sigma = diag(4,9,16)
+                                             // Column 1   Column 2   Column 3
                                              4.0f, 0.0f, 0.0f, 0.0f, 9.0f, 0.0f, 0.0f, 0.0f, 16.0f,
-                                             // Case 2: R=RotZ(90), S=diag(1,2,3). Sigma = R*S^2*R^T = diag(4,1,9)
-                                             4.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 9.0f};
+
+                                             // Case 2: R=RotZ(90), S=diag(1,2,3). Sigma = diag(4,1,9) after rotation.
+                                             // Column 1   Column 2   Column 3
+                                             1.0f, 0.0f, 0.0f, 0.0f, 4.0f, 0.0f, 0.0f, 0.0f, 9.0f};
 
   // Compare results
   for (size_t i = 0; i < h_sigma.size(); ++i) {

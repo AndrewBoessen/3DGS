@@ -3,8 +3,10 @@
 #include "checks.cuh"
 #include "gsplat/cuda_forward.hpp"
 
-__global__ void form_scale_vector(const float *__restrict__ scale_in, const int N, float *scale_out) {
+__global__ void scale_rotation_kernel(const float *__restrict__ rotation, const float *__restrict__ scale, const int N,
+                                      float *RS) {
   constexpr int SCALE_STRIDE = 3;
+  constexpr int ROTATION_STRIDE = 9;
 
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -12,13 +14,26 @@ __global__ void form_scale_vector(const float *__restrict__ scale_in, const int 
     return;
   }
 
-  float sx = expf(scale_in[SCALE_STRIDE * i + 0]);
-  float sy = expf(scale_in[SCALE_STRIDE * i + 1]);
-  float sz = expf(scale_in[SCALE_STRIDE * i + 2]);
+  float sx = expf(scale[SCALE_STRIDE * i + 0]);
+  float sy = expf(scale[SCALE_STRIDE * i + 1]);
+  float sz = expf(scale[SCALE_STRIDE * i + 2]);
 
-  scale_out[SCALE_STRIDE * i + 0] = sx * sx;
-  scale_out[SCALE_STRIDE * i + 1] = sy * sy;
-  scale_out[SCALE_STRIDE * i + 2] = sz * sz;
+  const int base_idx = ROTATION_STRIDE * i;
+
+  // --- Column 1 of RS ---
+  RS[base_idx + 0] = rotation[base_idx + 0] * sx; // R(0,0)
+  RS[base_idx + 1] = rotation[base_idx + 3] * sy; // R(1,0)
+  RS[base_idx + 2] = rotation[base_idx + 6] * sz; // R(2,0)
+
+  // --- Column 2 of RS ---
+  RS[base_idx + 3] = rotation[base_idx + 1] * sx; // R(0,1)
+  RS[base_idx + 4] = rotation[base_idx + 4] * sy; // R(1,1)
+  RS[base_idx + 5] = rotation[base_idx + 7] * sz; // R(2,1)
+
+  // --- Column 3 of RS ---
+  RS[base_idx + 6] = rotation[base_idx + 2] * sx; // R(0,2)
+  RS[base_idx + 7] = rotation[base_idx + 5] * sy; // R(1,2)
+  RS[base_idx + 8] = rotation[base_idx + 8] * sz; // R(2,2)
 }
 
 __global__ void quat_to_rot_kernel(const float *__restrict__ quaternion, const int N, float *rotation) {
@@ -86,18 +101,15 @@ void compute_sigma(float *const quaternion, float *const scale, const int N, flo
   dim3 blocksize(threads_per_block, 1, 1);
 
   float *RS = nullptr;
-  CHECK_CUDA(cudaMalloc((void **)RS, N * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&RS, N * 9 * sizeof(float)));
 
   float *rotation = nullptr;
-  CHECK_CUDA(cudaMalloc((void **)rotation, N * 9 * sizeof(float)));
-
-  float *scale_sqr = nullptr;
-  CHECK_CUDA(cudaMalloc((void **)scale_sqr, N * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&rotation, N * 9 * sizeof(float)));
 
   // quaternion to rotation matrix
   quat_to_rot_kernel<<<gridsize, blocksize>>>(quaternion, N, rotation);
-  // square scale to ensure no negative values
-  form_scale_vector<<<gridsize, blocksize>>>(scale, N, scale_sqr);
+  // scale rotation matrix
+  scale_rotation_kernel<<<gridsize, blocksize>>>(rotation, scale, N, RS);
 
   cublasHandle_t handle;
   CHECK_CUBLAS(cublasCreate(&handle));
@@ -105,25 +117,15 @@ void compute_sigma(float *const quaternion, float *const scale, const int N, flo
   const float alpha = 1.0f;
   const float beta = 0.0f;
 
-  // A is rotation (3x3), B is scale_sqr (3x1), C is RS (3x1)
-  const int m_rs = 3;
-  const int n_rs = 1;
-  const int k_rs = 3;
-
-  // RS = rotation x scale_sqr
-  CHECK_CUBLAS(cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, m_rs, n_rs, k_rs, &alpha, rotation, m_rs,
-                                         m_rs, scale_sqr, k_rs, k_rs, &beta, RS, m_rs, m_rs, N));
-
-  // A is RS (3x1), B is (RS)^T (1x3), C is sigma (3x3)
+  // A is RS (3x3), B is (RS)^T (3x3), C is sigma (3x3)
   const int m = 3;
   const int n = 3;
-  const int k = 1;
+  const int k = 3;
 
   // Sigma = RS x (RS)^T
-  CHECK_CUBLAS(cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_T, m, n, k, &alpha, RS, m, m, RS, k, k, &beta,
-                                         sigma, m, m, N));
+  CHECK_CUBLAS(cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_T, m, n, k, &alpha, RS, m, m * k, RS, n, n * k,
+                                         &beta, sigma, m, m * n, N));
 
   CHECK_CUDA(cudaFree(RS));
   CHECK_CUDA(cudaFree(rotation));
-  CHECK_CUDA(cudaFree(scale_sqr));
 }
