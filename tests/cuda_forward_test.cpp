@@ -230,12 +230,10 @@ TEST_F(CudaKernelTest, CameraExtrinsicProjection) {
   // Host-side data
   // Extrinsic matrix T = [R|t] is 3x4.
   // R is identity, t = [10, 20, 30].
-  // Stored in column-major order for CUBLAS.
   const std::vector<float> h_T = {
-      1.0f,  0.0f,  0.0f, // col 1 (R)
-      0.0f,  1.0f,  0.0f, // col 2 (R)
-      0.0f,  0.0f,  1.0f, // col 3 (R)
-      10.0f, 20.0f, 30.0f // col 4 (t)
+      1.0f, 0.0f, 0.0f, 10.0f, // Row 1
+      0.0f, 1.0f, 0.0f, 20.0f, // Row 2
+      0.0f, 0.0f, 1.0f, 30.0f  // Row 3
   };
 
   // World coordinates (x, y, z)
@@ -275,8 +273,8 @@ TEST_F(CudaKernelTest, CameraExtrinsicProjection) {
     const float y_w = h_xyz_w[i * 3 + 1];
     const float z_w = h_xyz_w[i * 3 + 2];
     // Since R is identity, this simplifies to x_c = x_w + t_x, etc.
-    expected_xyz_c[i * 3 + 0] = x_w + h_T[9];  // t_x
-    expected_xyz_c[i * 3 + 1] = y_w + h_T[10]; // t_y
+    expected_xyz_c[i * 3 + 0] = x_w + h_T[3];  // t_x
+    expected_xyz_c[i * 3 + 1] = y_w + h_T[7];  // t_y
     expected_xyz_c[i * 3 + 2] = z_w + h_T[11]; // t_z
   }
 
