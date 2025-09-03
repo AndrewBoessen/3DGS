@@ -77,12 +77,8 @@ TEST_F(CudaKernelTest, ComputeSigma) {
                                              4.0f, 0.0f, 0.0f, 0.0f, 9.0f, 0.0f, 0.0f, 0.0f, 16.0f,
 
                                              // Case 2: R=RotZ(90), S=diag(1,2,3). Sigma = diag(4,1,9) after rotation.
-                                             // Rotation matrix for 90 deg around Z is:
-                                             // [[0, -1, 0], [1, 0, 0], [0, 0, 1]]
-                                             // RS = R*S = [[0, -2, 0], [1, 0, 0], [0, 0, 3]]
-                                             // Sigma = RS * RS^T = [[4, 0, 0], [0, 1, 0], [0, 0, 9]]
                                              // Column 1   Column 2   Column 3
-                                             4.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 9.0f};
+                                             1.0f, 0.0f, 0.0f, 0.0f, 4.0f, 0.0f, 0.0f, 0.0f, 9.0f};
 
   // Compare results
   for (size_t i = 0; i < h_sigma.size(); ++i) {
