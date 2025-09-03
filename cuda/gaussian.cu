@@ -51,15 +51,15 @@ __global__ void compute_sigma_fused_kernel(const float *__restrict__ quaternion,
   float sz = expf(scale[scale_base_idx + 2]);
 
   float rs00 = r00 * sx;
-  float rs10 = r10 * sy;
-  float rs20 = r20 * sz;
+  float rs10 = r10 * sx;
+  float rs20 = r20 * sx;
 
-  float rs01 = r01 * sx;
+  float rs01 = r01 * sy;
   float rs11 = r11 * sy;
-  float rs21 = r21 * sz;
+  float rs21 = r21 * sy;
 
-  float rs02 = r02 * sx;
-  float rs12 = r12 * sy;
+  float rs02 = r02 * sz;
+  float rs12 = r12 * sz;
   float rs22 = r22 * sz;
 
   // Sigma is symmetric, so we can compute the upper-triangular part
