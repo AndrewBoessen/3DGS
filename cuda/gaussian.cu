@@ -194,7 +194,7 @@ void compute_sigma(float *const quaternion, float *const scale, const int N, flo
   ASSERT_DEVICE_POINTER(scale);
   ASSERT_DEVICE_POINTER(sigma);
 
-  const int threads_per_block = 1024;
+  const int threads_per_block = 256;
   // Calculate the number of blocks needed to cover all N points
   const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
 
