@@ -76,6 +76,39 @@ __global__ void compute_sigma_fused_kernel(const float *__restrict__ quaternion,
   sigma[sigma_base_idx + 8] = rs20 * rs20 + rs21 * rs21 + rs22 * rs22; // S_22
 }
 
+__global__ void compute_projection_jacobian_kernel(const float *__restrict__ xyz, const float *__restrict__ K,
+                                                   const int N, float *J) {
+  constexpr int XYZ_STRIDE = 3;
+  constexpr int J_STRIDE = 6;
+
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  const int lane_id = threadIdx.x & 0x1f;
+
+  // load and broadcast K to all threads in warp
+  float k_val = 0.0f;
+  if (lane_id < 9) {
+    k_val = K[lane_id];
+  }
+  // K = [fx, 0, cx, 0, fy, cy, 0, 0, 1]
+  const float fx = __shfl_sync(0xffffffff, k_val, 0);
+  const float fy = __shfl_sync(0xffffffff, k_val, 4);
+
+  if (i >= N) {
+    return;
+  }
+
+  float x = xyz[i * XYZ_STRIDE + 0];
+  float y = xyz[i * XYZ_STRIDE + 1];
+  float z = xyz[i * XYZ_STRIDE + 2];
+
+  J[i * J_STRIDE + 0] = fx / z;
+  J[i * J_STRIDE + 1] = 0;
+  J[i * J_STRIDE + 2] = -fx * x / (z * z);
+  J[i * J_STRIDE + 3] = 0;
+  J[i * J_STRIDE + 4] = fy / z;
+  J[i * J_STRIDE + 5] = -fy * y / (z * z);
+}
+
 void compute_sigma(float *const quaternion, float *const scale, const int N, float *sigma) {
   ASSERT_DEVICE_POINTER(quaternion);
   ASSERT_DEVICE_POINTER(scale);

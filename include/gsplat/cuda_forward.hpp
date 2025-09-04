@@ -6,11 +6,22 @@
 #include <cuda_runtime.h>
 
 /**
+ * @brief Compute conic of projected 2D covariance matrix
+ * @param[in]  xyz    A device pointer to 3D points
+ * @param[in]  K      Camera intrinsic projection matrix
+ * @param[in]  sigma  3D Gaussian covariance matrix
+ * @param[in]  T      Camera extrinsic projection matrix
+ * @param[in]  N      The total number of points
+ * @param[out] conic  A device pointer to output conic values
+ */
+void compute_conic(float *const xyz, const float *K, float *const sigma, const float *T, const int N, float *conic);
+
+/**
  * @brief Compute covariance matrix of Gaussian from quaternion and scale vector
- * @param[in] quaternion A device pointer to Gaussian quaternion
- * @param[in] scale A device pointer to scale vectors
- * @param[in] N The total number of Gaussians
- * @param[out] sigma A device pointer to ouput covariance matrix
+ * @param[in]  quaternion  A device pointer to Gaussian quaternion
+ * @param[in]  scale       A device pointer to scale vectors
+ * @param[in]  N           The total number of Gaussians
+ * @param[out] sigma       A device pointer to ouput covariance matrix
  */
 void compute_sigma(float *const quaternion, float *const scale, const int N, float *sigma);
 
