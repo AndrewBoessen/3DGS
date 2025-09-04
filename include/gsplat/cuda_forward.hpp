@@ -12,9 +12,11 @@
  * @param[in]  sigma  3D Gaussian covariance matrix
  * @param[in]  T      Camera extrinsic projection matrix
  * @param[in]  N      The total number of points
+ * @param[out] J      A device pointer to ouput Jacobian
  * @param[out] conic  A device pointer to output conic values
  */
-void compute_conic(float *const xyz, const float *K, float *const sigma, const float *T, const int N, float *conic);
+void compute_conic(float *const xyz, const float *K, float *const sigma, const float *T, const int N, float *J,
+                   float *conic);
 
 /**
  * @brief Compute covariance matrix of Gaussian from quaternion and scale vector
