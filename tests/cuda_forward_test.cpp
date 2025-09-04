@@ -288,3 +288,77 @@ TEST_F(CudaKernelTest, CameraExtrinsicProjection) {
   CUDA_CHECK(cudaFree(d_xyz_w));
   CUDA_CHECK(cudaFree(d_xyz_c));
 }
+
+// Test case for the compute_conic function.
+// This test verifies Jacobian calculation and then conic calculation.
+TEST_F(CudaKernelTest, ComputeConic) {
+  const int N = 1; // Test with a single Gaussian
+
+  // Host-side input data
+  const std::vector<float> h_xyz = {1.0f, 2.0f, 5.0f}; // Camera-space coordinates
+  const std::vector<float> h_K = {100.0f, 0.0f, 50.0f, 0.0f, 120.0f, 60.0f, 0.0f, 0.0f, 1.0f}; // Intrinsics
+  const std::vector<float> h_sigma = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f}; // 3x3 Identity covariance
+  const std::vector<float> h_T = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
+                                  0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f}; // Identity extrinsics
+
+  // Host-side output buffers
+  std::vector<float> h_J(N * 6);
+  std::vector<float> h_conic(N * 3);
+
+  // Device-side pointers
+  float *d_xyz, *d_K, *d_sigma, *d_T, *d_J, *d_conic;
+
+  // Allocate memory on the device
+  CUDA_CHECK(cudaMalloc(&d_xyz, h_xyz.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_K, h_K.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_sigma, h_sigma.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_T, h_T.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_J, h_J.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_conic, h_conic.size() * sizeof(float)));
+
+  // Copy input data from host to device
+  CUDA_CHECK(cudaMemcpy(d_xyz, h_xyz.data(), h_xyz.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_K, h_K.data(), h_K.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_sigma, h_sigma.data(), h_sigma.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_T, h_T.data(), h_T.size() * sizeof(float), cudaMemcpyHostToDevice));
+
+  // Launch the function to be tested
+  compute_conic(d_xyz, d_K, d_sigma, d_T, N, d_J, d_conic);
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  // Copy result from device to host
+  CUDA_CHECK(cudaMemcpy(h_conic.data(), d_conic, h_conic.size() * sizeof(float), cudaMemcpyDeviceToHost));
+
+  // --- Calculate expected results on the host for verification ---
+  const float x = h_xyz[0], y = h_xyz[1], z = h_xyz[2];
+  const float fx = h_K[0], fy = h_K[4];
+
+  // 1. Expected Jacobian J
+  const float j00 = fx / z;
+  const float j02 = -fx * x / (z * z);
+  const float j11 = fy / z;
+  const float j12 = -fy * y / (z * z);
+
+  // 2. W is identity because T is identity
+  // 3. M = J @ W = J
+  // 4. V = Sigma @ M^T = Identity @ J^T = J^T
+  // 5. Conic = M @ V = J @ J^T
+  const float c00 = j00 * j00 + 0.0f * 0.0f + j02 * j02;
+  const float c01 = j00 * 0.0f + 0.0f * j11 + j02 * j12;
+  const float c11 = 0.0f * 0.0f + j11 * j11 + j12 * j12;
+
+  const std::vector<float> expected_conic = {c00, c01, c11};
+
+  // Compare results
+  for (size_t i = 0; i < h_conic.size(); ++i) {
+    ASSERT_NEAR(h_conic[i], expected_conic[i], 1e-5);
+  }
+
+  // Free device memory
+  CUDA_CHECK(cudaFree(d_xyz));
+  CUDA_CHECK(cudaFree(d_K));
+  CUDA_CHECK(cudaFree(d_sigma));
+  CUDA_CHECK(cudaFree(d_T));
+  CUDA_CHECK(cudaFree(d_J));
+  CUDA_CHECK(cudaFree(d_conic));
+}
