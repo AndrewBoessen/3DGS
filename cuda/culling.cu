@@ -260,9 +260,13 @@ __global__ void max_reduce_strided_kernel(const float *input, float *output, int
   // Only threads that will participate in the final reduction load a value.
   float final_val = (tid < blockDim.x / 32) ? sdata[tid] : -CUDART_INF_F;
 
-  // The first thread (tid 0) will now hold the block's maximum value.
+  float block_max;
+  if (tid < 32) {
+    // block max will now be in first thread
+    block_max = warp_reduce_max(final_val);
+  }
+  // store block max to output
   if (tid == 0) {
-    float block_max = warp_reduce_max(final_val);
     output[blockIdx.x] = block_max;
   }
 }
