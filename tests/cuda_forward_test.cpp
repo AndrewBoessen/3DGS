@@ -362,3 +362,126 @@ TEST_F(CudaKernelTest, ComputeConic) {
   CUDA_CHECK(cudaFree(d_J));
   CUDA_CHECK(cudaFree(d_conic));
 }
+
+// Test case for the get_sorted_gaussian_list function.
+// This function operates in two passes:
+// 1. (sorted_gaussians == nullptr): Calculates the total number of splats (gaussian-tile overlaps)
+//    and returns the required size for the sort_keys buffer.
+// 2. (sorted_gaussians != nullptr): Populates the buffers with the sorted list of gaussian indices
+//    and the start/end indices for each tile.
+TEST_F(CudaKernelTest, GetSortedGaussianList) {
+  const int N = 3; // Number of Gaussians
+  const int width = 64;
+  const int height = 64;
+  const int tile_dim = 16;
+  const int n_tiles_x = width / tile_dim;
+  const int n_tiles_y = height / tile_dim;
+  const int num_tiles = n_tiles_x * n_tiles_y;
+  const float mh_dist = 3.0f; // Mahalanobis distance for 99% confidence
+
+  // Host-side input data
+  // Gaussian 0: Small, entirely within tile (1,1). z=10.
+  // Gaussian 1: Larger, on the border of tile (1,1) and (2,1). z=20.
+  // Gaussian 2: Small, entirely within tile (2,2). z=5.
+  const std::vector<float> h_uvs = {
+      24.0f, 24.0f, // G0 -> center of tile (1,1)
+      32.0f, 24.0f, // G1 -> border of tiles (1,1) and (2,1)
+      40.0f, 40.0f  // G2 -> center of tile (2,2)
+  };
+  const std::vector<float> h_xyz = {
+      0.0f, 0.0f, 10.0f, // G0
+      0.0f, 0.0f, 20.0f, // G1
+      0.0f, 0.0f, 5.0f   // G2
+  };
+  // Conic parameters a,b,c. For a circle, b=0, a=c. Radius ~ mh_dist * sqrt(a).
+  // G0 & G2 radius = 4 => 3*sqrt(a)=4 => a=16/9 ~= 1.78
+  // G1 radius = 6 => 3*sqrt(a)=6 => a=36/9 = 4
+  const std::vector<float> h_conic = {
+      1.78f, 0.0f, 1.78f, // G0
+      4.0f,  0.0f, 4.0f,  // G1
+      1.78f, 0.0f, 1.78f  // G2
+  };
+
+  // Device-side pointers
+  float *d_uvs, *d_xyz, *d_conic;
+  int *d_sorted_gaussians, *d_splat_boundaries;
+
+  // Allocate and copy inputs to device
+  CUDA_CHECK(cudaMalloc(&d_uvs, h_uvs.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_xyz, h_xyz.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_conic, h_conic.size() * sizeof(float)));
+  CUDA_CHECK(cudaMemcpy(d_uvs, h_uvs.data(), h_uvs.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_xyz, h_xyz.data(), h_xyz.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_conic, h_conic.data(), h_conic.size() * sizeof(float), cudaMemcpyHostToDevice));
+
+  // --- PASS 1: Get required buffer size ---
+  size_t sorted_gaussian_bytes = 0;
+  get_sorted_gaussian_list(d_uvs, d_xyz, d_conic, n_tiles_x, n_tiles_y, mh_dist, N, sorted_gaussian_bytes, nullptr,
+                           nullptr);
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  // Expected splats:
+  // G0 -> tile (1,1) [idx 5]
+  // G1 -> tiles (1,1) [idx 5] and (2,1) [idx 6]
+  // G2 -> tile (2,2) [idx 10]
+  // Total = 4 splats. The size is for the `double` sort keys.
+  const int num_splats = 4;
+  ASSERT_EQ(sorted_gaussian_bytes, num_splats * sizeof(int));
+
+  // --- PASS 2: Execute with allocated buffers ---
+  CUDA_CHECK(cudaMalloc(&d_sorted_gaussians, sorted_gaussian_bytes));
+  CUDA_CHECK(cudaMalloc(&d_splat_boundaries, (num_tiles + 1) * sizeof(int)));
+
+  get_sorted_gaussian_list(d_uvs, d_xyz, d_conic, n_tiles_x, n_tiles_y, mh_dist, N, sorted_gaussian_bytes,
+                           d_sorted_gaussians, d_splat_boundaries);
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  // --- Verification ---
+  std::vector<int> h_sorted_gaussians(num_splats);
+  std::vector<int> h_splat_boundaries(num_tiles + 1);
+  CUDA_CHECK(
+      cudaMemcpy(h_sorted_gaussians.data(), d_sorted_gaussians, num_splats * sizeof(int), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(
+      cudaMemcpy(h_splat_boundaries.data(), d_splat_boundaries, (num_tiles + 1) * sizeof(int), cudaMemcpyDeviceToHost));
+
+  // Expected sorting: by tile index, then by z-depth.
+  // Tile 5: G0 (z=10), G1 (z=20) -> sorted order: [0, 1]
+  // Tile 6: G1 (z=20) -> sorted order: [1]
+  // Tile 10: G2 (z=5) -> sorted order: [2]
+  // Final list of gaussian indices: [0, 1, 1, 2]
+  const std::vector<int> expected_sorted_gaussians = {0, 1, 1, 2};
+  for (int i = 0; i < num_splats; ++i) {
+    EXPECT_EQ(h_sorted_gaussians[i], expected_sorted_gaussians[i]) << "Mismatch at sorted gaussian index " << i;
+  }
+
+  // Expected tile boundaries: `arr[i]` is start, `arr[i+1]` is end for tile `i`.
+  // Tile 5: [0, 2)
+  // Tile 6: [2, 3)
+  // Tile 10: [3, 4)
+  std::vector<int> expected_splat_boundaries(num_tiles + 1, 0);
+  expected_splat_boundaries[5] = 0;
+  expected_splat_boundaries[6] = 2; // End of tile 5, start of tile 6
+  expected_splat_boundaries[7] = 3; // End of tile 6
+  // Tiles 7,8,9 are empty. The start idx remains the end of the previous tile.
+  expected_splat_boundaries[8] = 3;
+  expected_splat_boundaries[9] = 3;
+  expected_splat_boundaries[10] = 3; // Start of tile 10
+  expected_splat_boundaries[11] = 4; // End of tile 10
+
+  // The kernel only writes at boundaries, so empty intermediate indices might not be updated.
+  // We only check the critical boundary points.
+  EXPECT_EQ(h_splat_boundaries[5], 0);
+  EXPECT_EQ(h_splat_boundaries[6], 2);
+  EXPECT_EQ(h_splat_boundaries[7], 3);
+  EXPECT_EQ(h_splat_boundaries[10], 3);
+  EXPECT_EQ(h_splat_boundaries[11], 4);
+  // Check that an empty tile's range is valid (start >= end)
+  EXPECT_GE(h_splat_boundaries[9], h_splat_boundaries[8]);
+
+  // --- Cleanup ---
+  CUDA_CHECK(cudaFree(d_uvs));
+  CUDA_CHECK(cudaFree(d_xyz));
+  CUDA_CHECK(cudaFree(d_conic));
+  CUDA_CHECK(cudaFree(d_sorted_gaussians));
+  CUDA_CHECK(cudaFree(d_splat_boundaries));
+}
