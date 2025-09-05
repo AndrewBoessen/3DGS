@@ -271,8 +271,11 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
     generate_splats_kernel<<<num_blocks, threads_per_block>>>(uv, xyz, conic, n_tiles_x, n_tiles_y, mh_dist, N, nullptr,
                                                               sorted_gaussians, nullptr, d_global_splat_counter);
+    CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaMemcpy(&sorted_gaussian_bytes, d_global_splat_counter, sizeof(size_t), cudaMemcpyDeviceToHost));
     sorted_gaussian_bytes *= sizeof(double);
+
+    CHECK_CUDA(cudaFree(d_global_splat_counter));
 
     return;
   }
