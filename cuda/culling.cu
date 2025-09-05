@@ -110,16 +110,33 @@ __device__ __forceinline__ int get_write_index(const bool write, const int lane,
   // Count how many threads before want to write
   int prefix = __popc(mask & ((1u << lane) - 1));
 
-  // First thread in warp gets block of slots
+  // First active thread in warp gets block of slots
   int base_slot;
-  if (lane == 0) {
+  int leader_lane = __ffs(mask) - 1;
+  if (lane == leader_lane) {
     base_slot = atomicAdd(global_index, __popc(mask));
   }
 
   // Broadcast base slot to all threads
-  base_slot = __shfl_sync(mask, base_slot, 0);
+  base_slot = __shfl_sync(mask, base_slot, leader_lane);
 
   return base_slot + prefix;
+}
+
+__device__ __forceinline__ int warpReduceMin(unsigned mask, int val) {
+  for (int offset = 16; offset > 0; offset /= 2) {
+    val = min(val, __shfl_down_sync(mask, val, offset));
+  }
+  // Broadcast the final result from lane 0 to all threads
+  return __shfl_sync(mask, val, 0);
+}
+
+__device__ __forceinline__ int warpReduceMax(unsigned mask, int val) {
+  for (int offset = 16; offset > 0; offset /= 2) {
+    val = max(val, __shfl_down_sync(mask, val, offset));
+  }
+  // Broadcast the final result from lane 0 to all threads
+  return __shfl_sync(mask, val, 0);
 }
 
 __global__ void generate_splats_kernel(const float *__restrict__ uvs, const float *__restrict__ xyz_camera_frame,
@@ -154,15 +171,26 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
     tile_idx_key_multiplier = *max_z + 1.0f;
   }
 
-  for (int tile_x = start_tile_x; tile_x < end_tile_x; tile_x++) {
-    for (int tile_y = start_tile_y; tile_y < end_tile_y; tile_y++) {
+  // Reduce to find the minimum start_x and maximum end_x in the warp
+  unsigned active_mask = __ballot_sync(0xFFFFFFFF, 1); // Mask of all active threads
+
+  int warp_start_x = warpReduceMin(active_mask, start_tile_x);
+  int warp_end_x = warpReduceMax(active_mask, end_tile_x);
+  int warp_start_y = warpReduceMin(active_mask, start_tile_y);
+  int warp_end_y = warpReduceMax(active_mask, end_tile_y);
+
+  for (int tile_x = warp_start_x; tile_x < warp_end_x; tile_x++) {
+    for (int tile_y = warp_start_y; tile_y < warp_end_y; tile_y++) {
+      const bool in_thread_bounds =
+          (tile_x >= start_tile_x && tile_x < end_tile_x && tile_y >= start_tile_y && tile_y < end_tile_y);
+
       float tile_bounds[4];
       tile_bounds[0] = __int2float_rn(tile_x) * 16.0f;
       tile_bounds[1] = __int2float_rn(tile_x + 1) * 16.0f;
       tile_bounds[2] = __int2float_rn(tile_y) * 16.0f;
       tile_bounds[3] = __int2float_rn(tile_y + 1) * 16.0f;
 
-      const bool intersects = split_axis_test(obb, tile_bounds);
+      const bool intersects = in_thread_bounds && split_axis_test(obb, tile_bounds);
       const int lane_id = gaussian_idx & 0x1f;
 
       // get position of splat in global array
@@ -272,15 +300,16 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
     generate_splats_kernel<<<num_blocks, threads_per_block>>>(uv, xyz, conic, n_tiles_x, n_tiles_y, mh_dist, N, nullptr,
                                                               sorted_gaussians, nullptr, d_global_splat_counter);
     CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaMemcpy(&sorted_gaussian_bytes, d_global_splat_counter, sizeof(size_t), cudaMemcpyDeviceToHost));
-    sorted_gaussian_bytes *= sizeof(double);
+
+    CHECK_CUDA(cudaMemcpy(&sorted_gaussian_bytes, d_global_splat_counter, sizeof(int), cudaMemcpyDeviceToHost));
+    sorted_gaussian_bytes *= sizeof(int);
 
     CHECK_CUDA(cudaFree(d_global_splat_counter));
 
     return;
   }
 
-  const int num_splats = sorted_gaussian_bytes / sizeof(double);
+  const int num_splats = sorted_gaussian_bytes / sizeof(int);
 
   // get max z depth for key multiplier
   float *d_max_z;
@@ -296,9 +325,11 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
     max_reduce_strided_kernel<<<num_blocks_pass1, threads_per_block_reduce, shared_mem_size>>>(xyz + 2, d_partial_max,
                                                                                                N, 3);
+    CHECK_CUDA(cudaGetLastError());
     // Pass 2: Reduce partial results to a single value
     max_reduce_strided_kernel<<<1, threads_per_block_reduce, shared_mem_size>>>(d_partial_max, d_max_z,
                                                                                 num_blocks_pass1, 1);
+    CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaFree(d_partial_max));
   }
 

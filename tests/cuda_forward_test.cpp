@@ -395,10 +395,10 @@ TEST_F(CudaKernelTest, GetSortedGaussianList) {
   };
   // Conic parameters a,b,c. For a circle, b=0, a=c. Radius ~ mh_dist * sqrt(a).
   // G0 & G2 radius = 4 => 3*sqrt(a)=4 => a=16/9 ~= 1.78
-  // G1 radius = 8 => 3*sqrt(a)=8 => a=64/9 ~= 7.11
+  // G1 radius = 6 => 3*sqrt(a)=6 => a=36/9 = 4
   const std::vector<float> h_conic = {
       1.78f, 0.0f, 1.78f, // G0
-      7.12f, 0.0f, 7.12f, // G1
+      4.0f,  0.0f, 4.0f,  // G1
       1.78f, 0.0f, 1.78f  // G2
   };
 
@@ -426,10 +426,10 @@ TEST_F(CudaKernelTest, GetSortedGaussianList) {
   // G2 -> tile (2,2) [idx 10]
   // Total = 4 splats. The size is for the `double` sort keys.
   const int num_splats = 4;
-  ASSERT_EQ(sorted_gaussian_bytes, num_splats * sizeof(double));
+  ASSERT_EQ(sorted_gaussian_bytes, num_splats * sizeof(int));
 
   // --- PASS 2: Execute with allocated buffers ---
-  CUDA_CHECK(cudaMalloc(&d_sorted_gaussians, num_splats * sizeof(int)));
+  CUDA_CHECK(cudaMalloc(&d_sorted_gaussians, sorted_gaussian_bytes));
   CUDA_CHECK(cudaMalloc(&d_splat_boundaries, (num_tiles + 1) * sizeof(int)));
 
   get_sorted_gaussian_list(d_uvs, d_xyz, d_conic, n_tiles_x, n_tiles_y, mh_dist, N, sorted_gaussian_bytes,
