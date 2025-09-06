@@ -485,3 +485,83 @@ TEST_F(CudaKernelTest, GetSortedGaussianList) {
   CUDA_CHECK(cudaFree(d_sorted_gaussians));
   CUDA_CHECK(cudaFree(d_splat_boundaries));
 }
+
+// Test case for the precompute_spherical_harmonics function.
+TEST_F(CudaKernelTest, PrecomputeSphericalHarmonics) {
+  // 1. Setup test parameters
+  const int N = 2;
+  const int l_max = 1;
+  const int n_coeffs = (l_max + 1) * (l_max + 1); // (1+1)^2 = 4 coefficients
+
+  // 2. Host-side data
+  // Input xyz (normalized direction vectors)
+  const std::vector<float> h_xyz = {
+      0.0f, 0.0f, 1.0f, // Point 0: View direction along Z-axis
+      1.0f, 0.0f, 0.0f  // Point 1: View direction along X-axis
+  };
+
+  // Input SH coefficients. Layout is (N, n_coeffs, 3).
+  const std::vector<float> h_sh_coefficients = {
+      // Point 0 coeffs (R, G, B for each of the 4 basis functions)
+      0.5f, -0.2f, 0.8f, // l=0, m=0
+      0.1f, 0.1f, 0.1f,  // l=1, m=-1
+      0.2f, 0.2f, 0.2f,  // l=1, m=0
+      0.3f, 0.3f, 0.3f,  // l=1, m=1
+      // Point 1 coeffs
+      0.1f, 0.5f, 0.9f, // l=0, m=0
+      0.2f, 0.6f, 0.0f, // l=1, m=-1
+      0.3f, 0.7f, 0.1f, // l=1, m=0
+      0.4f, 0.8f, 0.2f  // l=1, m=1
+  };
+  std::vector<float> h_rgb(N * 3);
+
+  // 3. Device-side data setup
+  float *d_xyz, *d_sh_coefficients, *d_rgb;
+  CUDA_CHECK(cudaMalloc(&d_xyz, h_xyz.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_sh_coefficients, h_sh_coefficients.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_rgb, h_rgb.size() * sizeof(float)));
+
+  CUDA_CHECK(cudaMemcpy(d_xyz, h_xyz.data(), h_xyz.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_sh_coefficients, h_sh_coefficients.data(), h_sh_coefficients.size() * sizeof(float),
+                        cudaMemcpyHostToDevice));
+
+  // 4. Call the function to be tested
+  precompute_spherical_harmonics(d_xyz, d_sh_coefficients, l_max, N, d_rgb);
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  // 5. Copy results back to host
+  CUDA_CHECK(cudaMemcpy(h_rgb.data(), d_rgb, h_rgb.size() * sizeof(float), cudaMemcpyDeviceToHost));
+
+  // 6. Calculate expected results on the host
+  // Real SH basis functions for l_max=1:
+  // Y_0_0(x,y,z) = 0.28209
+  // Y_1_-1(x,y,z) = 0.48860 * y
+  // Y_1_0(x,y,z)  = 0.48860 * z
+  // Y_1_1(x,y,z)  = 0.48860 * x
+
+  // For Point 0 (x=0, y=0, z=1):
+  // SH basis values = {0.28209, 0.0, 0.48860, 0.0}
+  float sum_r0 = (0.5f * 0.28209f) + (0.2f * 0.48860f);  // 0.238765
+  float sum_g0 = (-0.2f * 0.28209f) + (0.2f * 0.48860f); // 0.041302
+  float sum_b0 = (0.8f * 0.28209f) + (0.2f * 0.48860f);  // 0.323392
+
+  // For Point 1 (x=1, y=0, z=0):
+  // SH basis values = {0.28209, 0.0, 0.0, 0.48860}
+  float sum_r1 = (0.1f * 0.28209f) + (0.4f * 0.48860f); // 0.223649
+  float sum_g1 = (0.5f * 0.28209f) + (0.8f * 0.48860f); // 0.531925
+  float sum_b1 = (0.9f * 0.28209f) + (0.2f * 0.48860f); // 0.351601
+
+  auto sigmoid = [](float x) { return 1.0f / (1.0f + expf(-x)); };
+  const std::vector<float> expected_rgb = {sigmoid(sum_r0), sigmoid(sum_g0), sigmoid(sum_b0),
+                                           sigmoid(sum_r1), sigmoid(sum_g1), sigmoid(sum_b1)};
+
+  // 7. Compare results
+  for (size_t i = 0; i < h_rgb.size(); ++i) {
+    ASSERT_NEAR(h_rgb[i], expected_rgb[i], 1e-4);
+  }
+
+  // 8. Cleanup
+  CUDA_CHECK(cudaFree(d_xyz));
+  CUDA_CHECK(cudaFree(d_sh_coefficients));
+  CUDA_CHECK(cudaFree(d_rgb));
+}
