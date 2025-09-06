@@ -17,15 +17,26 @@ This repository provides a lightweight foundation for experimenting with the cor
 
 You will need a standard C++ development toolchain. Please install the following using your system's package manager (e.g., `apt` for Debian/Ubuntu, `brew` for macOS).
 
-* **C++ Compiler** with C++23 support (e.g., GCC 12+, Clang 15+)
+- **C++ Compiler** with C++23 support (e.g., GCC 12+, Clang 15+)
 
-* **CMake** (version 3.20 or later)
+- **CMake** (version 3.20 or later)
 
-* **Eigen** (version 3.3 or later)
+- **Eigen** (version 3.3 or later)
 
-* **yaml-cpp**
+- **yaml-cpp**
+
+- **sphericart**
 
 For example, on Ubuntu 22.04, you can install these with:
+
+```bash
+git clone https://github.com/lab-cosmo/sphericart
+cd sphericart/
+mkdir build
+cd build/
+cmake ..
+make install
+```
 
 ```bash
 sudo apt install cmake build-essential g++-12 libeigen3-dev libyaml-cpp-dev
@@ -35,7 +46,7 @@ sudo apt install cmake build-essential g++-12 libeigen3-dev libyaml-cpp-dev
 
 A compatible NVIDIA driver and the CUDA Toolkit are required for the GPU-accelerated components.
 
-* **NVIDIA CUDA Toolkit** (version 13.0 or later)
+- **NVIDIA CUDA Toolkit** (version 13.0 or later)
 
 Please download and install the appropriate version for your system from the [**NVIDIA CUDA Toolkit website**](https://developer.nvidia.com/cuda-downloads). After installation, ensure that the `PATH`, `CPLUS_INCLUDE_PATH`, and `LD_LIBRARY_PATH` environment variables are configured correctly in your shell profile (e.g., `.bashrc`).
 
@@ -48,15 +59,15 @@ git clone https://github.com/AndrewBoessen/3DGS.git
 cd 3DGS
 ```
 
-### 2. **Configure with CMake:** Create a build directory and run CMake.
+### 2. **Configure with CMake:** Create a build directory and run CMake
 
 ```bash
 cmake -S . -B build
 ```
 
-*Note: If you have multiple compilers, you can specify one, e.g., `-DCMAKE_CXX_COMPILER=g++-12`.*
+_Note: If you have multiple compilers, you can specify one, e.g., `-DCMAKE_CXX_COMPILER=g++-12`._
 
-### 3. **Compile the code:** Build the project using the number of available processor cores for faster compilation.
+### 3. **Compile the code:** Build the project using the number of available processor cores for faster compilation
 
 ```bash
 cmake --build build --parallel $(nproc)

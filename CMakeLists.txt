@@ -14,6 +14,10 @@ find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 find_package(yaml-cpp REQUIRED)
 # Find CUDA Toolkit and its libraries (cuBLAS, etc.)
 find_package(CUDAToolkit REQUIRED)
+# Find sphericart library
+find_package(sphericart REQUIRED)
+# Find OpenMP for sphericart parallelization
+find_package(OpenMP REQUIRED)
 
 # ===================================================================
 # DATALODER LIBRARY DEFINITION
@@ -41,13 +45,13 @@ target_link_libraries(gsplat PUBLIC yaml-cpp)
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu)
+add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu cuda/spherical_harmonics.cu)
 
 target_include_directories(gsplat_cuda
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat_cuda PUBLIC CUDA::cublas)
+target_link_libraries(gsplat_cuda PUBLIC CUDA::cublas sphericart OpenMP::OpenMP_CXX)
 
 # ===================================================================
 # MAIN EXECUTABLE
@@ -55,7 +59,7 @@ target_link_libraries(gsplat_cuda PUBLIC CUDA::cublas)
 add_executable(gaussian_splatting src/main.cpp)
 
 # Link the main executable against our library
-target_link_libraries(gaussian_splatting PRIVATE dataloader gsplat)
+target_link_libraries(gaussian_splatting PRIVATE dataloader gsplat gsplat_cuda)
 
 # ===================================================================
 # TESTING SETUP

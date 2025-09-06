@@ -18,6 +18,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake build-essential libeigen3-dev libyaml-cpp-dev
+          git clone https://github.com/lab-cosmo/sphericart
+          cd sphericart/
+          mkdir build
+          cd build/
+          cmake ..
+          sudo make install
 
       - name: Set up CUDA repository
         run: |

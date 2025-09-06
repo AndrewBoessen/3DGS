@@ -290,6 +290,10 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
 void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *conic, const int n_tiles_x,
                               const int n_tiles_y, const float mh_dist, const int N, size_t &sorted_gaussian_bytes,
                               int *sorted_gaussians, int *splat_start_end_idx_by_tile_idx) {
+  ASSERT_DEVICE_POINTER(uv);
+  ASSERT_DEVICE_POINTER(xyz);
+  ASSERT_DEVICE_POINTER(conic);
+
   const int num_tiles = n_tiles_x * n_tiles_y;
 
   int *d_global_splat_counter;
