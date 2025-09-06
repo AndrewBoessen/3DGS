@@ -62,13 +62,13 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
 
 /**
  * @brief Lanuches CUDA kernels to get gaussian tile intersections sorted by depth
- * @param[in] uv                                A device pointer to gaussian coordinates in image frame
- * @param[in] xyz                               A device pointer to 3D corrdinates of gaussians in camera perspective
- * @param[in] conic                             A device pointer to 2D gaussian conic
- * @param[in] n_tiles_x                         Number of tiles in image x axis
- * @param[in] n_tiles_y                         Number of tiles in image y axis
- * @param[in] mh_dist                           Mahalanobis distance to define bounding box
- * @param[in] N                                 The total number of points
+ * @param[in]  uv                               A device pointer to gaussian coordinates in image frame
+ * @param[in]  xyz                              A device pointer to 3D corrdinates of gaussians in camera perspective
+ * @param[in]  conic                            A device pointer to 2D gaussian conic
+ * @param[in]  n_tiles_x                        Number of tiles in image x axis
+ * @param[in]  n_tiles_y                        Number of tiles in image y axis
+ * @param[in]  mh_dist                          Mahalanobis distance to define bounding box
+ * @param[in]  N                                The total number of points
  * @param[out] sorted_gaussian_bytes            Pointer to store bytes to allocate for sorted_gaussians
  * @param[out] sorted_gaussians                 A device array to ouput gaussians sorted by z depth
  * @param[out] splat_start_end_idx_by_tile_idx  A device array to index into sorted_gaussian by tile id
@@ -76,3 +76,14 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
 void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *conic, const int n_tiles_x,
                               const int n_tiles_y, const float mh_dist, const int N, size_t &sorted_gaussian_bytes,
                               int *sorted_gaussians, int *splat_start_end_idx_by_tile_idx);
+
+/**
+ * @brief Launches CUDA kernels to precompute spherical harmonic values and calculate rgb values
+ * @param[in]  xyz              A device pointer to 3D corrdinates of gaussians in camera perspective
+ * @param[in]  T                A device pointer to camera extrinsic matrix
+ * @param[in]  sh_coefficients  A device pointer to SH params for each Gaussian
+ * @param[in]  N                The total number of points
+ * @param[out] rgb              A device pointer to output rgb values
+ */
+void precompute_spherical_harmonics(const float *xyz, const float *T, const float *sh_coefficients, const int N,
+                                    float *rgb);
