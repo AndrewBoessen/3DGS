@@ -45,7 +45,7 @@ target_link_libraries(gsplat PUBLIC yaml-cpp)
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu cuda/spherical_harmonics.cu)
+add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu cuda/spherical_harmonics.cu cuda/render.cu)
 
 target_include_directories(gsplat_cuda
   PUBLIC

@@ -565,3 +565,139 @@ TEST_F(CudaKernelTest, PrecomputeSphericalHarmonics) {
   CUDA_CHECK(cudaFree(d_sh_coefficients));
   CUDA_CHECK(cudaFree(d_rgb));
 }
+
+// Test case for the render_image function with multiple Gaussians.
+// This test renders three gaussians onto a single tile and verifies the output.
+TEST_F(CudaKernelTest, RenderImageMultipleGaussians) {
+  // 1. Setup test parameters
+  const int width = 16;
+  const int height = 16;
+  const int N = 3; // Number of Gaussians
+
+  // 2. Host-side input data
+  // Three Gaussians with different properties
+  const std::vector<float> h_uv = {
+      7.5f,  7.5f, // Gaussian 1 (center)
+      3.5f,  3.5f, // Gaussian 2 (top-left)
+      11.5f, 11.5f // Gaussian 3 (bottom-right)
+  };
+  const std::vector<float> h_opacity = {0.5f, 0.6f, 0.4f};
+  const std::vector<float> h_rgb = {
+      1.0f, 0.8f, 0.4f, // Orange-ish
+      0.4f, 0.8f, 1.0f, // Blue-ish
+      0.8f, 1.0f, 0.4f  // Green-ish
+  };
+  const std::vector<float> h_conic = {
+      1.0f, 0.0f,  1.0f, // Circle
+      2.0f, 0.5f,  2.0f, // Ellipse 1
+      1.5f, -0.5f, 1.5f  // Ellipse 2
+  };
+
+  // The sorted list includes all three gaussians for the single tile
+  const std::vector<int> h_sorted_splats = {0, 1, 2};
+  // The splat range for tile 0 is from index 0 to 3
+  const std::vector<int> h_splat_range_by_tile = {0, 3};
+
+  // 3. Host-side output buffers
+  std::vector<float> h_image(width * height * 3);
+  std::vector<float> h_weight_per_pixel(width * height);
+
+  // 4. Device-side data setup
+  float *d_uv, *d_opacity, *d_conic, *d_rgb, *d_weight_per_pixel, *d_image;
+  int *d_sorted_splats, *d_splat_range_by_tile;
+
+  CUDA_CHECK(cudaMalloc(&d_uv, h_uv.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_opacity, h_opacity.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_conic, h_conic.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_rgb, h_rgb.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_sorted_splats, h_sorted_splats.size() * sizeof(int)));
+  CUDA_CHECK(cudaMalloc(&d_splat_range_by_tile, h_splat_range_by_tile.size() * sizeof(int)));
+  CUDA_CHECK(cudaMalloc(&d_weight_per_pixel, h_weight_per_pixel.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_image, h_image.size() * sizeof(float)));
+
+  CUDA_CHECK(cudaMemcpy(d_uv, h_uv.data(), h_uv.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_opacity, h_opacity.data(), h_opacity.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_conic, h_conic.data(), h_conic.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_rgb, h_rgb.data(), h_rgb.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_sorted_splats, h_sorted_splats.data(), h_sorted_splats.size() * sizeof(int),
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_splat_range_by_tile, h_splat_range_by_tile.data(), h_splat_range_by_tile.size() * sizeof(int),
+                        cudaMemcpyHostToDevice));
+
+  // 5. Call the function to be tested
+  render_image(d_uv, d_opacity, d_conic, d_rgb, d_sorted_splats, d_splat_range_by_tile, width, height,
+               d_weight_per_pixel, d_image);
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  // 6. Copy results back to host
+  CUDA_CHECK(cudaMemcpy(h_image.data(), d_image, h_image.size() * sizeof(float), cudaMemcpyDeviceToHost));
+
+  // 7. Calculate expected results on the host.
+  // This helper function replicates the kernel's alpha blending logic for a single pixel.
+  auto calculate_expected_color = [&](float u_pixel, float v_pixel) {
+    // Start with a white background and zero accumulated alpha
+    float r = 1.0f, g = 1.0f, b = 1.0f;
+    float alpha_accum = 0.0f;
+
+    // Iterate through gaussians in reverse order (front to back)
+    for (int i = 0; i < N; ++i) {
+      const int gaussian_idx = h_sorted_splats[i];
+      const float u_mean = h_uv[gaussian_idx * 2];
+      const float v_mean = h_uv[gaussian_idx * 2 + 1];
+
+      const float u_diff = u_pixel - u_mean;
+      const float v_diff = v_pixel - v_mean;
+
+      const float a = h_conic[gaussian_idx * 3 + 0] + 0.25f;
+      const float b_c = h_conic[gaussian_idx * 3 + 1] + 0.5f;
+      const float c = h_conic[gaussian_idx * 3 + 2] + 0.25f;
+
+      const float det = a * c - b_c * b_c;
+      const float mh_sq = (c * u_diff * u_diff - (b_c + b_c) * u_diff * v_diff + a * v_diff * v_diff) / det;
+
+      float alpha = 0.0f;
+      if (mh_sq > 0.0f) {
+        alpha = h_opacity[gaussian_idx] * expf(-0.5f * mh_sq);
+      }
+
+      // Kernel's blending logic
+      const float T_i = 1.0f - alpha_accum;
+      alpha = alpha * T_i;
+
+      r += (h_rgb[gaussian_idx * 3 + 0] - r) * alpha;
+      g += (h_rgb[gaussian_idx * 3 + 1] - g) * alpha;
+      b += (h_rgb[gaussian_idx * 3 + 2] - b) * alpha;
+
+      alpha_accum += alpha;
+    }
+    return std::vector<float>{r, g, b};
+  };
+
+  // Check the central pixel: (7, 7), which is close to the first gaussian
+  int idx_center = (7 * width + 7) * 3;
+  std::vector<float> expected_center = calculate_expected_color(7.0f, 7.0f);
+  ASSERT_NEAR(h_image[idx_center + 0], expected_center[0], 1e-2);
+  ASSERT_NEAR(h_image[idx_center + 1], expected_center[1], 1e-2);
+  ASSERT_NEAR(h_image[idx_center + 2], expected_center[2], 1e-2);
+
+  // Check a pixel far from all gaussians: (0, 0)
+  // Its color should be nearly pure white background.
+  int idx_corner = (0 * width + 0) * 3;
+  std::vector<float> expected_corner = calculate_expected_color(0.0f, 0.0f);
+  ASSERT_NEAR(h_image[idx_corner + 0], expected_corner[0], 1e-2);
+  ASSERT_NEAR(h_image[idx_corner + 1], expected_corner[1], 1e-2);
+  ASSERT_NEAR(h_image[idx_corner + 2], expected_corner[2], 1e-2);
+  ASSERT_NEAR(h_image[idx_corner + 0], 1.0f, 1e-2); // Check against white
+  ASSERT_NEAR(h_image[idx_corner + 1], 1.0f, 1e-2);
+  ASSERT_NEAR(h_image[idx_corner + 2], 1.0f, 1e-2);
+
+  // 8. Cleanup
+  CUDA_CHECK(cudaFree(d_uv));
+  CUDA_CHECK(cudaFree(d_opacity));
+  CUDA_CHECK(cudaFree(d_conic));
+  CUDA_CHECK(cudaFree(d_rgb));
+  CUDA_CHECK(cudaFree(d_sorted_splats));
+  CUDA_CHECK(cudaFree(d_splat_range_by_tile));
+  CUDA_CHECK(cudaFree(d_weight_per_pixel));
+  CUDA_CHECK(cudaFree(d_image));
+}

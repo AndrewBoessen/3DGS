@@ -39,8 +39,8 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
   const int shared_image_size = TILE_SIZE * TILE_SIZE * 3;
   __shared__ float _image[shared_image_size];
 
-// init image values
-#pragma unroll
+  // init image values
+  #pragma unroll
   for (int i = thread_id; i < shared_image_size; i += block_size) {
     _image[i] = 0.0;
   }
@@ -65,7 +65,7 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
         _rgb[i * 3 + channel] = rgb[gaussian_idx * 3 + channel];
       }
 
-#pragma unroll
+      #pragma unroll
       for (int j = 0; j < 3; j++) {
         _conic[i * 3 + j] = conic[gaussian_idx * 3 + j];
       }
@@ -109,7 +109,7 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
         const float weight = alpha * (1.0 - alpha_accum);
 
         // update rgb values
-        const int base_image_id = threadIdx.y * TILE_SIZE + threadIdx.x;
+        const int base_image_id = (threadIdx.y * TILE_SIZE + threadIdx.x) * 3;
         const int base_rgb_id = i * 3;
         _image[base_image_id + 0] += _rgb[base_rgb_id + 0] * weight; // R
         _image[base_image_id + 1] += _rgb[base_rgb_id + 1] * weight; // G
@@ -135,9 +135,9 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
   if (valid_pixel) {
     final_weight_per_pixel[v_splat * image_width + u_splat] = alpha_weight;
 
-    image[(v_splat * image_width + u_splat) * 3 + 0] = _image[base_image_id * 3 + 0]; // R
-    image[(v_splat * image_width + u_splat) * 3 + 1] = _image[base_image_id * 3 + 1]; // G
-    image[(v_splat * image_width + u_splat) * 3 + 2] = _image[base_image_id * 3 + 2]; // B
+    image[(v_splat * image_width + u_splat) * 3 + 0] = _image[base_image_id + 0]; // R
+    image[(v_splat * image_width + u_splat) * 3 + 1] = _image[base_image_id + 1]; // G
+    image[(v_splat * image_width + u_splat) * 3 + 2] = _image[base_image_id + 2]; // B
   }
 }
 
