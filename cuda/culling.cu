@@ -104,23 +104,28 @@ __device__ __forceinline__ int compute_obb(const float u, const float v, const f
   return ceilf(r_major / 16.0f) + 1;
 }
 
-__device__ __forceinline__ int get_write_index(const bool write, const int lane, int *global_index) {
+__device__ __forceinline__ int get_write_index(const bool write, const int lane, const unsigned int active_mask,
+                                               int *global_index) {
   // Get mask of threads that want to write
-  unsigned mask = __ballot_sync(0xFFFFFFFF, write);
+  unsigned mask = __ballot_sync(active_mask, write);
+  // no threads in warp will write
+  if (mask == 0) {
+    return -1;
+  }
   // Count how many threads before want to write
   int prefix = __popc(mask & ((1u << lane) - 1));
 
   // First active thread in warp gets block of slots
-  int base_slot;
+  int base_slot = 0;
   int leader_lane = __ffs(mask) - 1;
   if (lane == leader_lane) {
     base_slot = atomicAdd(global_index, __popc(mask));
   }
 
   // Broadcast base slot to all threads
-  base_slot = __shfl_sync(mask, base_slot, leader_lane);
+  base_slot = __shfl_sync(active_mask, base_slot, leader_lane);
 
-  return base_slot + prefix;
+  return write ? (base_slot + prefix) : -1;
 }
 
 __device__ __forceinline__ int warpReduceMin(unsigned mask, int val) {
@@ -146,6 +151,10 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
   const bool store_values = !(gaussian_idx_by_splat_idx == nullptr || sort_keys == nullptr);
 
   int gaussian_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  // Mask of all active threads
+  unsigned active_mask = __ballot_sync(0xFFFFFFFF, gaussian_idx < N);
+
   if (gaussian_idx >= N)
     return;
 
@@ -172,8 +181,6 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
   }
 
   // Reduce to find the minimum start_x and maximum end_x in the warp
-  unsigned active_mask = __ballot_sync(0xFFFFFFFF, 1); // Mask of all active threads
-
   int warp_start_x = warpReduceMin(active_mask, start_tile_x);
   int warp_end_x = warpReduceMax(active_mask, end_tile_x);
   int warp_start_y = warpReduceMin(active_mask, start_tile_y);
@@ -194,7 +201,7 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
       const int lane_id = gaussian_idx & 0x1f;
 
       // get position of splat in global array
-      int splat_idx = get_write_index(intersects, lane_id, global_splat_counter);
+      int splat_idx = get_write_index(intersects, lane_id, active_mask, global_splat_counter);
 
       if (store_values && intersects) {
         gaussian_idx_by_splat_idx[splat_idx] = gaussian_idx;
