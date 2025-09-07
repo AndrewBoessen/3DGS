@@ -9,7 +9,8 @@ constexpr int BATCH_SIZE = 960;
 template <unsigned int splat_batch_size>
 __global__ void
 render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opacity, const float *__restrict__ rgb,
-                    const float *__restrict__ conic, const int *__restrict__ splat_start_end_idx_by_tile_idx,
+                    const float *__restrict__ conic, const float background_opacity,
+                    const int *__restrict__ splat_start_end_idx_by_tile_idx,
                     const int *__restrict__ gaussian_idx_by_splat_idx, const int image_width, const int image_height,
                     float *__restrict__ final_weight_per_pixel, float *__restrict__ image) {
   // grid = tiles, blocks = pixels within each tile
@@ -125,9 +126,9 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
   // add background color at end
   const int base_image_id = (threadIdx.y * TILE_SIZE + threadIdx.x) * 3;
   if (valid_pixel) {
-    _image[base_image_id + 0] += (1.0 - alpha_accum); // R
-    _image[base_image_id + 1] += (1.0 - alpha_accum); // G
-    _image[base_image_id + 2] += (1.0 - alpha_accum); // B
+    _image[base_image_id + 0] += background_opacity * (1.0 - alpha_accum); // R
+    _image[base_image_id + 1] += background_opacity * (1.0 - alpha_accum); // G
+    _image[base_image_id + 2] += background_opacity * (1.0 - alpha_accum); // B
   }
 
   __syncthreads();
@@ -141,9 +142,9 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
   }
 }
 
-void render_image(const float *uv, const float *opacity, const float *conic, const float *rgb, const int *sorted_splats,
-                  const int *splat_range_by_tile, const int image_width, const int image_height,
-                  float *weight_per_pixel, float *image) {
+void render_image(const float *uv, const float *opacity, const float *conic, const float *rgb,
+                  const float background_opacity, const int *sorted_splats, const int *splat_range_by_tile,
+                  const int image_width, const int image_height, float *weight_per_pixel, float *image) {
   ASSERT_DEVICE_POINTER(uv);
   ASSERT_DEVICE_POINTER(opacity);
   ASSERT_DEVICE_POINTER(conic);
@@ -159,6 +160,7 @@ void render_image(const float *uv, const float *opacity, const float *conic, con
   dim3 block_size(TILE_SIZE, TILE_SIZE, 1);
   dim3 grid_size(num_tiles_x, num_tiles_y, 1);
 
-  render_tiles_kernel<BATCH_SIZE><<<grid_size, block_size>>>(
-      uv, opacity, rgb, conic, splat_range_by_tile, sorted_splats, image_width, image_height, weight_per_pixel, image);
+  render_tiles_kernel<BATCH_SIZE><<<grid_size, block_size>>>(uv, opacity, rgb, conic, background_opacity,
+                                                             splat_range_by_tile, sorted_splats, image_width,
+                                                             image_height, weight_per_pixel, image);
 }

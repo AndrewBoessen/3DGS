@@ -95,6 +95,7 @@ void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficien
  * @param[in]  opacity              A device pointer to splat opacity values
  * @param[in]  conic                A device pointer to store splat conic parameters
  * @param[in]  rgb                  A device pointer to precomputed rgb values
+ * @param[in]  background_opacity   The opacity value to use for white background
  * @param[in]  sorted_splats        A device pointer to Gaussian ids for each tile
  * @param[in]  splat_range_by_tile  A device pointer to start and end ids into sorted_splats
  * @param[in]  image_width          The width of image in pixels
@@ -102,6 +103,6 @@ void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficien
  * @param[out] weight_per_pixel     A device pointer to output final alpha weights per pixel
  * @param[out] image                A device pointer to output image rgb values
  */
-void render_image(const float *uv, const float *opacity, const float *conic, const float *rgb, const int *sorted_splats,
-                  const int *splat_range_by_tile, const int image_width, const int image_height,
-                  float *weight_per_pixel, float *image);
+void render_image(const float *uv, const float *opacity, const float *conic, const float *rgb,
+                  const float background_opacity, const int *sorted_splats, const int *splat_range_by_tile,
+                  const int image_width, const int image_height, float *weight_per_pixel, float *image);

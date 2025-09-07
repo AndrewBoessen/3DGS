@@ -573,6 +573,7 @@ TEST_F(CudaKernelTest, RenderImageMultipleGaussians) {
   const int width = 16;
   const int height = 16;
   const int N = 3; // Number of Gaussians
+  const float background_opacity = 1.0f;
 
   // 2. Host-side input data
   // Three Gaussians with different properties
@@ -625,8 +626,8 @@ TEST_F(CudaKernelTest, RenderImageMultipleGaussians) {
                         cudaMemcpyHostToDevice));
 
   // 5. Call the function to be tested
-  render_image(d_uv, d_opacity, d_conic, d_rgb, d_sorted_splats, d_splat_range_by_tile, width, height,
-               d_weight_per_pixel, d_image);
+  render_image(d_uv, d_opacity, d_conic, d_rgb, background_opacity, d_sorted_splats, d_splat_range_by_tile, width,
+               height, d_weight_per_pixel, d_image);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // 6. Copy results back to host
@@ -636,7 +637,7 @@ TEST_F(CudaKernelTest, RenderImageMultipleGaussians) {
   // This helper function replicates the kernel's alpha blending logic for a single pixel.
   auto calculate_expected_color = [&](float u_pixel, float v_pixel) {
     // Start with a white background and zero accumulated alpha
-    float r = 1.0f, g = 1.0f, b = 1.0f;
+    float r = background_opacity, g = background_opacity, b = background_opacity;
     float alpha_accum = 0.0f;
 
     // Iterate through gaussians in reverse order (front to back)
