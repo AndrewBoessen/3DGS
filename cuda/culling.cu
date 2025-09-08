@@ -294,6 +294,35 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
   frustum_culling_kernel<<<gridsize, blocksize>>>(uv, xyz, N, near_thresh, far_thresh, padding, width, height, mask);
 }
 
+void filter_gaussians_by_mask(int N, const bool *d_mask, const float *d_xyz, const float *d_rgb, const float *d_opacity,
+                              const float *d_scale, const float *d_quaternion, const float *d_uv, const float *d_xyz_c,
+                              float *d_xyz_culled, float *d_rgb_culled, float *d_opacity_culled, float *d_scale_culled,
+                              float *d_quaternion_culled, float *d_uv_culled, float *d_xyz_c_culled,
+                              int *d_num_culled) {
+  void *d_temp_storage = nullptr;
+  size_t temp_storage_bytes = 0;
+
+  // First, determine the temporary storage size required by CUB.
+  // This is a "dry run" that doesn't actually perform the selection.
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz, d_mask, d_xyz_culled, d_num_culled, N);
+
+  // Allocate the temporary storage buffer on the device.
+  CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+
+  // Now, perform the selection for each attribute array, reusing the temp storage.
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz, d_mask, d_xyz_culled, d_num_culled, N);
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_rgb, d_mask, d_rgb_culled, d_num_culled, N);
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_opacity, d_mask, d_opacity_culled, d_num_culled, N);
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_scale, d_mask, d_scale_culled, d_num_culled, N);
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_quaternion, d_mask, d_quaternion_culled,
+                             d_num_culled, N);
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_uv, d_mask, d_uv_culled, d_num_culled, N);
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz_c, d_mask, d_xyz_c_culled, d_num_culled, N);
+
+  // Free the temporary storage.
+  CHECK_CUDA(cudaFree(d_temp_storage));
+}
+
 void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *conic, const int n_tiles_x,
                               const int n_tiles_y, const float mh_dist, const int N, size_t &sorted_gaussian_bytes,
                               int *sorted_gaussians, int *splat_start_end_idx_by_tile_idx) {

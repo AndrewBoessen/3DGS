@@ -1,6 +1,5 @@
 #include "gsplat/raster.hpp"
 #include "gsplat/cuda_forward.hpp"
-#include <cub/cub.cuh>
 #include <vector>
 
 void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, Camera camera, float *out_image) {
@@ -105,25 +104,12 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
   CHECK_CUDA(cudaMalloc(&d_uv_culled, N * 2 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&d_xyz_c_culled, N * 3 * sizeof(float)));
 
-  void *d_temp_storage = nullptr;
-  size_t temp_storage_bytes = 0;
-
-  // Perform selection on one attribute to get size, then reuse for all
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz, d_mask, d_xyz_culled, d_num_culled, N);
-  CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes));
-
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz, d_mask, d_xyz_culled, d_num_culled, N);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_rgb, d_mask, d_rgb_culled, d_num_culled, N);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_opacity, d_mask, d_opacity_culled, d_num_culled, N);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_scale, d_mask, d_scale_culled, d_num_culled, N);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_quaternion, d_mask, d_quaternion_culled,
-                             d_num_culled, N);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_uv, d_mask, d_uv_culled, d_num_culled, N);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz_c, d_mask, d_xyz_c_culled, d_num_culled, N);
+  filter_gaussians_by_mask(N, d_mask, d_xyz, d_rgb, d_opacity, d_scale, d_quaternion, d_uv, d_xyz_c, d_xyz_culled,
+                           d_rgb_culled, d_opacity_culled, d_scale_culled, d_quaternion_culled, d_uv_culled,
+                           d_xyz_c_culled, d_num_culled);
 
   int N_culled;
   CHECK_CUDA(cudaMemcpy(&N_culled, d_num_culled, sizeof(int), cudaMemcpyDeviceToHost));
-  CHECK_CUDA(cudaFree(d_temp_storage));
 
   if (N_culled == 0) {
     // Cleanup and return if no gaussians are left

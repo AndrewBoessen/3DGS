@@ -71,6 +71,31 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
                     const int padding, const int width, const int height, bool *mask);
 
 /**
+ * @brief Filter the Guassian parameters by the provided mask and return filtered arrays
+ * @param[in]  N
+ * @param[in]  d_mask
+ * @param[in]  d_xyz
+ * @param[in]  d_rgb
+ * @param[in]  d_opacity
+ * @param[in]  d_scale
+ * @param[in]  d_quaternion
+ * @param[in]  d_uv
+ * @param[in]  d_xyz_c
+ * @param[out] d_xyz_culled
+ * @param[out] d_rgb_culled
+ * @param[out] d_opacity_culled
+ * @param[out] d_scale_culled
+ * @param[out] d_quaternion_culled
+ * @param[out] d_uv_culled
+ * @param[out] d_xyz_c_culled
+ * @param[out] d_num_culled
+ */
+void filter_gaussians_by_mask(int N, const bool *d_mask, const float *d_xyz, const float *d_rgb, const float *d_opacity,
+                              const float *d_scale, const float *d_quaternion, const float *d_uv, const float *d_xyz_c,
+                              float *d_xyz_culled, float *d_rgb_culled, float *d_opacity_culled, float *d_scale_culled,
+                              float *d_quaternion_culled, float *d_uv_culled, float *d_xyz_c_culled, int *d_num_culled);
+
+/**
  * @brief Lanuches CUDA kernels to get gaussian tile intersections sorted by depth
  * @param[in]  uv                               A device pointer to gaussian coordinates in image frame
  * @param[in]  xyz                              A device pointer to 3D corrdinates of gaussians in camera perspective

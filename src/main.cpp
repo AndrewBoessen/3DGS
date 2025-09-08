@@ -81,7 +81,7 @@ int main(int argc, char *argv[]) {
       const auto &images = images_optional.value();
       const auto &cameras = cameras_optional.value();
       // get first image
-      Image test_image = images.at(0);
+      Image test_image = images.at(1);
       Camera test_camera = cameras.at(test_image.camera_id);
       const int height = test_camera.height;
       const int width = test_camera.width;
