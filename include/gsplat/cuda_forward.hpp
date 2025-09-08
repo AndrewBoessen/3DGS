@@ -5,6 +5,16 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+// Macro for checking CUDA API calls for errors.
+#define CHECK_CUDA(call)                                                                                               \
+  do {                                                                                                                 \
+    cudaError_t err = call;                                                                                            \
+    if (err != cudaSuccess) {                                                                                          \
+      fprintf(stderr, "CUDA Error in %s at line %d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err));               \
+      exit(EXIT_FAILURE);                                                                                              \
+    }                                                                                                                  \
+  } while (0)
+
 /**
  * @brief Compute conic of projected 2D covariance matrix
  * @param[in]  xyz    A device pointer to 3D points

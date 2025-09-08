@@ -1,5 +1,6 @@
 #include "dataloader/colmap.hpp"
 #include "gsplat/gaussian.hpp"
+#include "gsplat/raster.hpp"
 #include "gsplat/utils.hpp"
 #include <iostream>
 #include <stdexcept>
@@ -22,8 +23,9 @@ int main(int argc, char *argv[]) {
 
   // Read config file and load parameters
   std::cout << "Attempting to read " << config_path << std::endl;
+  ConfigParameters config;
   try {
-    ConfigParameters config = parseConfig(config_path);
+    config = parseConfig(config_path);
   } catch (const std::runtime_error &e) {
     std::cout << "Failed to load config file: " << e.what() << std::endl;
     return 1; // Return on error
@@ -73,7 +75,25 @@ int main(int argc, char *argv[]) {
     // Initialize Gaussians with the loaded 3D points
     Gaussians gaussians = Gaussians::Initialize(points);
     std::cout << "Successfully initialized " << gaussians.xyz.size() << " Gaussians." << std::endl;
+
+    // Test rasterization
+    if (images_optional && cameras_optional) {
+      const auto &images = images_optional.value();
+      const auto &cameras = cameras_optional.value();
+      // get first image
+      Image test_image = images.at(0);
+      Camera test_camera = cameras.at(test_image.camera_id);
+      const int height = test_camera.height;
+      const int width = test_camera.width;
+      float *out_image;
+      out_image = (float *)malloc(height * width * 3 * sizeof(float));
+
+      // rasterize
+      rasterize_image(config, gaussians, test_image, test_camera, out_image);
+    }
   }
+
+  // Test rasterization
 
   return 0; // Success
 }

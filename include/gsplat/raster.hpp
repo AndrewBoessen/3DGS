@@ -4,5 +4,6 @@
 
 #include "dataloader/colmap.hpp"
 #include "gsplat/gaussian.hpp"
+#include "gsplat/utils.hpp"
 
-void rasterize_image(Gaussians gaussians, Image image, Camera camera);
+void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, Camera camera, float *out_image);
