@@ -37,7 +37,7 @@ __global__ void compute_rgb_from_sh_kernel(const float *sh_coefficients, const f
 }
 
 void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficients, const int l_max, const int N,
-                                    float *rgb) {
+                                    float *rgb, cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(xyz);
   ASSERT_DEVICE_POINTER(sh_coefficients);
   ASSERT_DEVICE_POINTER(rgb);
@@ -58,7 +58,7 @@ void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficien
   const int gridSize = (N + blockSize - 1) / blockSize;
 
   // Launch the kernel to compute the final RGB values
-  compute_rgb_from_sh_kernel<<<gridSize, blockSize>>>(sh_coefficients, d_sph, n_coeffs, N, rgb);
+  compute_rgb_from_sh_kernel<<<gridSize, blockSize, 0, stream>>>(sh_coefficients, d_sph, n_coeffs, N, rgb);
 
   // Free the temporary device memory used for SH basis functions
   CHECK_CUDA(cudaFree(d_sph));

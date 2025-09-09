@@ -144,7 +144,8 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
 
 void render_image(const float *uv, const float *opacity, const float *conic, const float *rgb,
                   const float background_opacity, const int *sorted_splats, const int *splat_range_by_tile,
-                  const int image_width, const int image_height, float *weight_per_pixel, float *image) {
+                  const int image_width, const int image_height, float *weight_per_pixel, float *image,
+                  cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(uv);
   ASSERT_DEVICE_POINTER(opacity);
   ASSERT_DEVICE_POINTER(conic);
@@ -160,7 +161,7 @@ void render_image(const float *uv, const float *opacity, const float *conic, con
   dim3 block_size(TILE_SIZE, TILE_SIZE, 1);
   dim3 grid_size(num_tiles_x, num_tiles_y, 1);
 
-  render_tiles_kernel<BATCH_SIZE><<<grid_size, block_size>>>(uv, opacity, rgb, conic, background_opacity,
-                                                             splat_range_by_tile, sorted_splats, image_width,
-                                                             image_height, weight_per_pixel, image);
+  render_tiles_kernel<BATCH_SIZE><<<grid_size, block_size, 0, stream>>>(uv, opacity, rgb, conic, background_opacity,
+                                                                        splat_range_by_tile, sorted_splats, image_width,
+                                                                        image_height, weight_per_pixel, image);
 }

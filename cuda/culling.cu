@@ -197,7 +197,11 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
       tile_bounds[2] = __int2float_rn(tile_y) * 16.0f;
       tile_bounds[3] = __int2float_rn(tile_y + 1) * 16.0f;
 
-      const bool intersects = in_thread_bounds && split_axis_test(obb, tile_bounds);
+      bool intersects = false;
+      if (in_thread_bounds) {
+        intersects = split_axis_test(obb, tile_bounds);
+      }
+
       const int lane_id = gaussian_idx & 0x1f;
 
       // get position of splat in global array
@@ -279,7 +283,7 @@ __global__ void max_reduce_strided_kernel(const float *input, float *output, int
 }
 
 void cull_gaussians(float *const uv, float *const xyz, const int N, const float near_thresh, const float far_thresh,
-                    const int padding, const int width, const int height, bool *mask) {
+                    const int padding, const int width, const int height, bool *mask, cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(uv);
   ASSERT_DEVICE_POINTER(xyz);
   ASSERT_DEVICE_POINTER(mask);
@@ -291,33 +295,37 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
   dim3 gridsize(num_blocks, 1, 1);
   dim3 blocksize(threads_per_block, 1, 1);
 
-  frustum_culling_kernel<<<gridsize, blocksize>>>(uv, xyz, N, near_thresh, far_thresh, padding, width, height, mask);
+  frustum_culling_kernel<<<gridsize, blocksize, 0, stream>>>(uv, xyz, N, near_thresh, far_thresh, padding, width,
+                                                             height, mask);
 }
 
 void filter_gaussians_by_mask(int N, const bool *d_mask, const float *d_xyz, const float *d_rgb, const float *d_opacity,
                               const float *d_scale, const float *d_quaternion, const float *d_uv, const float *d_xyz_c,
                               float *d_xyz_culled, float *d_rgb_culled, float *d_opacity_culled, float *d_scale_culled,
-                              float *d_quaternion_culled, float *d_uv_culled, float *d_xyz_c_culled,
-                              int *d_num_culled) {
+                              float *d_quaternion_culled, float *d_uv_culled, float *d_xyz_c_culled, int *d_num_culled,
+                              cudaStream_t stream) {
   void *d_temp_storage = nullptr;
   size_t temp_storage_bytes = 0;
 
   // First, determine the temporary storage size required by CUB.
   // This is a "dry run" that doesn't actually perform the selection.
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz, d_mask, d_xyz_culled, d_num_culled, N);
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz, d_mask, d_xyz_culled, d_num_culled, N, stream);
 
   // Allocate the temporary storage buffer on the device.
   CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes));
 
   // Now, perform the selection for each attribute array, reusing the temp storage.
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz, d_mask, d_xyz_culled, d_num_culled, N);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_rgb, d_mask, d_rgb_culled, d_num_culled, N);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_opacity, d_mask, d_opacity_culled, d_num_culled, N);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_scale, d_mask, d_scale_culled, d_num_culled, N);
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz, d_mask, d_xyz_culled, d_num_culled, N, stream);
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_rgb, d_mask, d_rgb_culled, d_num_culled, N, stream);
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_opacity, d_mask, d_opacity_culled, d_num_culled, N,
+                             stream);
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_scale, d_mask, d_scale_culled, d_num_culled, N,
+                             stream);
   cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_quaternion, d_mask, d_quaternion_culled,
-                             d_num_culled, N);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_uv, d_mask, d_uv_culled, d_num_culled, N);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz_c, d_mask, d_xyz_c_culled, d_num_culled, N);
+                             d_num_culled, N, stream);
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_uv, d_mask, d_uv_culled, d_num_culled, N, stream);
+  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz_c, d_mask, d_xyz_c_culled, d_num_culled, N,
+                             stream);
 
   // Free the temporary storage.
   CHECK_CUDA(cudaFree(d_temp_storage));
@@ -325,7 +333,7 @@ void filter_gaussians_by_mask(int N, const bool *d_mask, const float *d_xyz, con
 
 void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *conic, const int n_tiles_x,
                               const int n_tiles_y, const float mh_dist, const int N, size_t &sorted_gaussian_bytes,
-                              int *sorted_gaussians, int *splat_start_end_idx_by_tile_idx) {
+                              int *sorted_gaussians, int *splat_start_end_idx_by_tile_idx, cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(uv);
   ASSERT_DEVICE_POINTER(xyz);
   ASSERT_DEVICE_POINTER(conic);
@@ -341,8 +349,8 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
     const int threads_per_block = 256;
     const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
 
-    generate_splats_kernel<<<num_blocks, threads_per_block>>>(uv, xyz, conic, n_tiles_x, n_tiles_y, mh_dist, N, nullptr,
-                                                              sorted_gaussians, nullptr, d_global_splat_counter);
+    generate_splats_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
+        uv, xyz, conic, n_tiles_x, n_tiles_y, mh_dist, N, nullptr, sorted_gaussians, nullptr, d_global_splat_counter);
     CHECK_CUDA(cudaGetLastError());
 
     CHECK_CUDA(cudaMemcpy(&sorted_gaussian_bytes, d_global_splat_counter, sizeof(int), cudaMemcpyDeviceToHost));
@@ -367,12 +375,12 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
     float *d_partial_max;
     CHECK_CUDA(cudaMalloc(&d_partial_max, num_blocks_pass1 * sizeof(float)));
 
-    max_reduce_strided_kernel<<<num_blocks_pass1, threads_per_block_reduce, shared_mem_size>>>(xyz + 2, d_partial_max,
-                                                                                               N, 3);
+    max_reduce_strided_kernel<<<num_blocks_pass1, threads_per_block_reduce, shared_mem_size, stream>>>(
+        xyz + 2, d_partial_max, N, 3);
     CHECK_CUDA(cudaGetLastError());
     // Pass 2: Reduce partial results to a single value
-    max_reduce_strided_kernel<<<1, threads_per_block_reduce, shared_mem_size>>>(d_partial_max, d_max_z,
-                                                                                num_blocks_pass1, 1);
+    max_reduce_strided_kernel<<<1, threads_per_block_reduce, shared_mem_size, stream>>>(d_partial_max, d_max_z,
+                                                                                        num_blocks_pass1, 1);
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaFree(d_partial_max));
   }
@@ -383,27 +391,26 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   const int threads_per_block = 256;
   const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
 
-  generate_splats_kernel<<<num_blocks, threads_per_block>>>(uv, xyz, conic, n_tiles_x, n_tiles_y, mh_dist, N, d_max_z,
-                                                            sorted_gaussians, d_sort_keys, d_global_splat_counter);
-  CHECK_CUDA(cudaDeviceSynchronize());
+  generate_splats_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
+      uv, xyz, conic, n_tiles_x, n_tiles_y, mh_dist, N, d_max_z, sorted_gaussians, d_sort_keys, d_global_splat_counter);
 
   {
     void *d_temp_storage = nullptr;
     size_t temp_storage_bytes = 0;
     // Sort keys and apply the same permutation to the gaussian indices (in d_sorted_gaussians)
     cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, d_sort_keys, d_sort_keys, sorted_gaussians,
-                                    sorted_gaussians, num_splats);
+                                    sorted_gaussians, num_splats, 0, sizeof(double) * 8, stream);
     CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes));
     cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, d_sort_keys, d_sort_keys, sorted_gaussians,
-                                    sorted_gaussians, num_splats);
+                                    sorted_gaussians, num_splats, 0, sizeof(double) * 8, stream);
     CHECK_CUDA(cudaFree(d_temp_storage));
   }
 
   CHECK_CUDA(cudaMemset(splat_start_end_idx_by_tile_idx, 0, (num_tiles + 1) * sizeof(int)));
 
   const int boundary_blocks = (num_splats + threads_per_block - 1) / threads_per_block;
-  find_tile_boundaries_kernel<<<boundary_blocks, threads_per_block>>>(d_sort_keys, num_splats, d_max_z,
-                                                                      splat_start_end_idx_by_tile_idx);
+  find_tile_boundaries_kernel<<<boundary_blocks, threads_per_block, 0, stream>>>(d_sort_keys, num_splats, d_max_z,
+                                                                                 splat_start_end_idx_by_tile_idx);
 
   CHECK_CUDA(cudaFree(d_max_z));
   CHECK_CUDA(cudaFree(d_sort_keys));

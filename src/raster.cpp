@@ -82,10 +82,10 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
       continue;
 
     cudaStream_t stream = streams[i];
-    camera_extrinsic_projection(d_xyz + offset * 3, d_T, size, d_xyz_c + offset * 3);
-    camera_intrinsic_projection(d_xyz_c + offset * 3, d_K, size, d_uv + offset * 2);
+    camera_extrinsic_projection(d_xyz + offset * 3, d_T, size, d_xyz_c + offset * 3, stream);
+    camera_intrinsic_projection(d_xyz_c + offset * 3, d_K, size, d_uv + offset * 2, stream);
     cull_gaussians(d_uv + offset * 2, d_xyz_c + offset * 3, size, config.near_thresh, config.far_thresh,
-                   config.cull_mask_padding, width, height, d_mask + offset);
+                   config.cull_mask_padding, width, height, d_mask + offset, stream);
   }
 
   CHECK_CUDA(cudaDeviceSynchronize()); // Sync streams to ensure mask is complete
@@ -152,9 +152,9 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
       continue;
 
     cudaStream_t stream = streams[i];
-    compute_sigma(d_quaternion_culled + offset * 4, d_scale_culled + offset * 3, size, d_sigma + offset * 6);
+    compute_sigma(d_quaternion_culled + offset * 4, d_scale_culled + offset * 3, size, d_sigma + offset * 6, stream);
     compute_conic(d_xyz_c_culled + offset * 3, d_K, d_sigma + offset * 6, d_T, size, d_J + offset * 9,
-                  d_conic + offset * 3);
+                  d_conic + offset * 3, stream);
   }
 
   CHECK_CUDA(cudaDeviceSynchronize()); // Sync streams for sorting
