@@ -8,7 +8,7 @@ __device__ __forceinline__ bool z_distance_culling(const float z, const float ne
 }
 __device__ __forceinline__ bool frustum_culling(const float u, const float v, const int padding, const int width,
                                                 const int height) {
-  return u >= (-1 * padding) && u <= width && v >= (-1 * padding) && v <= height;
+  return u >= (-1 * padding) && u <= width + padding && v >= (-1 * padding) && v <= height + padding;
 }
 
 __global__ void frustum_culling_kernel(const float *__restrict__ uv, const float *__restrict__ xyz, const int N,
@@ -28,7 +28,7 @@ __global__ void frustum_culling_kernel(const float *__restrict__ uv, const float
 
   const float z = xyz[i * XYZ_STRIDE + 2];
 
-  mask[i] = !(z_distance_culling(z, near_thresh, far_thresh) || frustum_culling(u, v, padding, width, height));
+  mask[i] = z_distance_culling(z, near_thresh, far_thresh) && frustum_culling(u, v, padding, width, height);
 }
 
 __device__ __forceinline__ bool

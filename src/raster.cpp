@@ -74,10 +74,11 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
   }
 
   // Step 1: Projections and Culling (Parallelized across streams)
-  int chunk_size = (N + NUM_STREAMS - 1) / NUM_STREAMS;
+  int offset = 0;
   for (int i = 0; i < NUM_STREAMS; ++i) {
-    int offset = i * chunk_size;
-    int size = std::min(chunk_size, N - offset);
+    int remainder = N % NUM_STREAMS;
+    int size = N / NUM_STREAMS + (i < remainder ? 1 : 0);
+
     if (size <= 0)
       continue;
 
@@ -86,6 +87,7 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
     camera_intrinsic_projection(d_xyz_c + offset * 3, d_K, size, d_uv + offset * 2, stream);
     cull_gaussians(d_uv + offset * 2, d_xyz_c + offset * 3, size, config.near_thresh, config.far_thresh,
                    config.cull_mask_padding, width, height, d_mask + offset, stream);
+    offset += size;
   }
 
   CHECK_CUDA(cudaDeviceSynchronize()); // Sync streams to ensure mask is complete
@@ -110,6 +112,8 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
 
   int N_culled;
   CHECK_CUDA(cudaMemcpy(&N_culled, d_num_culled, sizeof(int), cudaMemcpyDeviceToHost));
+
+  printf("GAUSSIANS LEFT %d\n", N_culled);
 
   if (N_culled == 0) {
     // Cleanup and return if no gaussians are left
@@ -140,21 +144,25 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
 
   // Step 3: Compute Covariance and Conics (Parallelized across streams)
   float *d_sigma, *d_conic, *d_J;
-  CHECK_CUDA(cudaMalloc(&d_sigma, N_culled * 6 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_sigma, N_culled * 9 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&d_conic, N_culled * 3 * sizeof(float)));
-  CHECK_CUDA(cudaMalloc(&d_J, N_culled * 9 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_J, N_culled * 6 * sizeof(float)));
 
-  chunk_size = (N_culled + NUM_STREAMS - 1) / NUM_STREAMS;
+  offset = 0;
   for (int i = 0; i < NUM_STREAMS; ++i) {
-    int offset = i * chunk_size;
-    int size = std::min(chunk_size, N_culled - offset);
+    int remainder = N_culled % NUM_STREAMS;
+    int size = N_culled / NUM_STREAMS + (i < remainder ? 1 : 0);
+
     if (size <= 0)
       continue;
 
+    printf("OFFSET CULLED %d\n", offset);
+
     cudaStream_t stream = streams[i];
-    compute_sigma(d_quaternion_culled + offset * 4, d_scale_culled + offset * 3, size, d_sigma + offset * 6, stream);
-    compute_conic(d_xyz_c_culled + offset * 3, d_K, d_sigma + offset * 6, d_T, size, d_J + offset * 9,
+    compute_sigma(d_quaternion_culled + offset * 4, d_scale_culled + offset * 3, size, d_sigma + offset * 9, stream);
+    compute_conic(d_xyz_c_culled + offset * 3, d_K, d_sigma + offset * 9, d_T, size, d_J + offset * 6,
                   d_conic + offset * 3, stream);
+    offset += size;
   }
 
   CHECK_CUDA(cudaDeviceSynchronize()); // Sync streams for sorting
@@ -167,12 +175,16 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
   int *d_sorted_gaussians, *d_splat_start_end_idx_by_tile_idx;
   size_t sorted_gaussian_bytes = 0;
 
-  CHECK_CUDA(cudaMalloc(&d_splat_start_end_idx_by_tile_idx, n_tiles * 2 * sizeof(int)));
+  CHECK_CUDA(cudaMalloc(&d_splat_start_end_idx_by_tile_idx, (n_tiles + 1) * sizeof(int)));
 
   get_sorted_gaussian_list(d_uv_culled, d_xyz_c_culled, d_conic, n_tiles_x, n_tiles_y, config.mh_dist, N_culled,
                            sorted_gaussian_bytes, nullptr, d_splat_start_end_idx_by_tile_idx);
 
+  printf("BYTES %lu\n", sorted_gaussian_bytes);
+
   CHECK_CUDA(cudaMalloc(&d_sorted_gaussians, sorted_gaussian_bytes));
+
+  CHECK_CUDA(cudaDeviceSynchronize());
 
   get_sorted_gaussian_list(d_uv_culled, d_xyz_c_culled, d_conic, n_tiles_x, n_tiles_y, config.mh_dist, N_culled,
                            sorted_gaussian_bytes, d_sorted_gaussians, d_splat_start_end_idx_by_tile_idx);
