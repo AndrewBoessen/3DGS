@@ -160,7 +160,7 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
 
     cudaStream_t stream = streams[i];
     compute_sigma(d_quaternion_culled + offset * 4, d_scale_culled + offset * 3, size, d_sigma + offset * 9, stream);
-    compute_conic(d_xyz_c_culled + offset * 3, d_K, d_sigma + offset * 9, d_T, size, d_J + offset * 6,
+    compute_conic(d_xyz_culled + offset * 3, d_K, d_sigma + offset * 9, d_T, size, d_J + offset * 6,
                   d_conic + offset * 3, stream);
     offset += size;
   }
