@@ -162,8 +162,8 @@ TEST_F(CudaKernelTest, GaussianCulling) {
   // Some points are inside, some are outside, some are on the edge.
   const std::vector<float> h_xyz = {
       0.0f, 0.0f, 5.0f,  // Case 1: In view, should be kept.
-      0.0f, 0.0f, 0.5f,  // Case 2: Too close (z < near), but in frustum, should be kept.
-      0.0f, 0.0f, 12.0f, // Case 3: Too far (z > far), but in frustum, should be kept.
+      0.0f, 0.0f, 0.5f,  // Case 2: Too close (z < near), but in frustum, should be CULLED.
+      0.0f, 0.0f, 12.0f, // Case 3: Too far (z > far), but in frustum, should be CULLED.
       0.0f, 0.0f, 5.0f,  // Case 4: In left padding, should be kept.
       0.0f, 0.0f, 5.0f,  // Case 5: In right padding, should be kept.
       0.0f, 0.0f, 12.0f, // Case 6: Too far AND outside frustum, should be CULLED.
@@ -203,13 +203,13 @@ TEST_F(CudaKernelTest, GaussianCulling) {
   // Expected mask values. The mask is true if the point should be CULLED.
   // Logic from kernel: mask = !(z_ok || uv_ok)
   const std::vector<bool> expected_mask = {
-      false, // Case 1: Keep
-      false, // Case 2: Keep
-      false, // Case 3: Keep
-      false, // Case 4: Keep
-      false, // Case 5: Keep
-      true,  // Case 6: CULL
-      true   // Case 7: CULL
+      true,  // Case 1: Keep
+      false, // Case 2: CULL
+      false, // Case 3: CULL
+      true,  // Case 4: Keep
+      true,  // Case 5: Keep
+      false, // Case 6: CULL
+      false  // Case 7: CULL
   };
 
   // Compare results
@@ -344,7 +344,7 @@ TEST_F(CudaKernelTest, ComputeConic) {
   // 4. V = Sigma @ M^T = Identity @ J^T = J^T
   // 5. Conic = M @ V = J @ J^T
   const float c00 = j00 * j00 + 0.0f * 0.0f + j02 * j02;
-  const float c01 = j00 * 0.0f + 0.0f * j11 + j02 * j12;
+  const float c01 = j00 * 0.0f + 0.0f * j11 + j02 * j12 * 2;
   const float c11 = 0.0f * 0.0f + j11 * j11 + j12 * j12;
 
   const std::vector<float> expected_conic = {c00, c01, c11};

@@ -152,7 +152,7 @@ __global__ void compute_conic_kernel(const float *__restrict__ sigma, const floa
   // 4. Store the 3 unique components of the conic matrix into global memory.
   const int conic_base_idx = i * CONIC_STRIDE;
   conic[conic_base_idx + 0] = c00;
-  conic[conic_base_idx + 1] = c01;
+  conic[conic_base_idx + 1] = c01 + c01;
   conic[conic_base_idx + 2] = c11;
 }
 
@@ -189,7 +189,7 @@ __global__ void compute_projection_jacobian_kernel(const float *__restrict__ xyz
   J[i * J_STRIDE + 5] = -fy * y / (z * z);
 }
 
-void compute_sigma(float *const quaternion, float *const scale, const int N, float *sigma) {
+void compute_sigma(float *const quaternion, float *const scale, const int N, float *sigma, cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(quaternion);
   ASSERT_DEVICE_POINTER(scale);
   ASSERT_DEVICE_POINTER(sigma);
@@ -203,11 +203,11 @@ void compute_sigma(float *const quaternion, float *const scale, const int N, flo
 
   // Launch a single fused kernel to perform all operations.
   // This avoids intermediate memory allocations and global memory traffic.
-  compute_sigma_fused_kernel<<<gridsize, blocksize>>>(quaternion, scale, N, sigma);
+  compute_sigma_fused_kernel<<<gridsize, blocksize, 0, stream>>>(quaternion, scale, N, sigma);
 }
 
 void compute_conic(float *const xyz, const float *K, float *const sigma, const float *T, const int N, float *J,
-                   float *conic) {
+                   float *conic, cudaStream_t stream) {
   // Ensure all provided pointers are valid GPU device pointers.
   ASSERT_DEVICE_POINTER(xyz);
   ASSERT_DEVICE_POINTER(K);
@@ -225,9 +225,9 @@ void compute_conic(float *const xyz, const float *K, float *const sigma, const f
   const dim3 blocksize(threads_per_block, 1, 1);
 
   // This kernel computes the Jacobian (J) for each Gaussian.
-  compute_projection_jacobian_kernel<<<gridsize, blocksize>>>(xyz, K, N, J);
+  compute_projection_jacobian_kernel<<<gridsize, blocksize, 0, stream>>>(xyz, K, N, J);
 
   // This kernel uses the world-space covariance (sigma), the camera transform (T),
   // and the Jacobian (J) computed in the previous step to find the 2D conic.
-  compute_conic_kernel<<<gridsize, blocksize>>>(sigma, T, J, N, conic);
+  compute_conic_kernel<<<gridsize, blocksize, 0, stream>>>(sigma, T, J, N, conic);
 }

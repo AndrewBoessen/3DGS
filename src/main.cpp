@@ -1,5 +1,6 @@
 #include "dataloader/colmap.hpp"
 #include "gsplat/gaussian.hpp"
+#include "gsplat/raster.hpp"
 #include "gsplat/utils.hpp"
 #include <iostream>
 #include <stdexcept>
@@ -22,8 +23,9 @@ int main(int argc, char *argv[]) {
 
   // Read config file and load parameters
   std::cout << "Attempting to read " << config_path << std::endl;
+  ConfigParameters config;
   try {
-    ConfigParameters config = parseConfig(config_path);
+    config = parseConfig(config_path);
   } catch (const std::runtime_error &e) {
     std::cout << "Failed to load config file: " << e.what() << std::endl;
     return 1; // Return on error

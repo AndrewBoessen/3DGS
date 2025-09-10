@@ -33,7 +33,7 @@ target_include_directories(dataloader
 # ===================================================================
 # GSPLAT LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat src/utils.cpp src/gaussian.cpp)
+add_library(gsplat src/utils.cpp src/gaussian.cpp src/raster.cpp)
 
 target_include_directories(gsplat
   PUBLIC
