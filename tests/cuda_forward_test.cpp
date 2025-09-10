@@ -344,7 +344,7 @@ TEST_F(CudaKernelTest, ComputeConic) {
   // 4. V = Sigma @ M^T = Identity @ J^T = J^T
   // 5. Conic = M @ V = J @ J^T
   const float c00 = j00 * j00 + 0.0f * 0.0f + j02 * j02;
-  const float c01 = j00 * 0.0f + 0.0f * j11 + j02 * j12;
+  const float c01 = j00 * 0.0f + 0.0f * j11 + j02 * j12 * 2;
   const float c11 = 0.0f * 0.0f + j11 * j11 + j12 * j12;
 
   const std::vector<float> expected_conic = {c00, c01, c11};

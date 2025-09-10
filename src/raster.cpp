@@ -108,8 +108,6 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
                            d_rgb_culled, d_opacity_culled, d_scale_culled, d_quaternion_culled, d_uv_culled,
                            d_xyz_c_culled, &N_culled);
 
-  printf("GAUSSIANS LEFT %d\n", N_culled);
-
   if (N_culled == 0) {
     // Cleanup and return if no gaussians are left
     for (int i = 0; i < NUM_STREAMS; ++i)
@@ -167,13 +165,10 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
   int *d_sorted_gaussians, *d_splat_start_end_idx_by_tile_idx;
   size_t sorted_gaussian_bytes = 0;
 
-  CHECK_CUDA(cudaMalloc(&d_splat_start_end_idx_by_tile_idx, (n_tiles + 1) * sizeof(int)));
-
   get_sorted_gaussian_list(d_uv_culled, d_xyz_c_culled, d_conic, n_tiles_x, n_tiles_y, config.mh_dist, N_culled,
-                           sorted_gaussian_bytes, nullptr, d_splat_start_end_idx_by_tile_idx);
+                           sorted_gaussian_bytes, nullptr, nullptr);
 
-  printf("BYTES %lu\n", sorted_gaussian_bytes);
-
+  CHECK_CUDA(cudaMalloc(&d_splat_start_end_idx_by_tile_idx, (n_tiles + 1) * sizeof(int)));
   CHECK_CUDA(cudaMalloc(&d_sorted_gaussians, sorted_gaussian_bytes));
 
   get_sorted_gaussian_list(d_uv_culled, d_xyz_c_culled, d_conic, n_tiles_x, n_tiles_y, config.mh_dist, N_culled,

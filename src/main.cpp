@@ -75,25 +75,7 @@ int main(int argc, char *argv[]) {
     // Initialize Gaussians with the loaded 3D points
     Gaussians gaussians = Gaussians::Initialize(points);
     std::cout << "Successfully initialized " << gaussians.xyz.size() << " Gaussians." << std::endl;
-
-    // Test rasterization
-    if (images_optional && cameras_optional) {
-      const auto &images = images_optional.value();
-      const auto &cameras = cameras_optional.value();
-      // get first image
-      Image test_image = images.at(1);
-      Camera test_camera = cameras.at(test_image.camera_id);
-      const int height = test_camera.height;
-      const int width = test_camera.width;
-      float *out_image;
-      out_image = (float *)malloc(height * width * 3 * sizeof(float));
-
-      // rasterize
-      rasterize_image(config, gaussians, test_image, test_camera, out_image);
-    }
   }
-
-  // Test rasterization
 
   return 0; // Success
 }

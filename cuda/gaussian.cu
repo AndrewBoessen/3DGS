@@ -152,7 +152,7 @@ __global__ void compute_conic_kernel(const float *__restrict__ sigma, const floa
   // 4. Store the 3 unique components of the conic matrix into global memory.
   const int conic_base_idx = i * CONIC_STRIDE;
   conic[conic_base_idx + 0] = c00;
-  conic[conic_base_idx + 1] = c01;
+  conic[conic_base_idx + 1] = c01 + c01;
   conic[conic_base_idx + 2] = c11;
 }
 
@@ -172,8 +172,6 @@ __global__ void compute_projection_jacobian_kernel(const float *__restrict__ xyz
   // K = [fx, 0, cx, 0, fy, cy, 0, 0, 1]
   const float fx = __shfl_sync(0xffffffff, k_val, 0);
   const float fy = __shfl_sync(0xffffffff, k_val, 4);
-
-  // printf("F XY %f %f\n", fx, fy);
 
   if (i >= N) {
     return;
