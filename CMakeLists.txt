@@ -93,3 +93,6 @@ add_gtest_executable(gaussian_tests tests/gaussian_test.cpp gsplat dataloader)
 
 # --- CUDA Forward Tests ---
 add_gtest_executable(cuda_forward_tests tests/cuda_forward_test.cpp gsplat_cuda)
+
+# --- CUDA Backward Tests ---
+add_gtest_executable(cuda_backward_tests tests/cuda_backward_test.cpp gsplat_cuda)
