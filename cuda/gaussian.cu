@@ -173,6 +173,8 @@ __global__ void compute_projection_jacobian_kernel(const float *__restrict__ xyz
   const float fx = __shfl_sync(0xffffffff, k_val, 0);
   const float fy = __shfl_sync(0xffffffff, k_val, 4);
 
+  // printf("F XY %f %f\n", fx, fy);
+
   if (i >= N) {
     return;
   }

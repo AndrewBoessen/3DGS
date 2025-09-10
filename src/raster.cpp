@@ -93,9 +93,6 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
   CHECK_CUDA(cudaDeviceSynchronize()); // Sync streams to ensure mask is complete
 
   // Step 2: Filter Gaussians based on the culling mask using CUB
-  int *d_num_culled;
-  CHECK_CUDA(cudaMalloc(&d_num_culled, sizeof(int)));
-
   float *d_xyz_culled, *d_rgb_culled, *d_opacity_culled, *d_scale_culled, *d_quaternion_culled, *d_uv_culled,
       *d_xyz_c_culled;
   CHECK_CUDA(cudaMalloc(&d_xyz_culled, N * 3 * sizeof(float)));
@@ -106,12 +103,10 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
   CHECK_CUDA(cudaMalloc(&d_uv_culled, N * 2 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&d_xyz_c_culled, N * 3 * sizeof(float)));
 
+  int N_culled;
   filter_gaussians_by_mask(N, d_mask, d_xyz, d_rgb, d_opacity, d_scale, d_quaternion, d_uv, d_xyz_c, d_xyz_culled,
                            d_rgb_culled, d_opacity_culled, d_scale_culled, d_quaternion_culled, d_uv_culled,
-                           d_xyz_c_culled, d_num_culled);
-
-  int N_culled;
-  CHECK_CUDA(cudaMemcpy(&N_culled, d_num_culled, sizeof(int), cudaMemcpyDeviceToHost));
+                           d_xyz_c_culled, &N_culled);
 
   printf("GAUSSIANS LEFT %d\n", N_culled);
 
@@ -130,7 +125,6 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
     CHECK_CUDA(cudaFree(d_uv));
     CHECK_CUDA(cudaFree(d_xyz_c));
     CHECK_CUDA(cudaFree(d_mask));
-    CHECK_CUDA(cudaFree(d_num_culled));
     CHECK_CUDA(cudaFree(d_xyz_culled));
     CHECK_CUDA(cudaFree(d_rgb_culled));
     CHECK_CUDA(cudaFree(d_opacity_culled));
@@ -156,11 +150,9 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
     if (size <= 0)
       continue;
 
-    printf("OFFSET CULLED %d\n", offset);
-
     cudaStream_t stream = streams[i];
     compute_sigma(d_quaternion_culled + offset * 4, d_scale_culled + offset * 3, size, d_sigma + offset * 9, stream);
-    compute_conic(d_xyz_culled + offset * 3, d_K, d_sigma + offset * 9, d_T, size, d_J + offset * 6,
+    compute_conic(d_xyz_c_culled + offset * 3, d_K, d_sigma + offset * 9, d_T, size, d_J + offset * 6,
                   d_conic + offset * 3, stream);
     offset += size;
   }
@@ -183,8 +175,6 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
   printf("BYTES %lu\n", sorted_gaussian_bytes);
 
   CHECK_CUDA(cudaMalloc(&d_sorted_gaussians, sorted_gaussian_bytes));
-
-  CHECK_CUDA(cudaDeviceSynchronize());
 
   get_sorted_gaussian_list(d_uv_culled, d_xyz_c_culled, d_conic, n_tiles_x, n_tiles_y, config.mh_dist, N_culled,
                            sorted_gaussian_bytes, d_sorted_gaussians, d_splat_start_end_idx_by_tile_idx);
@@ -212,7 +202,6 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
   CHECK_CUDA(cudaFree(d_uv));
   CHECK_CUDA(cudaFree(d_xyz_c));
   CHECK_CUDA(cudaFree(d_mask));
-  CHECK_CUDA(cudaFree(d_num_culled));
   CHECK_CUDA(cudaFree(d_xyz_culled));
   CHECK_CUDA(cudaFree(d_rgb_culled));
   CHECK_CUDA(cudaFree(d_opacity_culled));

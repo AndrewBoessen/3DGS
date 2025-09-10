@@ -299,36 +299,70 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
                                                              height, mask);
 }
 
-void filter_gaussians_by_mask(int N, const bool *d_mask, const float *d_xyz, const float *d_rgb, const float *d_opacity,
-                              const float *d_scale, const float *d_quaternion, const float *d_uv, const float *d_xyz_c,
-                              float *d_xyz_culled, float *d_rgb_culled, float *d_opacity_culled, float *d_scale_culled,
-                              float *d_quaternion_culled, float *d_uv_culled, float *d_xyz_c_culled, int *d_num_culled,
-                              cudaStream_t stream) {
+__global__ void select_groups_kernel(const float *input, const bool *mask, const int *scan_out, const int N,
+                                     float *output, int S) {
+  int gid = blockIdx.x * blockDim.x + threadIdx.x; // group id
+  if (gid >= N)
+    return;
+  if (mask[gid]) {
+    int out_group = scan_out[gid];
+    for (int j = 0; j < S; ++j) {
+      output[out_group * S + j] = input[gid * S + j];
+    }
+  }
+}
+
+__global__ void getTotalSum(const int *mask_sum, const bool *d_mask, int *d_num_culled, int N) {
+  if (N > 0) {
+    // The total sum = exclusive_scan_result[N-1] + input[N-1]
+    *d_num_culled = mask_sum[N - 1] + static_cast<int>(d_mask[N - 1]);
+  } else {
+    *d_num_culled = 0;
+  }
+}
+
+void filter_gaussians_by_mask(const int N, const bool *d_mask, const float *d_xyz, const float *d_rgb,
+                              const float *d_opacity, const float *d_scale, const float *d_quaternion,
+                              const float *d_uv, const float *d_xyz_c, float *d_xyz_culled, float *d_rgb_culled,
+                              float *d_opacity_culled, float *d_scale_culled, float *d_quaternion_culled,
+                              float *d_uv_culled, float *d_xyz_c_culled, int *h_num_culled, cudaStream_t stream) {
+  int *mask_sum;
+  CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
+
   void *d_temp_storage = nullptr;
   size_t temp_storage_bytes = 0;
 
-  // First, determine the temporary storage size required by CUB.
-  // This is a "dry run" that doesn't actually perform the selection.
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz, d_mask, d_xyz_culled, d_num_culled, N, stream);
+  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
+  // Allocate temporary storage
+  cudaMalloc(&d_temp_storage, temp_storage_bytes);
 
-  // Allocate the temporary storage buffer on the device.
-  CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+  // Run exclusive prefix sum
+  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
 
-  // Now, perform the selection for each attribute array, reusing the temp storage.
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz, d_mask, d_xyz_culled, d_num_culled, N, stream);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_rgb, d_mask, d_rgb_culled, d_num_culled, N, stream);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_opacity, d_mask, d_opacity_culled, d_num_culled, N,
-                             stream);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_scale, d_mask, d_scale_culled, d_num_culled, N,
-                             stream);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_quaternion, d_mask, d_quaternion_culled,
-                             d_num_culled, N, stream);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_uv, d_mask, d_uv_culled, d_num_culled, N, stream);
-  cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes, d_xyz_c, d_mask, d_xyz_c_culled, d_num_culled, N,
-                             stream);
+  // Copy sum to host
+  int *d_num_culled_temp;
+  CHECK_CUDA(cudaMalloc(&d_num_culled_temp, sizeof(int)));
+  getTotalSum<<<1, 1, 0, stream>>>(mask_sum, d_mask, d_num_culled_temp, N);
+  CHECK_CUDA(cudaMemcpyAsync(h_num_culled, d_num_culled_temp, sizeof(int), cudaMemcpyDeviceToHost, stream));
+  CHECK_CUDA(cudaFree(d_num_culled_temp));
+
+  const int threads_per_block = 256;
+  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
+
+  // Apply mask to all arrays
+  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_xyz, d_mask, mask_sum, N, d_xyz_culled, 3);
+  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_rgb, d_mask, mask_sum, N, d_rgb_culled, 2);
+  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_opacity, d_mask, mask_sum, N, d_opacity_culled,
+                                                                     1);
+  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_scale, d_mask, mask_sum, N, d_scale_culled, 3);
+  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_quaternion, d_mask, mask_sum, N,
+                                                                     d_quaternion_culled, 4);
+  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_uv, d_mask, mask_sum, N, d_uv_culled, 2);
+  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_xyz_c, d_mask, mask_sum, N, d_xyz_c_culled, 3);
 
   // Free the temporary storage.
   CHECK_CUDA(cudaFree(d_temp_storage));
+  CHECK_CUDA(cudaFree(mask_sum));
 }
 
 void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *conic, const int n_tiles_x,
