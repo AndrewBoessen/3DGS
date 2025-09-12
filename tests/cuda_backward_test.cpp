@@ -43,36 +43,34 @@ TEST_F(CudaBackwardKernelTest, CameraIntrinsicProjectionBackward) {
 
   // Host data
   std::vector<float> h_xyz_c = {1.0, 2.0, 3.0, -1.0, -2.0, 4.0};
-  std::vector<float> h_K = {100.0, 160.0, 120.0, 120.0}; // fx, cx, fy, cy
+  std::vector<float> h_K = {100.0, 0.0, 160.0, 0.0, 120.0, 120.0, 0.0, 0.0, 1.0}; // fx, cx, fy, cy
   std::vector<float> h_uv_grad_out = {0.1, 0.2, 0.3, 0.4};
   std::vector<float> h_xyz_c_grad_in(N * 3);
   std::vector<float> h_K_grad_in(4);
 
   // Device data
   float *d_xyz_c = device_alloc<float>(N * 3);
-  float *d_K = device_alloc<float>(4);
+  float *d_K = device_alloc<float>(9);
   float *d_uv_grad_out = device_alloc<float>(N * 2);
   float *d_xyz_c_grad_in = device_alloc<float>(N * 3);
-  float *d_K_grad_in = device_alloc<float>(4);
 
   CUDA_CHECK(cudaMemcpy(d_xyz_c, h_xyz_c.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_K, h_K.data(), 4 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_K, h_K.data(), 9 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_uv_grad_out, h_uv_grad_out.data(), N * 2 * sizeof(float), cudaMemcpyHostToDevice));
 
   // Run kernel
-  camera_intrinsic_projection_backward(d_xyz_c, d_K, d_uv_grad_out, N, d_xyz_c_grad_in, d_K_grad_in);
+  camera_intrinsic_projection_backward(d_xyz_c, d_K, d_uv_grad_out, N, d_xyz_c_grad_in);
 
   CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(cudaMemcpy(h_xyz_c_grad_in.data(), d_xyz_c_grad_in, N * 3 * sizeof(float), cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(h_K_grad_in.data(), d_K_grad_in, 4 * sizeof(float), cudaMemcpyDeviceToHost));
 
   // Numerical gradient check
   auto forward_proj = [&](const std::vector<float> &xyz_c, const std::vector<float> &K) {
     std::vector<float> uv(N * 2);
     for (int i = 0; i < N; ++i) {
-      uv[i * 2 + 0] = K[0] * xyz_c[i * 3 + 0] / xyz_c[i * 3 + 2] + K[1];
-      uv[i * 2 + 1] = K[2] * xyz_c[i * 3 + 1] / xyz_c[i * 3 + 2] + K[3];
+      uv[i * 2 + 0] = K[0] * xyz_c[i * 3 + 0] / xyz_c[i * 3 + 2] + K[2];
+      uv[i * 2 + 1] = K[5] * xyz_c[i * 3 + 1] / xyz_c[i * 3 + 2] + K[5];
     }
     return uv;
   };
@@ -91,25 +89,10 @@ TEST_F(CudaBackwardKernelTest, CameraIntrinsicProjectionBackward) {
     ASSERT_NEAR(h_xyz_c_grad_in[i], numerical_grad, 1e-1);
   }
 
-  // Check grad w.r.t K
-  for (int i = 0; i < 4; ++i) {
-    std::vector<float> K_p = h_K;
-    K_p[i] += h;
-    std::vector<float> K_m = h_K;
-    K_m[i] -= h;
-    auto uv_p = forward_proj(h_xyz_c, K_p);
-    auto uv_m = forward_proj(h_xyz_c, K_m);
-    float numerical_grad = 0;
-    for (int j = 0; j < N * 2; ++j)
-      numerical_grad += (uv_p[j] - uv_m[j]) / (2 * h) * h_uv_grad_out[j];
-    ASSERT_NEAR(h_K_grad_in[i], numerical_grad, 1e-1);
-  }
-
   CUDA_CHECK(cudaFree(d_xyz_c));
   CUDA_CHECK(cudaFree(d_K));
   CUDA_CHECK(cudaFree(d_uv_grad_out));
   CUDA_CHECK(cudaFree(d_xyz_c_grad_in));
-  CUDA_CHECK(cudaFree(d_K_grad_in));
 }
 
 // Test for camera_extrinsic_projection_backward
@@ -129,17 +112,15 @@ TEST_F(CudaBackwardKernelTest, CameraExtrinsicProjectionBackward) {
   auto d_T = device_alloc<float>(12);
   auto d_xyz_c_grad_in = device_alloc<float>(N * 3);
   auto d_xyz_w_grad_in = device_alloc<float>(N * 3);
-  auto d_T_grad_in = device_alloc<float>(12);
 
   CUDA_CHECK(cudaMemcpy(d_xyz_w, h_xyz_w.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_T, h_T.data(), 12 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_xyz_c_grad_in, h_xyz_c_grad_in.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
 
-  camera_extrinsic_projection_backward(d_xyz_w, d_T, d_xyz_c_grad_in, N, d_xyz_w_grad_in, d_T_grad_in);
+  camera_extrinsic_projection_backward(d_xyz_w, d_T, d_xyz_c_grad_in, N, d_xyz_w_grad_in);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(cudaMemcpy(h_xyz_w_grad_in.data(), d_xyz_w_grad_in, N * 3 * sizeof(float), cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(h_T_grad_in.data(), d_T_grad_in, 12 * sizeof(float), cudaMemcpyDeviceToHost));
 
   auto forward_ext = [&](const std::vector<float> &xyz_w, const std::vector<float> &T) {
     std::vector<float> xyz_c(N * 3);
@@ -164,24 +145,10 @@ TEST_F(CudaBackwardKernelTest, CameraExtrinsicProjectionBackward) {
     ASSERT_NEAR(h_xyz_w_grad_in[i], numerical_grad, 1e-1);
   }
 
-  for (int i = 0; i < 12; ++i) {
-    std::vector<float> T_p = h_T;
-    T_p[i] += h;
-    std::vector<float> T_m = h_T;
-    T_m[i] -= h;
-    auto xyz_c_p = forward_ext(h_xyz_w, T_p);
-    auto xyz_c_m = forward_ext(h_xyz_w, T_m);
-    float numerical_grad = 0;
-    for (int j = 0; j < N * 3; ++j)
-      numerical_grad += (xyz_c_p[j] - xyz_c_m[j]) / (2 * h) * h_xyz_c_grad_in[j];
-    ASSERT_NEAR(h_T_grad_in[i], numerical_grad, 1e-1);
-  }
-
   CUDA_CHECK(cudaFree(d_xyz_w));
   CUDA_CHECK(cudaFree(d_T));
   CUDA_CHECK(cudaFree(d_xyz_c_grad_in));
   CUDA_CHECK(cudaFree(d_xyz_w_grad_in));
-  CUDA_CHECK(cudaFree(d_T_grad_in));
 }
 
 // Test for compute_projection_jacobian_backward

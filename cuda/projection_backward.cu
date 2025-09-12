@@ -5,7 +5,7 @@
 
 __global__ void cam_intr_proj_backward_kernel(const float *__restrict__ xyz_c, const float *__restrict__ K,
                                               const float *__restrict__ uv_grad_out, const int N,
-                                              float *__restrict__ xyz_c_grad_in, float *__restrict__ K_grad_in) {
+                                              float *__restrict__ xyz_c_grad_in) {
   constexpr int XYZ_STRIDE = 3;
   constexpr int UV_STRIDE = 2;
 
@@ -15,13 +15,13 @@ __global__ void cam_intr_proj_backward_kernel(const float *__restrict__ xyz_c, c
   // Load and broadcast Intrinsic Matrix K within warp
   // K = [fx, 0, cx, 0, fy, cy, 0, 0, 1] stored as [fx, cx, fy, cy]
   float k_val = 0.0f;
-  if (lane_id < 4) {
+  if (lane_id < 10) {
     k_val = K[lane_id];
   }
   const float fx = __shfl_sync(0xffffffff, k_val, 0);
-  const float cx = __shfl_sync(0xffffffff, k_val, 1);
-  const float fy = __shfl_sync(0xffffffff, k_val, 2);
-  const float cy = __shfl_sync(0xffffffff, k_val, 3);
+  const float cx = __shfl_sync(0xffffffff, k_val, 2);
+  const float fy = __shfl_sync(0xffffffff, k_val, 4);
+  const float cy = __shfl_sync(0xffffffff, k_val, 5);
 
   if (i >= N) {
     return;
@@ -51,28 +51,15 @@ __global__ void cam_intr_proj_backward_kernel(const float *__restrict__ xyz_c, c
   xyz_c_grad_in[i * XYZ_STRIDE + 0] = grad_u * fx * z_inv;
   xyz_c_grad_in[i * XYZ_STRIDE + 1] = grad_v * fy * z_inv;
   xyz_c_grad_in[i * XYZ_STRIDE + 2] = -(grad_u * fx * x * z_inv2 + grad_v * fy * y * z_inv2);
-
-  // --- Gradient w.r.t. K ---
-  // Accumulate gradients for intrinsics using atomic operations
-  // du/dfx = x/z, dv/dfy = y/z
-  // du/dcx = 1, dv/dcy = 1
-  atomicAdd(&K_grad_in[0], grad_u * x * z_inv); // d_fx
-  atomicAdd(&K_grad_in[1], grad_u);             // d_cx
-  atomicAdd(&K_grad_in[2], grad_v * y * z_inv); // d_fy
-  atomicAdd(&K_grad_in[3], grad_v);             // d_cy
 }
 
 void camera_intrinsic_projection_backward(const float *const xyz_c, const float *const K,
                                           const float *const uv_grad_out, const int N, float *xyz_c_grad_in,
-                                          float *K_grad_in, cudaStream_t stream) {
+                                          cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(xyz_c);
   ASSERT_DEVICE_POINTER(K);
   ASSERT_DEVICE_POINTER(uv_grad_out);
   ASSERT_DEVICE_POINTER(xyz_c_grad_in);
-  ASSERT_DEVICE_POINTER(K_grad_in);
-
-  // Zero out the gradient accumulator for K
-  CHECK_CUDA(cudaMemsetAsync(K_grad_in, 0, 4 * sizeof(float), stream));
 
   const int threads_per_block = 1024;
   const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
@@ -80,12 +67,12 @@ void camera_intrinsic_projection_backward(const float *const xyz_c, const float 
   dim3 gridsize(num_blocks, 1, 1);
   dim3 blocksize(threads_per_block, 1, 1);
 
-  cam_intr_proj_backward_kernel<<<gridsize, blocksize, 0, stream>>>(xyz_c, K, uv_grad_out, N, xyz_c_grad_in, K_grad_in);
+  cam_intr_proj_backward_kernel<<<gridsize, blocksize, 0, stream>>>(xyz_c, K, uv_grad_out, N, xyz_c_grad_in);
 }
 
 __global__ void cam_extr_proj_backward_kernel(const float *__restrict__ xyz_w, const float *__restrict__ T,
-                                              const float *__restrict__ xyz_c_grad_in, const int N,
-                                              float *__restrict__ xyz_w_grad_in, float *__restrict__ T_grad_in) {
+                                              const float *__restrict__ xyz_c_grad_out, const int N,
+                                              float *__restrict__ xyz_w_grad_in) {
   constexpr int XYZ_STRIDE = 3;
 
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -114,49 +101,24 @@ __global__ void cam_extr_proj_backward_kernel(const float *__restrict__ xyz_w, c
     return;
   }
 
-  const float grad_x_c = xyz_c_grad_in[i * XYZ_STRIDE + 0];
-  const float grad_y_c = xyz_c_grad_in[i * XYZ_STRIDE + 1];
-  const float grad_z_c = xyz_c_grad_in[i * XYZ_STRIDE + 2];
+  const float grad_x_c = xyz_c_grad_out[i * XYZ_STRIDE + 0];
+  const float grad_y_c = xyz_c_grad_out[i * XYZ_STRIDE + 1];
+  const float grad_z_c = xyz_c_grad_out[i * XYZ_STRIDE + 2];
 
   // --- Gradient w.r.t. xyz_w ---
   // d(xyz_w) = R^T * d(xyz_c)
   xyz_w_grad_in[i * XYZ_STRIDE + 0] = r00 * grad_x_c + r10 * grad_y_c + r20 * grad_z_c;
   xyz_w_grad_in[i * XYZ_STRIDE + 1] = r01 * grad_x_c + r11 * grad_y_c + r21 * grad_z_c;
   xyz_w_grad_in[i * XYZ_STRIDE + 2] = r02 * grad_x_c + r12 * grad_y_c + r22 * grad_z_c;
-
-  // --- Gradient w.r.t. T ---
-  const float x_w = xyz_w[i * XYZ_STRIDE + 0];
-  const float y_w = xyz_w[i * XYZ_STRIDE + 1];
-  const float z_w = xyz_w[i * XYZ_STRIDE + 2];
-
-  // dR = d(xyz_c) * xyz_w^T
-  atomicAdd(&T_grad_in[0], grad_x_c * x_w); // d_r00
-  atomicAdd(&T_grad_in[1], grad_x_c * y_w); // d_r01
-  atomicAdd(&T_grad_in[2], grad_x_c * z_w); // d_r02
-  atomicAdd(&T_grad_in[3], grad_x_c);       // d_t0
-
-  atomicAdd(&T_grad_in[4], grad_y_c * x_w); // d_r10
-  atomicAdd(&T_grad_in[5], grad_y_c * y_w); // d_r11
-  atomicAdd(&T_grad_in[6], grad_y_c * z_w); // d_r12
-  atomicAdd(&T_grad_in[7], grad_y_c);       // d_t1
-
-  atomicAdd(&T_grad_in[8], grad_z_c * x_w);  // d_r20
-  atomicAdd(&T_grad_in[9], grad_z_c * y_w);  // d_r21
-  atomicAdd(&T_grad_in[10], grad_z_c * z_w); // d_r22
-  atomicAdd(&T_grad_in[11], grad_z_c);       // d_t2
 }
 
 void camera_extrinsic_projection_backward(const float *const xyz_w, const float *const T,
-                                          const float *const xyz_c_grad_in, const int N, float *xyz_w_grad_in,
-                                          float *T_grad_in, cudaStream_t stream) {
+                                          const float *const xyz_c_grad_out, const int N, float *xyz_w_grad_in,
+                                          cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(xyz_w);
   ASSERT_DEVICE_POINTER(T);
-  ASSERT_DEVICE_POINTER(xyz_c_grad_in);
+  ASSERT_DEVICE_POINTER(xyz_c_grad_out);
   ASSERT_DEVICE_POINTER(xyz_w_grad_in);
-  ASSERT_DEVICE_POINTER(T_grad_in);
-
-  // Zero out the gradient accumulator for T
-  CHECK_CUDA(cudaMemsetAsync(T_grad_in, 0, 12 * sizeof(float), stream));
 
   const int threads_per_block = 1024;
   const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
@@ -164,6 +126,5 @@ void camera_extrinsic_projection_backward(const float *const xyz_w, const float 
   dim3 gridsize(num_blocks, 1, 1);
   dim3 blocksize(threads_per_block, 1, 1);
 
-  cam_extr_proj_backward_kernel<<<gridsize, blocksize, 0, stream>>>(xyz_w, T, xyz_c_grad_in, N, xyz_w_grad_in,
-                                                                    T_grad_in);
+  cam_extr_proj_backward_kernel<<<gridsize, blocksize, 0, stream>>>(xyz_w, T, xyz_c_grad_out, N, xyz_w_grad_in);
 }

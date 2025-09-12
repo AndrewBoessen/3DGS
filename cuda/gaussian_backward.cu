@@ -16,7 +16,7 @@ __global__ void compute_proj_jacobian_backward_kernel(const float *__restrict__ 
   if (lane_id < 4)
     k_val = K[lane_id];
   const float fx = __shfl_sync(0xffffffff, k_val, 0);
-  const float fy = __shfl_sync(0xffffffff, k_val, 2);
+  const float fy = __shfl_sync(0xffffffff, k_val, 4);
 
   const float x = xyz_c[i * 3 + 0];
   const float y = xyz_c[i * 3 + 1];

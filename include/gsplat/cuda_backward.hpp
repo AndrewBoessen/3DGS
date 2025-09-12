@@ -22,26 +22,24 @@
  * @param[in]  uv_grad_out    A device pointer to the upstream gradients from the 2D projection.
  * @param[in]  N              The total number of points.
  * @param[out] xyz_c_grad_in  A device pointer to store the computed gradients for xyz_c.
- * @param[out] K_grad_in      A device pointer to store the computed gradients for K.
  * @param[in]  stream         The CUDA stream to execute the kernel on.
  */
 void camera_intrinsic_projection_backward(const float *const xyz_c, const float *const K,
                                           const float *const uv_grad_out, const int N, float *xyz_c_grad_in,
-                                          float *K_grad_in, cudaStream_t stream = 0);
+                                          cudaStream_t stream = 0);
 
 /**
  * @brief Compute gradients for the camera extrinsic transformation.
- * @param[in]  xyz_w          A device pointer to 3D points in world coordinates.
- * @param[in]  T              A device pointer to the camera extrinsic matrix (3x4).
- * @param[in]  xyz_c_grad_in  A device pointer to the upstream gradients from camera-space coordinates.
- * @param[in]  N              The total number of points.
- * @param[out] xyz_w_grad_in  A device pointer to store the computed gradients for xyz_w.
- * @param[out] T_grad_in      A device pointer to store the computed gradients for T.
- * @param[in]  stream         The CUDA stream to execute the kernel on.
+ * @param[in]  xyz_w           A device pointer to 3D points in world coordinates.
+ * @param[in]  T               A device pointer to the camera extrinsic matrix (3x4).
+ * @param[in]  xyz_c_grad_out  A device pointer to the upstream gradients from camera-space coordinates.
+ * @param[in]  N               The total number of points.
+ * @param[out] xyz_w_grad_in   A device pointer to store the computed gradients for xyz_w.
+ * @param[in]  stream          The CUDA stream to execute the kernel on.
  */
 void camera_extrinsic_projection_backward(const float *const xyz_w, const float *const T,
-                                          const float *const xyz_c_grad_in, const int N, float *xyz_w_grad_in,
-                                          float *T_grad_in, cudaStream_t stream = 0);
+                                          const float *const xyz_c_grad_out, const int N, float *xyz_w_grad_in,
+                                          cudaStream_t stream = 0);
 
 /**
  * @brief Compute gradients for the projection Jacobian.
