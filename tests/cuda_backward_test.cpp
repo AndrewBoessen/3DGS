@@ -158,29 +158,26 @@ TEST_F(CudaBackwardKernelTest, ProjectionJacobianBackward) {
 
   // Host data
   std::vector<float> h_xyz_c = {1.0, 2.0, 3.0, -1.0, -2.0, 4.0};
-  std::vector<float> h_K = {100.0, 160.0, 120.0, 120.0}; // fx, cx, fy, cy
+  std::vector<float> h_K = {100.0, 0.0, 160.0, 0.0, 120.0, 120.0, 0.0, 0.0, 1.0};
   std::vector<float> h_J_grad_in = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2};
   std::vector<float> h_xyz_c_grad_out(N * 3);
-  std::vector<float> h_K_grad_out(4);
 
   // Device data
   float *d_xyz_c = device_alloc<float>(N * 3);
-  float *d_K = device_alloc<float>(4);
+  float *d_K = device_alloc<float>(9);
   float *d_J_grad_in = device_alloc<float>(N * 6);
   float *d_xyz_c_grad_out = device_alloc<float>(N * 3);
-  float *d_K_grad_out = device_alloc<float>(4);
 
   CUDA_CHECK(cudaMemcpy(d_xyz_c, h_xyz_c.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_K, h_K.data(), 4 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_K, h_K.data(), 9 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_J_grad_in, h_J_grad_in.data(), N * 6 * sizeof(float), cudaMemcpyHostToDevice));
 
   // Run kernel
-  compute_projection_jacobian_backward(d_xyz_c, d_K, d_J_grad_in, N, d_xyz_c_grad_out, d_K_grad_out);
+  compute_projection_jacobian_backward(d_xyz_c, d_K, d_J_grad_in, N, d_xyz_c_grad_out);
 
   CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(cudaMemcpy(h_xyz_c_grad_out.data(), d_xyz_c_grad_out, N * 3 * sizeof(float), cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(h_K_grad_out.data(), d_K_grad_out, 4 * sizeof(float), cudaMemcpyDeviceToHost));
 
   // Numerical gradient check
   auto forward_jacobian = [&](const std::vector<float> &xyz_c, const std::vector<float> &K) {
@@ -189,7 +186,7 @@ TEST_F(CudaBackwardKernelTest, ProjectionJacobianBackward) {
       float x = xyz_c[i * 3 + 0];
       float y = xyz_c[i * 3 + 1];
       float z = xyz_c[i * 3 + 2];
-      float fx = K[0], fy = K[2];
+      float fx = K[0], fy = K[4];
       float z_inv = 1.0f / z;
       float z_inv2 = z_inv * z_inv;
 
@@ -218,25 +215,10 @@ TEST_F(CudaBackwardKernelTest, ProjectionJacobianBackward) {
     ASSERT_NEAR(h_xyz_c_grad_out[i], numerical_grad, 1e-1);
   }
 
-  // Check grad w.r.t K
-  for (int i = 0; i < 4; ++i) {
-    std::vector<float> K_p = h_K;
-    K_p[i] += h;
-    std::vector<float> K_m = h_K;
-    K_m[i] -= h;
-    auto J_p = forward_jacobian(h_xyz_c, K_p);
-    auto J_m = forward_jacobian(h_xyz_c, K_m);
-    float numerical_grad = 0;
-    for (int j = 0; j < N * 6; ++j)
-      numerical_grad += (J_p[j] - J_m[j]) / (2 * h) * h_J_grad_in[j];
-    ASSERT_NEAR(h_K_grad_out[i], numerical_grad, 1e-1);
-  }
-
   CUDA_CHECK(cudaFree(d_xyz_c));
   CUDA_CHECK(cudaFree(d_K));
   CUDA_CHECK(cudaFree(d_J_grad_in));
   CUDA_CHECK(cudaFree(d_xyz_c_grad_out));
-  CUDA_CHECK(cudaFree(d_K_grad_out));
 }
 
 // Test for compute_conic_backward

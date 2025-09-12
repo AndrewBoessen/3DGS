@@ -4,28 +4,28 @@
 #include "gsplat/cuda_backward.hpp"
 
 __global__ void compute_proj_jacobian_backward_kernel(const float *__restrict__ xyz_c, const float *__restrict__ K,
-                                                      const float *__restrict__ J_grad_in, const int N,
-                                                      float *__restrict__ xyz_c_grad_out,
-                                                      float *__restrict__ K_grad_out) {
+                                                      const float *__restrict__ J_grad_out, const int N,
+                                                      float *__restrict__ xyz_c_grad_in) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i >= N)
-    return;
 
   const int lane_id = threadIdx.x & 0x1f;
   float k_val = 0.0f;
-  if (lane_id < 4)
+  if (lane_id < 9)
     k_val = K[lane_id];
   const float fx = __shfl_sync(0xffffffff, k_val, 0);
   const float fy = __shfl_sync(0xffffffff, k_val, 4);
+
+  if (i >= N)
+    return;
 
   const float x = xyz_c[i * 3 + 0];
   const float y = xyz_c[i * 3 + 1];
   const float z = xyz_c[i * 3 + 2];
 
   if (z <= 1e-6f) {
-    xyz_c_grad_out[i * 3 + 0] = 0.0f;
-    xyz_c_grad_out[i * 3 + 1] = 0.0f;
-    xyz_c_grad_out[i * 3 + 2] = 0.0f;
+    xyz_c_grad_in[i * 3 + 0] = 0.0f;
+    xyz_c_grad_in[i * 3 + 1] = 0.0f;
+    xyz_c_grad_in[i * 3 + 2] = 0.0f;
     return;
   }
 
@@ -33,11 +33,7 @@ __global__ void compute_proj_jacobian_backward_kernel(const float *__restrict__ 
   const float z_inv2 = z_inv * z_inv;
   const float z_inv3 = z_inv2 * z_inv;
 
-  const float *grad_J = J_grad_in + i * 6;
-
-  // Gradient w.r.t. K (fx, fy)
-  atomicAdd(&K_grad_out[0], grad_J[0] * z_inv - grad_J[2] * x * z_inv2); // d_fx
-  atomicAdd(&K_grad_out[2], grad_J[4] * z_inv - grad_J[5] * y * z_inv2); // d_fy
+  const float *grad_J = J_grad_out + i * 6;
 
   // Gradient w.r.t. xyz_c
   float gx = -grad_J[2] * fx * z_inv2;
@@ -45,26 +41,21 @@ __global__ void compute_proj_jacobian_backward_kernel(const float *__restrict__ 
   float gz = -grad_J[0] * fx * z_inv2 + grad_J[2] * 2.0f * fx * x * z_inv3 - grad_J[4] * fy * z_inv2 +
              grad_J[5] * 2.0f * fy * y * z_inv3;
 
-  atomicAdd(&xyz_c_grad_out[i * 3 + 0], gx);
-  atomicAdd(&xyz_c_grad_out[i * 3 + 1], gy);
-  atomicAdd(&xyz_c_grad_out[i * 3 + 2], gz);
+  xyz_c_grad_in[i * 3 + 0] = gx;
+  xyz_c_grad_in[i * 3 + 1] = gy;
+  xyz_c_grad_in[i * 3 + 2] = gz;
 }
 
-void compute_projection_jacobian_backward(const float *const xyz_c, const float *const K, const float *const J_grad_in,
-                                          const int N, float *xyz_c_grad_out, float *K_grad_out, cudaStream_t stream) {
+void compute_projection_jacobian_backward(const float *const xyz_c, const float *const K, const float *const J_grad_out,
+                                          const int N, float *xyz_c_grad_in, cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(xyz_c);
   ASSERT_DEVICE_POINTER(K);
-  ASSERT_DEVICE_POINTER(J_grad_in);
-  ASSERT_DEVICE_POINTER(xyz_c_grad_out);
-  ASSERT_DEVICE_POINTER(K_grad_out);
-
-  // K_grad_out is an accumulation over all points, so it must be zeroed.
-  CHECK_CUDA(cudaMemsetAsync(K_grad_out, 0, 4 * sizeof(float), stream));
+  ASSERT_DEVICE_POINTER(J_grad_out);
+  ASSERT_DEVICE_POINTER(xyz_c_grad_in);
 
   const int threads = 256;
   const int blocks = (N + threads - 1) / threads;
-  compute_proj_jacobian_backward_kernel<<<blocks, threads, 0, stream>>>(xyz_c, K, J_grad_in, N, xyz_c_grad_out,
-                                                                        K_grad_out);
+  compute_proj_jacobian_backward_kernel<<<blocks, threads, 0, stream>>>(xyz_c, K, J_grad_out, N, xyz_c_grad_in);
 }
 
 __global__ void compute_conic_backward_kernel(const float *__restrict__ J_in, const float *__restrict__ sigma_in,

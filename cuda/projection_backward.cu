@@ -15,7 +15,7 @@ __global__ void cam_intr_proj_backward_kernel(const float *__restrict__ xyz_c, c
   // Load and broadcast Intrinsic Matrix K within warp
   // K = [fx, 0, cx, 0, fy, cy, 0, 0, 1] stored as [fx, cx, fy, cy]
   float k_val = 0.0f;
-  if (lane_id < 10) {
+  if (lane_id < 9) {
     k_val = K[lane_id];
   }
   const float fx = __shfl_sync(0xffffffff, k_val, 0);

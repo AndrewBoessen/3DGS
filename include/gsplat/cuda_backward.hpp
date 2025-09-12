@@ -45,15 +45,13 @@ void camera_extrinsic_projection_backward(const float *const xyz_w, const float 
  * @brief Compute gradients for the projection Jacobian.
  * @param[in]  xyz_c            A device pointer to 3D points in camera coordinates.
  * @param[in]  K                A device pointer to the camera intrinsic matrix values [fx, cx, fy, cy].
- * @param[in]  J_grad_in        A device pointer to the upstream gradients for the Jacobian J.
+ * @param[in]  J_grad_out       A device pointer to the upstream gradients for the Jacobian J.
  * @param[in]  N                The total number of points.
- * @param[out] xyz_c_grad_out   A device pointer to store the computed gradients for xyz_c.
- * @param[out] K_grad_out       A device pointer to store the computed gradients for K.
+ * @param[out] xyz_c_grad_in    A device pointer to store the computed gradients for xyz_c.
  * @param[in]  stream           The CUDA stream to execute the kernel on.
  */
-void compute_projection_jacobian_backward(const float *const xyz_c, const float *const K, const float *const J_grad_in,
-                                          const int N, float *xyz_c_grad_out, float *K_grad_out,
-                                          cudaStream_t stream = 0);
+void compute_projection_jacobian_backward(const float *const xyz_c, const float *const K, const float *const J_grad_out,
+                                          const int N, float *xyz_c_grad_in, cudaStream_t stream = 0);
 
 /**
  * @brief Compute gradients for the 2D conic projection.
