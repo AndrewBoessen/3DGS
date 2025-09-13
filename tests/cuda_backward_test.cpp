@@ -397,7 +397,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float R[] = {1 - 2 * (y * y + z * z), 2 * (x * y - w * z),     2 * (x * z + w * y),
                  2 * (x * y + w * z),     1 - 2 * (x * x + z * z), 2 * (y * z - w * x),
                  2 * (x * z - w * y),     2 * (y * z + w * x),     1 - 2 * (x * x + y * y)};
-    float S[] = {scale[0], scale[1], scale[2]};
+    float S[] = {expf(scale[0]), expf(scale[1]), expf(scale[2])};
     float M[] = {S[0] * S[0], S[1] * S[1], S[2] * S[2]};
 
     float RM[9];

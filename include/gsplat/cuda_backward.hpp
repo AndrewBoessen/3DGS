@@ -70,13 +70,13 @@ void compute_conic_backward(const float *const J, const float *const sigma, cons
 
 /**
  * @brief Compute gradients for the 3D covariance matrix (sigma).
- * @param[in]  quaternion         A device pointer to the quaternions (w, x, y, z).
- * @param[in]  scale              A device pointer to the scale factors (sx, sy, sz).
- * @param[in]  sigma_grad_in      A device pointer to the upstream gradients for sigma.
- * @param[in]  N                  The total number of points.
- * @param[out] quaternion_grad_out A device pointer to store the computed gradients for the quaternions.
- * @param[out] scale_grad_out      A device pointer to store the computed gradients for the scales.
- * @param[in]  stream             The CUDA stream to execute the kernel on.
+ * @param[in]  quaternion          A device pointer to the quaternions (w, x, y, z).
+ * @param[in]  scale               A device pointer to the scale factors (sx, sy, sz).
+ * @param[in]  sigma_grad_out      A device pointer to the upstream gradients for sigma.
+ * @param[in]  N                   The total number of points.
+ * @param[out] quaternion_grad_in  A device pointer to store the computed gradients for the quaternions.
+ * @param[out] scale_grad_in       A device pointer to store the computed gradients for the scales.
+ * @param[in]  stream              The CUDA stream to execute the kernel on.
  */
-void compute_sigma_backward(const float *const quaternion, const float *const scale, const float *const sigma_grad_in,
-                            const int N, float *quaternion_grad_out, float *scale_grad_out, cudaStream_t stream = 0);
+void compute_sigma_backward(const float *const quaternion, const float *const scale, const float *const sigma_grad_out,
+                            const int N, float *quaternion_grad_in, float *scale_grad_in, cudaStream_t stream = 0);
