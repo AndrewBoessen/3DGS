@@ -221,6 +221,137 @@ TEST_F(CudaBackwardKernelTest, ProjectionJacobianBackward) {
   CUDA_CHECK(cudaFree(d_xyz_c_grad_out));
 }
 
+TEST_F(CudaBackwardKernelTest, SigmaBackward) {
+  const int N = 2;
+  const float h = 1e-4;
+
+  // Host data
+  std::vector<float> h_q = {1.0,        0.1,        0.2, 0.3,  // Gaussian 1
+                            0.70710678, 0.70710678, 0.0, 0.0}; // Gaussian 2: 90 deg rot around X
+  std::vector<float> h_s = {0.1, 0.2, 0.3, -0.1, -0.2, -0.3};
+  std::vector<float> h_dSigma_in = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, -0.1, -0.2, -0.3, -0.4, -0.5, -0.6};
+  std::vector<float> h_dQ_in(N * 4);
+  std::vector<float> h_dS_in(N * 3);
+
+  // Device data
+  auto d_q = device_alloc<float>(N * 4);
+  auto d_s = device_alloc<float>(N * 3);
+  auto d_dSigma_in = device_alloc<float>(N * 6);
+  auto d_dQ_in = device_alloc<float>(N * 4);
+  auto d_dS_in = device_alloc<float>(N * 3);
+
+  CUDA_CHECK(cudaMemcpy(d_q, h_q.data(), N * 4 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_s, h_s.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_dSigma_in, h_dSigma_in.data(), N * 6 * sizeof(float), cudaMemcpyHostToDevice));
+
+  // Run kernel
+  compute_sigma_backward(d_q, d_s, d_dSigma_in, N, d_dQ_in, d_dS_in);
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  CUDA_CHECK(cudaMemcpy(h_dQ_in.data(), d_dQ_in, N * 4 * sizeof(float), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_dS_in.data(), d_dS_in, N * 3 * sizeof(float), cudaMemcpyDeviceToHost));
+
+  // Numerical gradient check
+  auto forward_sigma = [&](const std::vector<float> &q_in, const std::vector<float> &s_in) {
+    std::vector<float> sigma(N * 6);
+    for (int i = 0; i < N; ++i) {
+      float qw = q_in[i * 4 + 0];
+      float qx = q_in[i * 4 + 1];
+      float qy = q_in[i * 4 + 2];
+      float qz = q_in[i * 4 + 3];
+
+      float norm = std::sqrt(qw * qw + qx * qx + qy * qy + qz * qz) + 1e-8f;
+      float w = qw / norm;
+      float x = qx / norm;
+      float y = qy / norm;
+      float z = qz / norm;
+
+      float S_x = std::exp(s_in[i * 3 + 0]);
+      float S_y = std::exp(s_in[i * 3 + 1]);
+      float S_z = std::exp(s_in[i * 3 + 2]);
+
+      float R[9];
+      R[0] = 1.0f - 2.0f * (y * y + z * z);
+      R[1] = 2.0f * (x * y - w * z);
+      R[2] = 2.0f * (x * z + w * y);
+      R[3] = 2.0f * (x * y + w * z);
+      R[4] = 1.0f - 2.0f * (x * x + z * z);
+      R[5] = 2.0f * (y * z - w * x);
+      R[6] = 2.0f * (x * z - w * y);
+      R[7] = 2.0f * (y * z + w * x);
+      R[8] = 1.0f - 2.0f * (x * x + y * y);
+
+      float M[9];
+      M[0] = R[0] * S_x;
+      M[1] = R[1] * S_y;
+      M[2] = R[2] * S_z;
+      M[3] = R[3] * S_x;
+      M[4] = R[4] * S_y;
+      M[5] = R[5] * S_z;
+      M[6] = R[6] * S_x;
+      M[7] = R[7] * S_y;
+      M[8] = R[8] * S_z;
+
+      // Sigma = M * M^T
+      sigma[i * 6 + 0] = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
+      sigma[i * 6 + 1] = M[0] * M[3] + M[1] * M[4] + M[2] * M[5];
+      sigma[i * 6 + 2] = M[0] * M[6] + M[1] * M[7] + M[2] * M[8];
+      sigma[i * 6 + 3] = M[3] * M[3] + M[4] * M[4] + M[5] * M[5];
+      sigma[i * 6 + 4] = M[3] * M[6] + M[4] * M[7] + M[5] * M[8];
+      sigma[i * 6 + 5] = M[6] * M[6] + M[7] * M[7] + M[8] * M[8];
+    }
+    return sigma;
+  };
+
+  auto compute_loss = [&](const std::vector<float> &sigma) {
+    float loss = 0.0f;
+    for (size_t i = 0; i < sigma.size(); ++i) {
+      loss += sigma[i] * h_dSigma_in[i];
+    }
+    return loss;
+  };
+
+  // Check grad w.r.t q
+  for (int i = 0; i < N * 4; ++i) {
+    std::vector<float> q_p = h_q;
+    q_p[i] += h;
+    std::vector<float> q_m = h_q;
+    q_m[i] -= h;
+
+    auto sigma_p = forward_sigma(q_p, h_s);
+    auto sigma_m = forward_sigma(q_m, h_s);
+
+    float loss_p = compute_loss(sigma_p);
+    float loss_m = compute_loss(sigma_m);
+
+    float numerical_grad = (loss_p - loss_m) / (2 * h);
+    EXPECT_NEAR(h_dQ_in[i], numerical_grad, 1e-2);
+  }
+
+  // Check grad w.r.t s
+  for (int i = 0; i < N * 3; ++i) {
+    std::vector<float> s_p = h_s;
+    s_p[i] += h;
+    std::vector<float> s_m = h_s;
+    s_m[i] -= h;
+
+    auto sigma_p = forward_sigma(h_q, s_p);
+    auto sigma_m = forward_sigma(h_q, s_m);
+
+    float loss_p = compute_loss(sigma_p);
+    float loss_m = compute_loss(sigma_m);
+
+    float numerical_grad = (loss_p - loss_m) / (2 * h);
+    EXPECT_NEAR(h_dS_in[i], numerical_grad, 1e-2);
+  }
+
+  CUDA_CHECK(cudaFree(d_q));
+  CUDA_CHECK(cudaFree(d_s));
+  CUDA_CHECK(cudaFree(d_dSigma_in));
+  CUDA_CHECK(cudaFree(d_dQ_in));
+  CUDA_CHECK(cudaFree(d_dS_in));
+}
+
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
