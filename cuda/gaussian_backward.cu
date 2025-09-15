@@ -177,93 +177,148 @@ void compute_conic_backward(const float *const J, const float *const sigma, cons
                                                                 sigma_grad_in);
 }
 
-__global__ void compute_sigma_backward_kernel(const float *__restrict__ quaternion, const float *__restrict__ scale,
-                                              const float *__restrict__ sigma_grad_out, const int N,
-                                              float *__restrict__ quaternion_grad_in,
-                                              float *__restrict__ scale_grad_in) {
-  const int tid = threadIdx.x;
-  const int i = blockIdx.x * blockDim.x + tid;
-
-  if (i >= N)
+__global__ void sigma_backward_kernel(const float *__restrict__ q, const float *__restrict__ s,
+                                      const float *__restrict__ dSigma_in, int N, float *__restrict__ dQ_in,
+                                      float *__restrict__ dS_in) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= N)
     return;
 
-  // 1. Load and normalize the quaternion for the current Gaussian
-  float w = quaternion[i * 4 + 0], x = quaternion[i * 4 + 1], y = quaternion[i * 4 + 2], z = quaternion[i * 4 + 3];
-  const float inv_norm = rsqrtf(w * w + x * x + y * y + z * z);
-  w *= inv_norm;
-  x *= inv_norm;
-  y *= inv_norm;
-  z *= inv_norm;
+  // Load quaternion and scale for the current Gaussian
+  const float qw = q[idx * 4 + 0];
+  const float qx = q[idx * 4 + 1];
+  const float qy = q[idx * 4 + 2];
+  const float qz = q[idx * 4 + 3];
 
-  // 2. Reconstruct the rotation matrix R from the normalized quaternion
-  const float R[] = {1.f - 2.f * (y * y + z * z), 2.f * (x * y - w * z),       2.f * (x * z + w * y),
-                     2.f * (x * y + w * z),       1.f - 2.f * (x * x + z * z), 2.f * (y * z - w * x),
-                     2.f * (x * z - w * y),       2.f * (y * z + w * x),       1.f - 2.f * (x * x + y * y)};
+  const float sx = s[idx * 3 + 0];
+  const float sy = s[idx * 3 + 1];
+  const float sz = s[idx * 3 + 2];
 
-  // 3. Load the log-scale and compute the actual scale factors
-  const float sx = __expf(scale[i * 3 + 0]), sy = __expf(scale[i * 3 + 1]), sz = __expf(scale[i * 3 + 2]);
+  // --- 1. Recompute intermediate variables from the forward pass ---
 
-  // 4. Reconstruct the symmetric 3x3 dL/dSigma from the compact 6-element input
-  const float dL_dSigma[] = {sigma_grad_out[i * 6 + 0], sigma_grad_out[i * 6 + 1], sigma_grad_out[i * 6 + 2],
-                             sigma_grad_out[i * 6 + 1], sigma_grad_out[i * 6 + 3], sigma_grad_out[i * 6 + 4],
-                             sigma_grad_out[i * 6 + 2], sigma_grad_out[i * 6 + 4], sigma_grad_out[i * 6 + 5]};
+  // Normalize quaternion
+  const float norm = sqrtf(qw * qw + qx * qx + qy * qy + qz * qz) + 1e-8f;
+  const float w = qw / norm;
+  const float x = qx / norm;
+  const float y = qy / norm;
+  const float z = qz / norm;
 
-  // BACKWARD PASS (as per the report)
-  // --- Step 2.1: Gradient w.r.t. intermediate matrix M ---
-  // dL_dM = R^T * dL_dSigma * R
-  // First, compute TMP = dL_dSigma * R
-  const float TMP[] = {dL_dSigma[0] * R[0] + dL_dSigma[1] * R[3] + dL_dSigma[2] * R[6],
-                       dL_dSigma[0] * R[1] + dL_dSigma[1] * R[4] + dL_dSigma[2] * R[7],
-                       dL_dSigma[0] * R[2] + dL_dSigma[1] * R[5] + dL_dSigma[2] * R[8],
-                       dL_dSigma[3] * R[0] + dL_dSigma[4] * R[3] + dL_dSigma[5] * R[6],
-                       dL_dSigma[3] * R[1] + dL_dSigma[4] * R[4] + dL_dSigma[5] * R[7],
-                       dL_dSigma[3] * R[2] + dL_dSigma[4] * R[5] + dL_dSigma[5] * R[8],
-                       dL_dSigma[6] * R[0] + dL_dSigma[7] * R[3] + dL_dSigma[8] * R[6],
-                       dL_dSigma[6] * R[1] + dL_dSigma[7] * R[4] + dL_dSigma[8] * R[7],
-                       dL_dSigma[6] * R[2] + dL_dSigma[7] * R[5] + dL_dSigma[8] * R[8]};
+  // Exponentiate scales
+  const float S_x = expf(sx);
+  const float S_y = expf(sy);
+  const float S_z = expf(sz);
 
-  // Then, dL_dM = R^T * TMP
-  const float dL_dM[] = {R[0] * TMP[0] + R[3] * TMP[3] + R[6] * TMP[6], R[0] * TMP[1] + R[3] * TMP[4] + R[6] * TMP[7],
-                         R[0] * TMP[2] + R[3] * TMP[5] + R[6] * TMP[8], R[1] * TMP[0] + R[4] * TMP[3] + R[7] * TMP[6],
-                         R[1] * TMP[1] + R[4] * TMP[4] + R[7] * TMP[7], R[1] * TMP[2] + R[4] * TMP[5] + R[7] * TMP[8],
-                         R[2] * TMP[0] + R[5] * TMP[3] + R[8] * TMP[6], R[2] * TMP[1] + R[5] * TMP[4] + R[8] * TMP[7],
-                         R[2] * TMP[2] + R[5] * TMP[5] + R[8] * TMP[8]};
+  // Rotation matrix R from normalized quaternion
+  float R[9];
+  R[0] = 1.0f - 2.0f * (y * y + z * z);
+  R[1] = 2.0f * (x * y - w * z);
+  R[2] = 2.0f * (x * z + w * y);
+  R[3] = 2.0f * (x * y + w * z);
+  R[4] = 1.0f - 2.0f * (x * x + z * z);
+  R[5] = 2.0f * (y * z - w * x);
+  R[6] = 2.0f * (x * z - w * y);
+  R[7] = 2.0f * (y * z + w * x);
+  R[8] = 1.0f - 2.0f * (x * x + y * y);
 
-  // --- Step 2.2: Gradient w.r.t. scale vector s ---
-  // The input 'scale' is log(s), so we compute dL/d(log(s)) = (dL/ds) * s
-  // dL/ds = 2 * s * diag(dL/dM) => dL/d(log(s)) = 2 * s^2 * diag(dL/dM)
-  scale_grad_in[i * 3 + 0] = 2.f * sx * sx * dL_dM[0];
-  scale_grad_in[i * 3 + 1] = 2.f * sy * sy * dL_dM[4];
-  scale_grad_in[i * 3 + 2] = 2.f * sz * sz * dL_dM[8];
+  // M = R * S
+  float M[9];
+  M[0] = R[0] * S_x;
+  M[1] = R[1] * S_y;
+  M[2] = R[2] * S_z;
+  M[3] = R[3] * S_x;
+  M[4] = R[4] * S_y;
+  M[5] = R[5] * S_z;
+  M[6] = R[6] * S_x;
+  M[7] = R[7] * S_y;
+  M[8] = R[8] * S_z;
 
-  // --- Step 2.3: Gradient w.r.t. rotation matrix R ---
-  // dL_dR = (dL_dSigma + dL_dSigma^T) * R * M
-  // Since dL_dSigma is symmetric, this is 2 * dL_dSigma * R * M
-  const float M00 = sx * sx, M11 = sy * sy, M22 = sz * sz;
-  const float dL_dR[] = {2.f * TMP[0] * M00, 2.f * TMP[1] * M11, 2.f * TMP[2] * M22,
-                         2.f * TMP[3] * M00, 2.f * TMP[4] * M11, 2.f * TMP[5] * M22,
-                         2.f * TMP[6] * M00, 2.f * TMP[7] * M11, 2.f * TMP[8] * M22};
+  // --- 2. Backpropagate ---
 
-  // --- Step 3: Gradient w.r.t. quaternion q ---
-  // dL/dqi = Tr((dL/dR)^T * dR/dqi) = sum(dL_dR .* dR_dqi)
-  const float dL_dw = dL_dR[1] * (-2.f * z) + dL_dR[2] * (2.f * y) + dL_dR[3] * (2.f * z) + dL_dR[5] * (-2.f * x) +
-                      dL_dR[6] * (-2.f * y) + dL_dR[7] * (2.f * x);
+  // Load dSigma and reconstruct the full symmetric matrix
+  float dSigma[9];
+  dSigma[0] = dSigma_in[idx * 6 + 0]; // xx
+  dSigma[1] = dSigma_in[idx * 6 + 1]; // xy
+  dSigma[2] = dSigma_in[idx * 6 + 2]; // xz
+  dSigma[3] = dSigma[1];              // yx
+  dSigma[4] = dSigma_in[idx * 6 + 3]; // yy
+  dSigma[5] = dSigma_in[idx * 6 + 4]; // yz
+  dSigma[6] = dSigma[2];              // zx
+  dSigma[7] = dSigma[5];              // zy
+  dSigma[8] = dSigma_in[idx * 6 + 5]; // zz
 
-  const float dL_dx = dL_dR[1] * (2.f * y) + dL_dR[2] * (2.f * z) + dL_dR[3] * (2.f * y) + dL_dR[4] * (-4.f * x) +
-                      dL_dR[5] * (-2.f * w) + dL_dR[6] * (2.f * z) + dL_dR[7] * (2.f * w) + dL_dR[8] * (-4.f * x);
+  // dM = 2 * dSigma * M
+  float dM[9];
+  dM[0] = 2.0f * (dSigma[0] * M[0] + dSigma[1] * M[3] + dSigma[2] * M[6]);
+  dM[1] = 2.0f * (dSigma[0] * M[1] + dSigma[1] * M[4] + dSigma[2] * M[7]);
+  dM[2] = 2.0f * (dSigma[0] * M[2] + dSigma[1] * M[5] + dSigma[2] * M[8]);
+  dM[3] = 2.0f * (dSigma[3] * M[0] + dSigma[4] * M[3] + dSigma[5] * M[6]);
+  dM[4] = 2.0f * (dSigma[3] * M[1] + dSigma[4] * M[4] + dSigma[5] * M[7]);
+  dM[5] = 2.0f * (dSigma[3] * M[2] + dSigma[4] * M[5] + dSigma[5] * M[8]);
+  dM[6] = 2.0f * (dSigma[6] * M[0] + dSigma[7] * M[3] + dSigma[8] * M[6]);
+  dM[7] = 2.0f * (dSigma[6] * M[1] + dSigma[7] * M[4] + dSigma[8] * M[7]);
+  dM[8] = 2.0f * (dSigma[6] * M[2] + dSigma[7] * M[5] + dSigma[8] * M[8]);
 
-  const float dL_dy = dL_dR[0] * (-4.f * y) + dL_dR[1] * (2.f * x) + dL_dR[2] * (2.f * w) + dL_dR[3] * (2.f * x) +
-                      dL_dR[5] * (2.f * z) + dL_dR[6] * (-2.f * w) + dL_dR[7] * (2.f * z) + dL_dR[8] * (-4.f * y);
+  // dR = dM * S^T (S is diagonal, so S^T=S)
+  float dR[9];
+  dR[0] = dM[0] * S_x;
+  dR[1] = dM[1] * S_y;
+  dR[2] = dM[2] * S_z;
+  dR[3] = dM[3] * S_x;
+  dR[4] = dM[4] * S_y;
+  dR[5] = dM[5] * S_z;
+  dR[6] = dM[6] * S_x;
+  dR[7] = dM[7] * S_y;
+  dR[8] = dM[8] * S_z;
 
-  const float dL_dz = dL_dR[0] * (-4.f * z) + dL_dR[1] * (-2.f * w) + dL_dR[2] * (2.f * x) + dL_dR[3] * (2.f * w) +
-                      dL_dR[4] * (-4.f * z) + dL_dR[6] * (2.f * x) + dL_dR[7] * (2.f * y);
+  // dS_diag = R^T * dM
+  // We only need the diagonal elements for the gradient of scale
+  float dS_vec_x = R[0] * dM[0] + R[3] * dM[3] + R[6] * dM[6];
+  float dS_vec_y = R[1] * dM[1] + R[4] * dM[4] + R[7] * dM[7];
+  float dS_vec_z = R[2] * dM[2] + R[5] * dM[5] + R[8] * dM[8];
 
-  // Project gradient to be orthogonal to q, and account for normalization chain rule
-  const float dot = w * dL_dw + x * dL_dx + y * dL_dy + z * dL_dz;
-  quaternion_grad_in[i * 4 + 0] = inv_norm * (dL_dw - w * dot);
-  quaternion_grad_in[i * 4 + 1] = inv_norm * (dL_dx - x * dot);
-  quaternion_grad_in[i * 4 + 2] = inv_norm * (dL_dy - y * dot);
-  quaternion_grad_in[i * 4 + 3] = inv_norm * (dL_dz - z * dot);
+  // --- 3. Compute final gradients for scale (s) and quaternion (q) ---
+
+  // Gradient for scale: ds = dS_vec * exp(s)
+  dS_in[idx * 3 + 0] = dS_vec_x * S_x;
+  dS_in[idx * 3 + 1] = dS_vec_y * S_y;
+  dS_in[idx * 3 + 2] = dS_vec_z * S_z;
+
+  // Gradient for quaternion
+  // dq_i = sum(dR_jk * dR_jk/dq_i)
+  float dw = 0.0f, dx = 0.0f, dy = 0.0f, dz = 0.0f;
+
+  // Row 0
+  dw += dR[1] * (-2.0f * z) + dR[2] * (2.0f * y);
+  dx += dR[1] * (2.0f * y) + dR[2] * (2.0f * z);
+  dy += dR[0] * (-4.0f * y) + dR[1] * (2.0f * x) + dR[2] * (2.0f * w);
+  dz += dR[0] * (-4.0f * z) + dR[1] * (-2.0f * w) + dR[2] * (2.0f * x);
+
+  // Row 1
+  dw += dR[3] * (2.0f * z) + dR[5] * (-2.0f * x);
+  dx += dR[3] * (2.0f * y) + dR[4] * (-4.0f * x) + dR[5] * (-2.0f * w);
+  dy += dR[3] * (2.0f * x) + dR[5] * (2.0f * z);
+  dz += dR[3] * (2.0f * w) + dR[4] * (-4.0f * z) + dR[5] * (2.0f * y);
+
+  // Row 2
+  dw += dR[6] * (-2.0f * y) + dR[7] * (2.0f * x);
+  dx += dR[6] * (2.0f * z) + dR[7] * (2.0f * w) + dR[8] * (-4.0f * x);
+  dy += dR[6] * (-2.0f * w) + dR[7] * (2.0f * z) + dR[8] * (-4.0f * y);
+  dz += dR[6] * (2.0f * x) + dR[7] * (2.0f * y);
+
+  // The raw gradient with respect to the normalized quaternion components (w, x, y, z)
+  const float d_norm_q[] = {dw, dx, dy, dz};
+
+  // Calculate the dot product of the normalized quaternion and its gradient
+  // This finds the component of the gradient that is parallel to the quaternion vector itself
+  const float dot = w * d_norm_q[0] + x * d_norm_q[1] + y * d_norm_q[2] + z * d_norm_q[3];
+
+  // The gradient of the norm is zero for directions orthogonal to the vector.
+  // We subtract the parallel component (the projection) and scale by the inverse norm.
+  const float inv_norm = 1.0f / norm;
+  dQ_in[idx * 4 + 0] = inv_norm * (d_norm_q[0] - dot * w);
+  dQ_in[idx * 4 + 1] = inv_norm * (d_norm_q[1] - dot * x);
+  dQ_in[idx * 4 + 2] = inv_norm * (d_norm_q[2] - dot * y);
+  dQ_in[idx * 4 + 3] = inv_norm * (d_norm_q[3] - dot * z);
 }
 
 void compute_sigma_backward(const float *const quaternion, const float *const scale, const float *const sigma_grad_out,
@@ -276,6 +331,6 @@ void compute_sigma_backward(const float *const quaternion, const float *const sc
 
   const int threads = 256;
   const int blocks = (N + threads - 1) / threads;
-  compute_sigma_backward_kernel<<<blocks, threads, 0, stream>>>(quaternion, scale, sigma_grad_out, N,
-                                                                quaternion_grad_in, scale_grad_in);
+  sigma_backward_kernel<<<blocks, threads, 0, stream>>>(quaternion, scale, sigma_grad_out, N, quaternion_grad_in,
+                                                        scale_grad_in);
 }

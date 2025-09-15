@@ -397,21 +397,25 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float R[] = {1 - 2 * (y * y + z * z), 2 * (x * y - w * z),     2 * (x * z + w * y),
                  2 * (x * y + w * z),     1 - 2 * (x * x + z * z), 2 * (y * z - w * x),
                  2 * (x * z - w * y),     2 * (y * z + w * x),     1 - 2 * (x * x + y * y)};
-    float S[] = {expf(scale[0]), expf(scale[1]), expf(scale[2])};
-    float M[] = {S[0] * S[0], S[1] * S[1], S[2] * S[2]};
 
+    // The forward pass is based on R * S^2 * R^T
+    float S_sq[] = {std::exp(scale[0]) * std::exp(scale[0]), std::exp(scale[1]) * std::exp(scale[1]),
+                    std::exp(scale[2]) * std::exp(scale[2])};
+
+    // RM = R * S^2
     float RM[9];
     for (int r = 0; r < 3; ++r)
       for (int c = 0; c < 3; ++c)
-        RM[r * 3 + c] = R[r * 3 + c] * M[c];
+        RM[r * 3 + c] = R[r * 3 + c] * S_sq[c];
 
+    // sigma = RM * R^T
     std::vector<float> sigma(6);
-    sigma[0] = RM[0] * R[0] + RM[1] * R[1] + RM[2] * R[2];
-    sigma[1] = RM[0] * R[3] + RM[1] * R[4] + RM[2] * R[5];
-    sigma[2] = RM[0] * R[6] + RM[1] * R[7] + RM[2] * R[8];
-    sigma[3] = RM[3] * R[3] + RM[4] * R[4] + RM[5] * R[5];
-    sigma[4] = RM[3] * R[6] + RM[4] * R[7] + RM[5] * R[8];
-    sigma[5] = RM[6] * R[6] + RM[7] * R[7] + RM[8] * R[8];
+    sigma[0] = RM[0] * R[0] + RM[1] * R[1] + RM[2] * R[2]; // xx
+    sigma[1] = RM[0] * R[3] + RM[1] * R[4] + RM[2] * R[5]; // xy
+    sigma[2] = RM[0] * R[6] + RM[1] * R[7] + RM[2] * R[8]; // xz
+    sigma[3] = RM[3] * R[3] + RM[4] * R[4] + RM[5] * R[5]; // yy
+    sigma[4] = RM[3] * R[6] + RM[4] * R[7] + RM[5] * R[8]; // yz
+    sigma[5] = RM[6] * R[6] + RM[7] * R[7] + RM[8] * R[8]; // zz
     return sigma;
   };
 
