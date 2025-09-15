@@ -45,7 +45,7 @@ target_link_libraries(gsplat PUBLIC yaml-cpp)
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu cuda/spherical_harmonics.cu cuda/render.cu)
+add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu cuda/spherical_harmonics.cu cuda/render.cu cuda/projection_backward.cu cuda/gaussian_backward.cu)
 
 target_include_directories(gsplat_cuda
   PUBLIC
@@ -93,3 +93,6 @@ add_gtest_executable(gaussian_tests tests/gaussian_test.cpp gsplat dataloader)
 
 # --- CUDA Forward Tests ---
 add_gtest_executable(cuda_forward_tests tests/cuda_forward_test.cpp gsplat_cuda)
+
+# --- CUDA Backward Tests ---
+add_gtest_executable(cuda_backward_tests tests/cuda_backward_test.cpp gsplat_cuda)
