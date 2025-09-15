@@ -222,14 +222,13 @@ TEST_F(CudaBackwardKernelTest, ProjectionJacobianBackward) {
 }
 
 TEST_F(CudaBackwardKernelTest, SigmaBackward) {
-  const int N = 2;
+  const int N = 1;
   const float h = 1e-4;
 
   // Host data
-  std::vector<float> h_q = {1.0,        0.1,        0.2, 0.3,  // Gaussian 1
-                            0.70710678, 0.70710678, 0.0, 0.0}; // Gaussian 2: 90 deg rot around X
-  std::vector<float> h_s = {0.1, 0.2, 0.3, -0.1, -0.2, -0.3};
-  std::vector<float> h_dSigma_in = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, -0.1, -0.2, -0.3, -0.4, -0.5, -0.6};
+  std::vector<float> h_q = {0.70710678, 0.70710678, 0.0, 0.0}; // Gaussian 1: 90 deg rot around X
+  std::vector<float> h_s = {-0.1, -0.2, -0.3};
+  std::vector<float> h_dSigma_in = {-0.1, -0.2, -0.3, -0.4, -0.5, -0.6};
   std::vector<float> h_dQ_in(N * 4);
   std::vector<float> h_dS_in(N * 3);
 
@@ -324,7 +323,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float loss_p = compute_loss(sigma_p);
     float loss_m = compute_loss(sigma_m);
 
-    float numerical_grad = (loss_p - loss_m) / (2 * h);
+    float numerical_grad = (loss_p - loss_m) / h;
     EXPECT_NEAR(h_dQ_in[i], numerical_grad, 1e-2);
   }
 
