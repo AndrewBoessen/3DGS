@@ -117,12 +117,9 @@ __global__ void conic_backward_kernel(const float *__restrict__ J, const float *
   out_sigma_grad[0] = JW00 * V00 + JW10 * V10;
   out_sigma_grad[1] = JW00 * V01 + JW10 * V11;
   out_sigma_grad[2] = JW00 * V02 + JW10 * V12;
-  out_sigma_grad[3] = JW01 * V00 + JW11 * V10;
-  out_sigma_grad[4] = JW01 * V01 + JW11 * V11;
-  out_sigma_grad[5] = JW01 * V02 + JW11 * V12;
-  out_sigma_grad[6] = JW02 * V00 + JW12 * V10;
-  out_sigma_grad[7] = JW02 * V01 + JW12 * V11;
-  out_sigma_grad[8] = JW02 * V02 + JW12 * V12;
+  out_sigma_grad[3] = JW01 * V01 + JW11 * V11;
+  out_sigma_grad[4] = JW01 * V02 + JW11 * V12;
+  out_sigma_grad[5] = JW02 * V02 + JW12 * V12;
 
   // B. Gradient w.r.t. J = 2 * (V @ sigma_world @ W.T)
   // Step B1: V_sigma = V @ sigma_world (2x3 @ 3x3 -> 2x3)
