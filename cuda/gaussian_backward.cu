@@ -58,107 +58,118 @@ void compute_projection_jacobian_backward(const float *const xyz_c, const float 
   compute_proj_jacobian_backward_kernel<<<blocks, threads, 0, stream>>>(xyz_c, K, J_grad_out, N, xyz_c_grad_in);
 }
 
-__global__ void compute_conic_backward_kernel(const float *__restrict__ J_in, const float *__restrict__ sigma_in,
-                                              const float *__restrict__ T, const float *__restrict__ conic_grad_out,
-                                              const int N, float *__restrict__ J_grad_in,
-                                              float *__restrict__ sigma_grad_in) {
-  const int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i >= N)
+__global__ void conic_backward_kernel(const float *const J, const float *const sigma, const float *const T,
+                                      const float *const conic_grad_out, const int N, float *J_grad_in,
+                                      float *sigma_grad_in) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= N) {
     return;
+  }
 
-  // Unpack inputs
-  const float J[] = {J_in[i * 6], J_in[i * 6 + 1], J_in[i * 6 + 2], J_in[i * 6 + 3], J_in[i * 6 + 4], J_in[i * 6 + 5]};
-  const float sigma[] = {sigma_in[i * 6],     sigma_in[i * 6 + 1], sigma_in[i * 6 + 2],
-                         sigma_in[i * 6 + 3], sigma_in[i * 6 + 4], sigma_in[i * 6 + 5]};
-  const float grad_conic[] = {conic_grad_out[i * 3], conic_grad_out[i * 3 + 1], conic_grad_out[i * 3 + 2]};
+  // --- Load Data ---
 
-  const float R[] = {T[0], T[1], T[2], T[4], T[5], T[6], T[8], T[9], T[10]};
+  // Load camera rotation matrix W (top-left 3x3 of T) into registers.
+  // This is the same for all threads and will be cached.
+  // W = | W0 W1 W2 |
+  //     | W3 W4 W5 |
+  //     | W6 W7 W8 |
+  float W0 = T[0], W1 = T[1], W2 = T[2];
+  float W3 = T[4], W4 = T[5], W5 = T[6];
+  float W6 = T[8], W7 = T[9], W8 = T[10];
 
-  // Sigma_cam = R * Sigma * R.T
-  // Intermediate calculations for Sigma_cam = R * Sigma
-  float RS[9];
-  RS[0] = R[0] * sigma[0] + R[1] * sigma[1] + R[2] * sigma[2];
-  RS[1] = R[0] * sigma[1] + R[1] * sigma[3] + R[2] * sigma[4];
-  RS[2] = R[0] * sigma[2] + R[1] * sigma[4] + R[2] * sigma[5];
-  RS[3] = R[3] * sigma[0] + R[4] * sigma[1] + R[5] * sigma[2];
-  RS[4] = R[3] * sigma[1] + R[4] * sigma[3] + R[5] * sigma[4];
-  RS[5] = R[3] * sigma[2] + R[4] * sigma[4] + R[5] * sigma[5];
-  RS[6] = R[6] * sigma[0] + R[7] * sigma[1] + R[8] * sigma[2];
-  RS[7] = R[6] * sigma[1] + R[7] * sigma[3] + R[8] * sigma[4];
-  RS[8] = R[6] * sigma[2] + R[7] * sigma[4] + R[8] * sigma[5];
+  // Pointers to the data for the current Gaussian
+  const float *jacobian = J + idx * 6;
+  const float *cov3D = sigma + idx * 6;
+  const float *conic_grad = conic_grad_out + idx * 3;
 
-  float Sigma_cam[9];
-  Sigma_cam[0] = RS[0] * R[0] + RS[1] * R[1] + RS[2] * R[2];
-  Sigma_cam[1] = RS[0] * R[3] + RS[1] * R[4] + RS[2] * R[5];
-  Sigma_cam[2] = RS[0] * R[6] + RS[1] * R[7] + RS[2] * R[8];
-  Sigma_cam[3] = RS[3] * R[0] + RS[4] * R[1] + RS[5] * R[2];
-  Sigma_cam[4] = RS[3] * R[3] + RS[4] * R[4] + RS[5] * R[5];
-  Sigma_cam[5] = RS[3] * R[6] + RS[4] * R[7] + RS[5] * R[8];
-  Sigma_cam[6] = RS[6] * R[0] + RS[7] * R[1] + RS[8] * R[2];
-  Sigma_cam[7] = RS[6] * R[3] + RS[7] * R[4] + RS[8] * R[5];
-  Sigma_cam[8] = RS[6] * R[6] + RS[7] * R[7] + RS[8] * R[8];
+  // Load Jacobian J
+  float J0 = jacobian[0], J1 = jacobian[1], J2 = jacobian[2];
+  float J3 = jacobian[3], J4 = jacobian[4], J5 = jacobian[5];
 
-  // grad_conic_mat is symmetric
-  const float grad_conic_mat[] = {grad_conic[0], grad_conic[1], grad_conic[1], grad_conic[2]};
+  // Load and reconstruct full 3x3 symmetric world-space covariance Sigma (S)
+  float S0 = cov3D[0], S1 = cov3D[1], S2 = cov3D[2];
+  float S3 = cov3D[3], S4 = cov3D[4], S5 = cov3D[5];
+  float S10 = S1, S20 = S2, S21 = S4;
 
-  // grad_Sigma_cam = J.T * grad_conic_mat * J
-  float grad_Sigma_cam[9];
-  float J_T_grad_C[6];
-  J_T_grad_C[0] = J[0] * grad_conic_mat[0] + J[3] * grad_conic_mat[2];
-  J_T_grad_C[1] = J[0] * grad_conic_mat[1] + J[3] * grad_conic_mat[3];
-  J_T_grad_C[2] = J[1] * grad_conic_mat[0] + J[4] * grad_conic_mat[2];
-  J_T_grad_C[3] = J[1] * grad_conic_mat[1] + J[4] * grad_conic_mat[3];
-  J_T_grad_C[4] = J[2] * grad_conic_mat[0] + J[5] * grad_conic_mat[2];
-  J_T_grad_C[5] = J[2] * grad_conic_mat[1] + J[5] * grad_conic_mat[3];
+  // Load and reconstruct full 2x2 symmetric conic gradient Gc (dL/dC)
+  float Gc0 = conic_grad[0], Gc1 = conic_grad[1], Gc2 = conic_grad[2];
+  float Gc10 = Gc1;
 
-  grad_Sigma_cam[0] = J_T_grad_C[0] * J[0] + J_T_grad_C[1] * J[3];
-  grad_Sigma_cam[1] = J_T_grad_C[0] * J[1] + J_T_grad_C[1] * J[4];
-  grad_Sigma_cam[2] = J_T_grad_C[0] * J[2] + J_T_grad_C[1] * J[5];
-  grad_Sigma_cam[3] = J_T_grad_C[2] * J[0] + J_T_grad_C[3] * J[3];
-  grad_Sigma_cam[4] = J_T_grad_C[2] * J[1] + J_T_grad_C[3] * J[4];
-  grad_Sigma_cam[5] = J_T_grad_C[2] * J[2] + J_T_grad_C[3] * J[5];
-  grad_Sigma_cam[6] = J_T_grad_C[4] * J[0] + J_T_grad_C[5] * J[3];
-  grad_Sigma_cam[7] = J_T_grad_C[4] * J[1] + J_T_grad_C[5] * J[4];
-  grad_Sigma_cam[8] = J_T_grad_C[4] * J[2] + J_T_grad_C[5] * J[5];
+  // --- Compute dL/dJ = 2 * Gc * J * (W * S * W^T) ---
 
-  // grad_sigma = R.T * grad_Sigma_cam * R
-  float R_T_grad_Scam[9];
-  R_T_grad_Scam[0] = R[0] * grad_Sigma_cam[0] + R[3] * grad_Sigma_cam[3] + R[6] * grad_Sigma_cam[6];
-  R_T_grad_Scam[1] = R[0] * grad_Sigma_cam[1] + R[3] * grad_Sigma_cam[4] + R[6] * grad_Sigma_cam[7];
-  R_T_grad_Scam[2] = R[0] * grad_Sigma_cam[2] + R[3] * grad_Sigma_cam[5] + R[6] * grad_Sigma_cam[8];
-  R_T_grad_Scam[3] = R[1] * grad_Sigma_cam[0] + R[4] * grad_Sigma_cam[3] + R[7] * grad_Sigma_cam[6];
-  R_T_grad_Scam[4] = R[1] * grad_Sigma_cam[1] + R[4] * grad_Sigma_cam[4] + R[7] * grad_Sigma_cam[7];
-  R_T_grad_Scam[5] = R[1] * grad_Sigma_cam[2] + R[4] * grad_Sigma_cam[5] + R[7] * grad_Sigma_cam[8];
-  R_T_grad_Scam[6] = R[2] * grad_Sigma_cam[0] + R[5] * grad_Sigma_cam[3] + R[8] * grad_Sigma_cam[6];
-  R_T_grad_Scam[7] = R[2] * grad_Sigma_cam[1] + R[5] * grad_Sigma_cam[4] + R[8] * grad_Sigma_cam[7];
-  R_T_grad_Scam[8] = R[2] * grad_Sigma_cam[2] + R[5] * grad_Sigma_cam[5] + R[8] * grad_Sigma_cam[8];
+  // 1. Compute Temp_WS = W * S (3x3)
+  float WS00 = W0 * S0 + W1 * S10 + W2 * S20;
+  float WS01 = W0 * S1 + W1 * S3 + W2 * S21;
+  float WS02 = W0 * S2 + W1 * S4 + W2 * S5;
+  float WS10 = W3 * S0 + W4 * S10 + W5 * S20;
+  float WS11 = W3 * S1 + W4 * S3 + W5 * S21;
+  float WS12 = W3 * S2 + W4 * S4 + W5 * S5;
+  float WS20 = W6 * S0 + W7 * S10 + W8 * S20;
+  float WS21 = W6 * S1 + W7 * S3 + W8 * S21;
+  float WS22 = W6 * S2 + W7 * S4 + W8 * S5;
 
-  sigma_grad_in[i * 6 + 0] = R_T_grad_Scam[0] * R[0] + R_T_grad_Scam[1] * R[3] + R_T_grad_Scam[2] * R[6];
-  sigma_grad_in[i * 6 + 1] = R_T_grad_Scam[0] * R[1] + R_T_grad_Scam[1] * R[4] + R_T_grad_Scam[2] * R[7];
-  sigma_grad_in[i * 6 + 2] = R_T_grad_Scam[0] * R[2] + R_T_grad_Scam[1] * R[5] + R_T_grad_Scam[2] * R[8];
-  sigma_grad_in[i * 6 + 3] = R_T_grad_Scam[3] * R[1] + R_T_grad_Scam[4] * R[4] + R_T_grad_Scam[5] * R[7];
-  sigma_grad_in[i * 6 + 4] = R_T_grad_Scam[3] * R[2] + R_T_grad_Scam[4] * R[5] + R_T_grad_Scam[5] * R[8];
-  sigma_grad_in[i * 6 + 5] = R_T_grad_Scam[6] * R[2] + R_T_grad_Scam[7] * R[5] + R_T_grad_Scam[8] * R[8];
+  // 2. Compute Sigma_cam (Sc) = Temp_WS * W^T (3x3, symmetric)
+  float Sc00 = WS00 * W0 + WS01 * W1 + WS02 * W2;
+  float Sc11 = WS10 * W3 + WS11 * W4 + WS12 * W5;
+  float Sc22 = WS20 * W6 + WS21 * W7 + WS22 * W8;
+  float Sc01 = WS00 * W3 + WS01 * W4 + WS02 * W5;
+  float Sc02 = WS00 * W6 + WS01 * W7 + WS02 * W8;
+  float Sc12 = WS10 * W6 + WS11 * W7 + WS12 * W8;
+  float Sc10 = Sc01, Sc20 = Sc02, Sc21 = Sc12;
 
-  // grad_J = 2 * grad_conic_mat * J * Sigma_cam
-  float grad_J_mat[6];
-  float J_Scam[6];
-  J_Scam[0] = J[0] * Sigma_cam[0] + J[1] * Sigma_cam[3] + J[2] * Sigma_cam[6];
-  J_Scam[1] = J[0] * Sigma_cam[1] + J[1] * Sigma_cam[4] + J[2] * Sigma_cam[7];
-  J_Scam[2] = J[0] * Sigma_cam[2] + J[1] * Sigma_cam[5] + J[2] * Sigma_cam[8];
-  J_Scam[3] = J[3] * Sigma_cam[0] + J[4] * Sigma_cam[3] + J[5] * Sigma_cam[6];
-  J_Scam[4] = J[3] * Sigma_cam[1] + J[4] * Sigma_cam[4] + J[5] * Sigma_cam[7];
-  J_Scam[5] = J[3] * Sigma_cam[2] + J[4] * Sigma_cam[5] + J[5] * Sigma_cam[8];
+  // 3. Compute M = J * Sigma_cam (2x3)
+  float M0 = J0 * Sc00 + J1 * Sc10 + J2 * Sc20;
+  float M1 = J0 * Sc01 + J1 * Sc11 + J2 * Sc21;
+  float M2 = J0 * Sc02 + J1 * Sc12 + J2 * Sc22;
+  float M3 = J3 * Sc00 + J4 * Sc10 + J5 * Sc20;
+  float M4 = J3 * Sc01 + J4 * Sc11 + J5 * Sc21;
+  float M5 = J3 * Sc02 + J4 * Sc12 + J5 * Sc22;
 
-  grad_J_mat[0] = grad_conic_mat[0] * J_Scam[0] + grad_conic_mat[1] * J_Scam[3];
-  grad_J_mat[1] = grad_conic_mat[0] * J_Scam[1] + grad_conic_mat[1] * J_Scam[4];
-  grad_J_mat[2] = grad_conic_mat[0] * J_Scam[2] + grad_conic_mat[1] * J_Scam[5];
-  grad_J_mat[3] = grad_conic_mat[2] * J_Scam[0] + grad_conic_mat[3] * J_Scam[3];
-  grad_J_mat[4] = grad_conic_mat[2] * J_Scam[1] + grad_conic_mat[3] * J_Scam[4];
-  grad_J_mat[5] = grad_conic_mat[2] * J_Scam[2] + grad_conic_mat[3] * J_Scam[5];
+  // 4. Compute dL/dJ = 2 * Gc * M (2x3) and store
+  J_grad_in[idx * 6 + 0] = 2.0f * (Gc0 * M0 + Gc1 * M3);
+  J_grad_in[idx * 6 + 1] = 2.0f * (Gc0 * M1 + Gc1 * M4);
+  J_grad_in[idx * 6 + 2] = 2.0f * (Gc0 * M2 + Gc1 * M5);
+  J_grad_in[idx * 6 + 3] = 2.0f * (Gc10 * M0 + Gc2 * M3);
+  J_grad_in[idx * 6 + 4] = 2.0f * (Gc10 * M1 + Gc2 * M4);
+  J_grad_in[idx * 6 + 5] = 2.0f * (Gc10 * M2 + Gc2 * M5);
 
-  for (int j = 0; j < 6; ++j)
-    J_grad_in[i * 6 + j] = 2.0f * grad_J_mat[j];
+  // --- Compute dL/dSigma = W^T * (J^T * Gc * J) * W ---
+
+  // 1. Compute V = Gc * J (2x3)
+  float V0 = Gc0 * J0 + Gc1 * J3;
+  float V1 = Gc0 * J1 + Gc1 * J4;
+  float V2 = Gc0 * J2 + Gc1 * J5;
+  float V3 = Gc10 * J0 + Gc2 * J3;
+  float V4 = Gc10 * J1 + Gc2 * J4;
+  float V5 = Gc10 * J2 + Gc2 * J5;
+
+  // 2. Compute G_Scam = J^T * V (3x3, symmetric)
+  float Gsc00 = J0 * V0 + J3 * V3;
+  float Gsc11 = J1 * V1 + J4 * V4;
+  float Gsc22 = J2 * V2 + J5 * V5;
+  float Gsc01 = J0 * V1 + J3 * V4;
+  float Gsc02 = J0 * V2 + J3 * V5;
+  float Gsc12 = J1 * V2 + J4 * V5;
+  float Gsc10 = Gsc01, Gsc20 = Gsc02, Gsc21 = Gsc12;
+
+  // 3. Compute Temp_WtG = W^T * G_Scam (3x3)
+  float WtG00 = W0 * Gsc00 + W3 * Gsc10 + W6 * Gsc20;
+  float WtG01 = W0 * Gsc01 + W3 * Gsc11 + W6 * Gsc21;
+  float WtG02 = W0 * Gsc02 + W3 * Gsc12 + W6 * Gsc22;
+  float WtG10 = W1 * Gsc00 + W4 * Gsc10 + W7 * Gsc20;
+  float WtG11 = W1 * Gsc01 + W4 * Gsc11 + W7 * Gsc21;
+  float WtG12 = W1 * Gsc02 + W4 * Gsc12 + W7 * Gsc22;
+  float WtG20 = W2 * Gsc00 + W5 * Gsc10 + W8 * Gsc20;
+  float WtG21 = W2 * Gsc01 + W5 * Gsc11 + W8 * Gsc21;
+  float WtG22 = W2 * Gsc02 + W5 * Gsc12 + W8 * Gsc22;
+
+  // 4. Compute dL/dSigma = Temp_WtG * W (3x3, symmetric) and store compact form
+  sigma_grad_in[idx * 6 + 0] = WtG00 * W0 + WtG01 * W1 + WtG02 * W2; // (0,0)
+  sigma_grad_in[idx * 6 + 1] = WtG00 * W3 + WtG01 * W4 + WtG02 * W5; // (0,1)
+  sigma_grad_in[idx * 6 + 2] = WtG00 * W6 + WtG01 * W7 + WtG02 * W8; // (0,2)
+  sigma_grad_in[idx * 6 + 3] = WtG10 * W3 + WtG11 * W4 + WtG12 * W5; // (1,1)
+  sigma_grad_in[idx * 6 + 4] = WtG10 * W6 + WtG11 * W7 + WtG12 * W8; // (1,2)
+  sigma_grad_in[idx * 6 + 5] = WtG20 * W6 + WtG21 * W7 + WtG22 * W8; // (2,2)
 }
 
 void compute_conic_backward(const float *const J, const float *const sigma, const float *const T,
@@ -173,8 +184,7 @@ void compute_conic_backward(const float *const J, const float *const sigma, cons
 
   const int threads = 256;
   const int blocks = (N + threads - 1) / threads;
-  compute_conic_backward_kernel<<<blocks, threads, 0, stream>>>(J, sigma, T, conic_grad_out, N, J_grad_in,
-                                                                sigma_grad_in);
+  conic_backward_kernel<<<blocks, threads, 0, stream>>>(J, sigma, T, conic_grad_out, N, J_grad_in, sigma_grad_in);
 }
 
 __global__ void sigma_backward_kernel(const float *__restrict__ q, const float *__restrict__ s,
