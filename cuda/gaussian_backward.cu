@@ -58,118 +58,89 @@ void compute_projection_jacobian_backward(const float *const xyz_c, const float 
   compute_proj_jacobian_backward_kernel<<<blocks, threads, 0, stream>>>(xyz_c, K, J_grad_out, N, xyz_c_grad_in);
 }
 
-__global__ void conic_backward_kernel(const float *const J, const float *const sigma, const float *const T,
-                                      const float *const conic_grad_out, const int N, float *J_grad_in,
-                                      float *sigma_grad_in) {
-  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= N) {
+__global__ void conic_backward_kernel(const float *__restrict__ J, const float *__restrict__ sigma_world,
+                                      const float *__restrict__ camera_T_world,
+                                      const float *__restrict__ conic_grad_out, const int N, float *J_grad_in,
+                                      float *sigma_world_grad_in) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N) {
     return;
   }
 
-  // --- Load Data ---
+  // --- 1. Load all inputs into local variables (registers) ---
 
-  // Load camera rotation matrix W (top-left 3x3 of T) into registers.
-  // This is the same for all threads and will be cached.
-  // W = | W0 W1 W2 |
-  //     | W3 W4 W5 |
-  //     | W6 W7 W8 |
-  float W0 = T[0], W1 = T[1], W2 = T[2];
-  float W3 = T[4], W4 = T[5], W5 = T[6];
-  float W6 = T[8], W7 = T[9], W8 = T[10];
+  const float *J_i = J + i * 6;
+  const float *sigma_i = sigma_world + i * 9;
 
-  // Pointers to the data for the current Gaussian
-  const float *jacobian = J + idx * 6;
-  const float *cov3D = sigma + idx * 6;
-  const float *conic_grad = conic_grad_out + idx * 3;
+  // Load J (2x3)
+  float J00 = J_i[0], J01 = J_i[1], J02 = J_i[2];
+  float J10 = J_i[3], J11 = J_i[4], J12 = J_i[5];
 
-  // Load Jacobian J
-  float J0 = jacobian[0], J1 = jacobian[1], J2 = jacobian[2];
-  float J3 = jacobian[3], J4 = jacobian[4], J5 = jacobian[5];
+  // Load sigma_world (3x3)
+  float S00 = sigma_i[0], S01 = sigma_i[1], S02 = sigma_i[2];
+  float S10 = sigma_i[3], S11 = sigma_i[4], S12 = sigma_i[5];
+  float S20 = sigma_i[6], S21 = sigma_i[7], S22 = sigma_i[8];
 
-  // Load and reconstruct full 3x3 symmetric world-space covariance Sigma (S)
-  float S0 = cov3D[0], S1 = cov3D[1], S2 = cov3D[2];
-  float S3 = cov3D[3], S4 = cov3D[4], S5 = cov3D[5];
-  float S10 = S1, S20 = S2, S21 = S4;
+  // Load W (3x3 rotation matrix)
+  float W00 = camera_T_world[0], W01 = camera_T_world[1], W02 = camera_T_world[2];
+  float W10 = camera_T_world[4], W11 = camera_T_world[5], W12 = camera_T_world[6];
+  float W20 = camera_T_world[8], W21 = camera_T_world[9], W22 = camera_T_world[10];
 
-  // Load and reconstruct full 2x2 symmetric conic gradient Gc (dL/dC)
-  float Gc0 = conic_grad[0], Gc1 = conic_grad[1], Gc2 = conic_grad[2];
-  float Gc10 = Gc1;
+  // Load and reconstruct symmetric grad_sigma_image (2x2)
+  float G00 = conic_grad_out[i * 3 + 0];
+  float G01 = conic_grad_out[i * 3 + 1];
+  float G11 = conic_grad_out[i * 3 + 2];
+  float G10 = G01; // Symmetry
 
-  // --- Compute dL/dJ = 2 * Gc * J * (W * S * W^T) ---
+  // --- 2. Compute intermediate products using registers ---
 
-  // 1. Compute Temp_WS = W * S (3x3)
-  float WS00 = W0 * S0 + W1 * S10 + W2 * S20;
-  float WS01 = W0 * S1 + W1 * S3 + W2 * S21;
-  float WS02 = W0 * S2 + W1 * S4 + W2 * S5;
-  float WS10 = W3 * S0 + W4 * S10 + W5 * S20;
-  float WS11 = W3 * S1 + W4 * S3 + W5 * S21;
-  float WS12 = W3 * S2 + W4 * S4 + W5 * S5;
-  float WS20 = W6 * S0 + W7 * S10 + W8 * S20;
-  float WS21 = W6 * S1 + W7 * S3 + W8 * S21;
-  float WS22 = W6 * S2 + W7 * S4 + W8 * S5;
+  // JW = J @ W (2x3 @ 3x3 -> 2x3)
+  float JW00 = J00 * W00 + J01 * W10 + J02 * W20;
+  float JW01 = J00 * W01 + J01 * W11 + J02 * W21;
+  float JW02 = J00 * W02 + J01 * W12 + J02 * W22;
+  float JW10 = J10 * W00 + J11 * W10 + J12 * W20;
+  float JW11 = J10 * W01 + J11 * W11 + J12 * W21;
+  float JW12 = J10 * W02 + J11 * W12 + J12 * W22;
 
-  // 2. Compute Sigma_cam (Sc) = Temp_WS * W^T (3x3, symmetric)
-  float Sc00 = WS00 * W0 + WS01 * W1 + WS02 * W2;
-  float Sc11 = WS10 * W3 + WS11 * W4 + WS12 * W5;
-  float Sc22 = WS20 * W6 + WS21 * W7 + WS22 * W8;
-  float Sc01 = WS00 * W3 + WS01 * W4 + WS02 * W5;
-  float Sc02 = WS00 * W6 + WS01 * W7 + WS02 * W8;
-  float Sc12 = WS10 * W6 + WS11 * W7 + WS12 * W8;
-  float Sc10 = Sc01, Sc20 = Sc02, Sc21 = Sc12;
+  // V = grad_sigma_image @ JW (2x2 @ 2x3 -> 2x3)
+  float V00 = G00 * JW00 + G01 * JW10;
+  float V01 = G00 * JW01 + G01 * JW11;
+  float V02 = G00 * JW02 + G01 * JW12;
+  float V10 = G10 * JW00 + G11 * JW10;
+  float V11 = G10 * JW01 + G11 * JW11;
+  float V12 = G10 * JW02 + G11 * JW12;
 
-  // 3. Compute M = J * Sigma_cam (2x3)
-  float M0 = J0 * Sc00 + J1 * Sc10 + J2 * Sc20;
-  float M1 = J0 * Sc01 + J1 * Sc11 + J2 * Sc21;
-  float M2 = J0 * Sc02 + J1 * Sc12 + J2 * Sc22;
-  float M3 = J3 * Sc00 + J4 * Sc10 + J5 * Sc20;
-  float M4 = J3 * Sc01 + J4 * Sc11 + J5 * Sc21;
-  float M5 = J3 * Sc02 + J4 * Sc12 + J5 * Sc22;
+  // --- 3. Compute and write output gradients ---
 
-  // 4. Compute dL/dJ = 2 * Gc * M (2x3) and store
-  J_grad_in[idx * 6 + 0] = 2.0f * (Gc0 * M0 + Gc1 * M3);
-  J_grad_in[idx * 6 + 1] = 2.0f * (Gc0 * M1 + Gc1 * M4);
-  J_grad_in[idx * 6 + 2] = 2.0f * (Gc0 * M2 + Gc1 * M5);
-  J_grad_in[idx * 6 + 3] = 2.0f * (Gc10 * M0 + Gc2 * M3);
-  J_grad_in[idx * 6 + 4] = 2.0f * (Gc10 * M1 + Gc2 * M4);
-  J_grad_in[idx * 6 + 5] = 2.0f * (Gc10 * M2 + Gc2 * M5);
+  // A. Gradient w.r.t. sigma_world = JW.T @ V (3x2 @ 2x3 -> 3x3)
+  float *out_sigma_grad = sigma_world_grad_in + i * 9;
+  out_sigma_grad[0] = JW00 * V00 + JW10 * V10;
+  out_sigma_grad[1] = JW00 * V01 + JW10 * V11;
+  out_sigma_grad[2] = JW00 * V02 + JW10 * V12;
+  out_sigma_grad[3] = JW01 * V00 + JW11 * V10;
+  out_sigma_grad[4] = JW01 * V01 + JW11 * V11;
+  out_sigma_grad[5] = JW01 * V02 + JW11 * V12;
+  out_sigma_grad[6] = JW02 * V00 + JW12 * V10;
+  out_sigma_grad[7] = JW02 * V01 + JW12 * V11;
+  out_sigma_grad[8] = JW02 * V02 + JW12 * V12;
 
-  // --- Compute dL/dSigma = W^T * (J^T * Gc * J) * W ---
+  // B. Gradient w.r.t. J = 2 * (V @ sigma_world @ W.T)
+  // Step B1: V_sigma = V @ sigma_world (2x3 @ 3x3 -> 2x3)
+  float VS00 = V00 * S00 + V01 * S10 + V02 * S20;
+  float VS01 = V00 * S01 + V01 * S11 + V02 * S21;
+  float VS02 = V00 * S02 + V01 * S12 + V02 * S22;
+  float VS10 = V10 * S00 + V11 * S10 + V12 * S20;
+  float VS11 = V10 * S01 + V11 * S11 + V12 * S21;
+  float VS12 = V10 * S02 + V11 * S12 + V12 * S22;
 
-  // 1. Compute V = Gc * J (2x3)
-  float V0 = Gc0 * J0 + Gc1 * J3;
-  float V1 = Gc0 * J1 + Gc1 * J4;
-  float V2 = Gc0 * J2 + Gc1 * J5;
-  float V3 = Gc10 * J0 + Gc2 * J3;
-  float V4 = Gc10 * J1 + Gc2 * J4;
-  float V5 = Gc10 * J2 + Gc2 * J5;
-
-  // 2. Compute G_Scam = J^T * V (3x3, symmetric)
-  float Gsc00 = J0 * V0 + J3 * V3;
-  float Gsc11 = J1 * V1 + J4 * V4;
-  float Gsc22 = J2 * V2 + J5 * V5;
-  float Gsc01 = J0 * V1 + J3 * V4;
-  float Gsc02 = J0 * V2 + J3 * V5;
-  float Gsc12 = J1 * V2 + J4 * V5;
-  float Gsc10 = Gsc01, Gsc20 = Gsc02, Gsc21 = Gsc12;
-
-  // 3. Compute Temp_WtG = W^T * G_Scam (3x3)
-  float WtG00 = W0 * Gsc00 + W3 * Gsc10 + W6 * Gsc20;
-  float WtG01 = W0 * Gsc01 + W3 * Gsc11 + W6 * Gsc21;
-  float WtG02 = W0 * Gsc02 + W3 * Gsc12 + W6 * Gsc22;
-  float WtG10 = W1 * Gsc00 + W4 * Gsc10 + W7 * Gsc20;
-  float WtG11 = W1 * Gsc01 + W4 * Gsc11 + W7 * Gsc21;
-  float WtG12 = W1 * Gsc02 + W4 * Gsc12 + W7 * Gsc22;
-  float WtG20 = W2 * Gsc00 + W5 * Gsc10 + W8 * Gsc20;
-  float WtG21 = W2 * Gsc01 + W5 * Gsc11 + W8 * Gsc21;
-  float WtG22 = W2 * Gsc02 + W5 * Gsc12 + W8 * Gsc22;
-
-  // 4. Compute dL/dSigma = Temp_WtG * W (3x3, symmetric) and store compact form
-  sigma_grad_in[idx * 6 + 0] = WtG00 * W0 + WtG01 * W1 + WtG02 * W2; // (0,0)
-  sigma_grad_in[idx * 6 + 1] = WtG00 * W3 + WtG01 * W4 + WtG02 * W5; // (0,1)
-  sigma_grad_in[idx * 6 + 2] = WtG00 * W6 + WtG01 * W7 + WtG02 * W8; // (0,2)
-  sigma_grad_in[idx * 6 + 3] = WtG10 * W3 + WtG11 * W4 + WtG12 * W5; // (1,1)
-  sigma_grad_in[idx * 6 + 4] = WtG10 * W6 + WtG11 * W7 + WtG12 * W8; // (1,2)
-  sigma_grad_in[idx * 6 + 5] = WtG20 * W6 + WtG21 * W7 + WtG22 * W8; // (2,2)
+  // Step B2: J_grad = V_sigma @ W.T (2x3 @ 3x3 -> 2x3), then scale by 2
+  float *out_J_grad = J_grad_in + i * 6;
+  out_J_grad[0] = (VS00 * W00 + VS01 * W01 + VS02 * W02) * 2.0f;
+  out_J_grad[1] = (VS00 * W10 + VS01 * W11 + VS02 * W12) * 2.0f;
+  out_J_grad[2] = (VS00 * W20 + VS01 * W21 + VS02 * W22) * 2.0f;
+  out_J_grad[3] = (VS10 * W00 + VS11 * W01 + VS12 * W02) * 2.0f;
+  out_J_grad[4] = (VS10 * W10 + VS11 * W11 + VS12 * W12) * 2.0f;
+  out_J_grad[5] = (VS10 * W20 + VS11 * W21 + VS12 * W22) * 2.0f;
 }
 
 void compute_conic_backward(const float *const J, const float *const sigma, const float *const T,
