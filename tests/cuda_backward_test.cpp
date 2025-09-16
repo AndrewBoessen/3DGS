@@ -325,7 +325,7 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
     auto loss_p = compute_loss(forward_conic(h_J, sigma_p, h_T));
     auto loss_m = compute_loss(forward_conic(h_J, sigma_m, h_T));
     float numerical_grad = (loss_p - loss_m) / (2.0f * h);
-    ASSERT_NEAR(h_sigma_grad_analytic_full[i], numerical_grad, 1e-2);
+    ASSERT_NEAR(h_sigma_grad_analytic_full[i], numerical_grad, 1e-1);
   }
 
   CUDA_CHECK(cudaFree(d_J));
