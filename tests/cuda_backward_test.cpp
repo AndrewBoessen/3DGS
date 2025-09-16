@@ -324,7 +324,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float loss_m = compute_loss(sigma_m);
 
     float numerical_grad = (loss_p - loss_m) / h;
-    EXPECT_NEAR(h_dQ_in[i], numerical_grad, 1e-2);
+    ASSERT_NEAR(h_dQ_in[i], numerical_grad, 1e-2);
   }
 
   // Check grad w.r.t s
@@ -341,7 +341,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float loss_m = compute_loss(sigma_m);
 
     float numerical_grad = (loss_p - loss_m) / (2 * h);
-    EXPECT_NEAR(h_dS_in[i], numerical_grad, 1e-2);
+    ASSERT_NEAR(h_dS_in[i], numerical_grad, 1e-2);
   }
 
   CUDA_CHECK(cudaFree(d_q));
@@ -401,13 +401,13 @@ TEST_F(CudaBackwardKernelTest, SphericalHarmonicsBackward) {
       const float C4 = 0.5462742152960399f;
 
       sh_vals[0] = C0;
-      sh_vals[1] = -C1 * y;
+      sh_vals[1] = C1 * y;
       sh_vals[2] = C1 * z;
-      sh_vals[3] = -C1 * x;
+      sh_vals[3] = C1 * x;
       sh_vals[4] = C2 * x * y;
-      sh_vals[5] = -C2 * y * z;
+      sh_vals[5] = C2 * y * z;
       sh_vals[6] = C3 * (3.0f * z * z - 1.0f);
-      sh_vals[7] = -C2 * x * z;
+      sh_vals[7] = C2 * x * z;
       sh_vals[8] = C4 * (x * x - y * y);
 
       const float *point_sh_coeffs = &sh_coeffs[i * n_coeffs * 3];
