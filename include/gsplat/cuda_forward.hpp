@@ -127,7 +127,6 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
  * @param[in]  sh_coefficients  A device pointer to SH params for each Gaussian
  * @param[in]  l_max            The max degree of SH
  * @param[in]  N                The total number of points
- * @param[in]  stream The CUDA stream to execute kernel on
  * @param[out] rgb              A device pointer to output rgb values
  * @param[in]  stream The CUDA stream to execute kernel on
  */

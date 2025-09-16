@@ -80,3 +80,15 @@ void compute_conic_backward(const float *const J, const float *const sigma, cons
  */
 void compute_sigma_backward(const float *const quaternion, const float *const scale, const float *const sigma_grad_out,
                             const int N, float *quaternion_grad_in, float *scale_grad_in, cudaStream_t stream = 0);
+
+/**
+ * @brief Compute gradients for the spherical harmonic coefficients
+ * @param[in]   xyz_c         Camera xyz coordinates
+ * @param[in]   rgb_grad_out  RGB gradients
+ * @param[in]   l_max         The max degree of SH
+ * @param[in]   N             The total number of points
+ * @param[out]  sh_grad_in    Spherical harmonic gradients
+ * @param[in]  stream              The CUDA stream to execute the kernel on.
+ */
+void precompute_spherical_harmonics_backward(const float *const xyz_c, const float *const rgb_grad_out, const int l_max,
+                                             const int N, float *sh_grad_in, cudaStream_t stream = 0);

@@ -324,7 +324,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float loss_m = compute_loss(sigma_m);
 
     float numerical_grad = (loss_p - loss_m) / h;
-    EXPECT_NEAR(h_dQ_in[i], numerical_grad, 1e-2);
+    ASSERT_NEAR(h_dQ_in[i], numerical_grad, 1e-2);
   }
 
   // Check grad w.r.t s
@@ -341,7 +341,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float loss_m = compute_loss(sigma_m);
 
     float numerical_grad = (loss_p - loss_m) / (2 * h);
-    EXPECT_NEAR(h_dS_in[i], numerical_grad, 1e-2);
+    ASSERT_NEAR(h_dS_in[i], numerical_grad, 1e-2);
   }
 
   CUDA_CHECK(cudaFree(d_q));
@@ -349,6 +349,105 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
   CUDA_CHECK(cudaFree(d_dSigma_in));
   CUDA_CHECK(cudaFree(d_dQ_in));
   CUDA_CHECK(cudaFree(d_dS_in));
+}
+
+// Test for precompute_spherical_harmonics_backward
+TEST_F(CudaBackwardKernelTest, SphericalHarmonicsBackward) {
+  const int N = 1;
+  const int l_max = 2;
+  const int n_coeffs = (l_max + 1) * (l_max + 1);
+  const float h = 1e-4f;
+
+  // Host data
+  std::vector<float> h_xyz_c = {0.5f, -0.3f, 0.8124f}; // Roughly normalized vector
+  std::vector<float> h_rgb_grad_out = {0.1f, -0.2f, 0.3f};
+  std::vector<float> h_sh_coeffs(N * n_coeffs * 3);
+  for (int i = 0; i < h_sh_coeffs.size(); ++i) {
+    h_sh_coeffs[i] = (i % 10) * 0.05f - 0.2f; // Some arbitrary initial values
+  }
+  std::vector<float> h_sh_grad_in(N * n_coeffs * 3);
+
+  // Device data
+  auto d_xyz_c = device_alloc<float>(N * 3);
+  auto d_rgb_grad_out = device_alloc<float>(N * 3);
+  auto d_sh_grad_in = device_alloc<float>(N * n_coeffs * 3);
+
+  CUDA_CHECK(cudaMemcpy(d_xyz_c, h_xyz_c.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_rgb_grad_out, h_rgb_grad_out.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
+
+  // Run kernel
+  precompute_spherical_harmonics_backward(d_xyz_c, d_rgb_grad_out, l_max, N, d_sh_grad_in);
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  CUDA_CHECK(cudaMemcpy(h_sh_grad_in.data(), d_sh_grad_in, N * n_coeffs * 3 * sizeof(float), cudaMemcpyDeviceToHost));
+
+  // Numerical gradient check
+  auto forward_sh_rgb = [&](const std::vector<float> &sh_coeffs, const std::vector<float> &xyz_c) {
+    std::vector<float> logits(N * 3, 0.0f);
+    std::vector<float> sh_vals(n_coeffs);
+
+    for (int i = 0; i < N; ++i) {
+      float x_ = xyz_c[i * 3 + 0];
+      float y_ = xyz_c[i * 3 + 1];
+      float z_ = xyz_c[i * 3 + 2];
+      float norm = std::sqrt(x_ * x_ + y_ * y_ + z_ * z_) + 1e-8f;
+      float x = x_ / norm, y = y_ / norm, z = z_ / norm;
+
+      // Real Spherical Harmonics basis functions (matches sphericart convention)
+      const float C0 = 0.28209479177387814f;
+      const float C1 = 0.4886025119029199f;
+      const float C2 = 1.0925484305920792f;
+      const float C3 = 0.31539156525252005f;
+      const float C4 = 0.5462742152960399f;
+
+      sh_vals[0] = C0;
+      sh_vals[1] = C1 * y;
+      sh_vals[2] = C1 * z;
+      sh_vals[3] = C1 * x;
+      sh_vals[4] = C2 * x * y;
+      sh_vals[5] = C2 * y * z;
+      sh_vals[6] = C3 * (3.0f * z * z - 1.0f);
+      sh_vals[7] = C2 * x * z;
+      sh_vals[8] = C4 * (x * x - y * y);
+
+      const float *point_sh_coeffs = &sh_coeffs[i * n_coeffs * 3];
+      for (int j = 0; j < n_coeffs; ++j) {
+        logits[i * 3 + 0] += point_sh_coeffs[j * 3 + 0] * sh_vals[j];
+        logits[i * 3 + 1] += point_sh_coeffs[j * 3 + 1] * sh_vals[j];
+        logits[i * 3 + 2] += point_sh_coeffs[j * 3 + 2] * sh_vals[j];
+      }
+    }
+    return logits;
+  };
+
+  auto compute_loss = [&](const std::vector<float> &logits) {
+    double loss = 0.0;
+    for (size_t i = 0; i < logits.size(); ++i) {
+      loss += static_cast<double>(logits[i]) * h_rgb_grad_out[i];
+    }
+    return loss;
+  };
+
+  // Check grad w.r.t sh_coeffs
+  for (int i = 0; i < N * n_coeffs * 3; ++i) {
+    std::vector<float> sh_coeffs_p = h_sh_coeffs;
+    sh_coeffs_p[i] += h;
+    std::vector<float> sh_coeffs_m = h_sh_coeffs;
+    sh_coeffs_m[i] -= h;
+
+    auto logits_p = forward_sh_rgb(sh_coeffs_p, h_xyz_c);
+    auto logits_m = forward_sh_rgb(sh_coeffs_m, h_xyz_c);
+
+    double loss_p = compute_loss(logits_p);
+    double loss_m = compute_loss(logits_m);
+
+    float numerical_grad = (loss_p - loss_m) / (2.0f * h);
+    ASSERT_NEAR(h_sh_grad_in[i], numerical_grad, 1e-4);
+  }
+
+  CUDA_CHECK(cudaFree(d_xyz_c));
+  CUDA_CHECK(cudaFree(d_rgb_grad_out));
+  CUDA_CHECK(cudaFree(d_sh_grad_in));
 }
 
 int main(int argc, char **argv) {
