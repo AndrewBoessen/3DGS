@@ -565,6 +565,221 @@ TEST_F(CudaBackwardKernelTest, SphericalHarmonicsBackward) {
   CUDA_CHECK(cudaFree(d_sh_grad_in));
 }
 
+// Test for render_image_backward
+TEST_F(CudaBackwardKernelTest, RenderBackward) {
+  const int image_width = 32, image_height = 32;
+  const int N = 2; // Number of Gaussians
+  const float h = 1e-4f;
+
+  // Host data
+  std::vector<float> h_uvs = {8.0f, 8.0f,    // Gaussian 1
+                              24.0f, 24.0f}; // Gaussian 2
+  std::vector<float> h_opacity = {1.0f, 1.0f};
+  std::vector<float> h_conic = {8.0f, 0.0f, 8.0f,  // Gaussian 1
+                                8.0f, 0.0f, 8.0f}; // Gaussian 2
+  std::vector<float> h_rgb = {0.5f, 0.5f, 0.5f,    // Gaussian 1
+                              0.5f, 0.5f, 0.5f};   // Gaussian 2
+  std::vector<float> h_background_rgb = {0.5f, 0.5f, 0.5f};
+  std::vector<float> h_grad_image(image_width * image_height * 3);
+  for (size_t i = 0; i < h_grad_image.size(); ++i)
+    h_grad_image[i] = (i % 7) * 0.1f - 0.3f;
+
+  // Data that is computed during the forward pass
+  std::vector<int> h_sorted_splats = {0, 1};       // Simple case: splats are already sorted
+  std::vector<int> h_splat_range_by_tile = {0, 2}; // One tile containing both splats
+  std::vector<int> h_num_splats_per_pixel(image_width * image_height);
+  std::vector<float> h_final_weight_per_pixel(image_width * image_height);
+
+  // CPU forward pass to generate required inputs for backward pass
+  auto forward_render = [&](const std::vector<float> &uvs, const std::vector<float> &opacity,
+                            const std::vector<float> &conic, const std::vector<float> &rgb,
+                            std::vector<int> &num_splats_per_pixel, std::vector<float> &final_weight_per_pixel) {
+    std::vector<float> image(image_width * image_height * 3);
+    for (int v_splat = 0; v_splat < image_height; ++v_splat) {
+      for (int u_splat = 0; u_splat < image_width; ++u_splat) {
+        float T = 1.0f;
+        int splat_count = 0;
+        float pixel_rgb[3] = {0.0f, 0.0f, 0.0f};
+
+        for (int i = 0; i < N; ++i) {
+          const float u_mean = uvs[i * 2 + 0];
+          const float v_mean = uvs[i * 2 + 1];
+          const float u_diff = (float)u_splat - u_mean;
+          const float v_diff = (float)v_splat - v_mean;
+
+          const float a = conic[i * 3 + 0] + 0.25f;
+          const float b = conic[i * 3 + 1] + 0.5f;
+          const float c = conic[i * 3 + 2] + 0.25f;
+
+          const float det = a * c - b * b;
+          const float reciprocal_det = 1.0f / det;
+          const float mh_sq = (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff) * reciprocal_det;
+
+          float norm_prob = 0.0f;
+          if (mh_sq > 0.0f) {
+            norm_prob = std::exp(-0.5f * mh_sq);
+          } else {
+            continue; // Skip splats with no contribution
+          }
+
+          splat_count++;
+          float alpha = std::min(0.9999f, opacity[i] * norm_prob);
+
+          pixel_rgb[0] += rgb[i * 3 + 0] * alpha * T;
+          pixel_rgb[1] += rgb[i * 3 + 1] * alpha * T;
+          pixel_rgb[2] += rgb[i * 3 + 2] * alpha * T;
+
+          T *= (1.0f - alpha);
+        }
+
+        int pixel_idx = v_splat * image_width + u_splat;
+        image[pixel_idx * 3 + 0] = pixel_rgb[0] + T * h_background_rgb[0];
+        image[pixel_idx * 3 + 1] = pixel_rgb[1] + T * h_background_rgb[1];
+        image[pixel_idx * 3 + 2] = pixel_rgb[2] + T * h_background_rgb[2];
+
+        num_splats_per_pixel[pixel_idx] = splat_count;
+        final_weight_per_pixel[pixel_idx] = T;
+      }
+    }
+    return image;
+  };
+
+  forward_render(h_uvs, h_opacity, h_conic, h_rgb, h_num_splats_per_pixel, h_final_weight_per_pixel);
+
+  // Device data
+  auto d_uvs = device_alloc<float>(N * 2);
+  auto d_opacity = device_alloc<float>(N);
+  auto d_conic = device_alloc<float>(N * 3);
+  auto d_rgb = device_alloc<float>(N * 3);
+  auto d_background_rgb = device_alloc<float>(3);
+  auto d_sorted_splats = device_alloc<int>(N);
+  auto d_splat_range_by_tile = device_alloc<int>(2);
+  auto d_num_splats_per_pixel = device_alloc<int>(image_width * image_height);
+  auto d_final_weight_per_pixel = device_alloc<float>(image_width * image_height);
+  auto d_grad_image = device_alloc<float>(image_width * image_height * 3);
+
+  auto d_grad_uv = device_alloc<float>(N * 2);
+  auto d_grad_opacity = device_alloc<float>(N);
+  auto d_grad_conic = device_alloc<float>(N * 3);
+  auto d_grad_rgb = device_alloc<float>(N * 3);
+
+  // Copy data to device
+  CUDA_CHECK(cudaMemcpy(d_uvs, h_uvs.data(), h_uvs.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_opacity, h_opacity.data(), h_opacity.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_conic, h_conic.data(), h_conic.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_rgb, h_rgb.data(), h_rgb.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_background_rgb, h_background_rgb.data(), h_background_rgb.size() * sizeof(float),
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_sorted_splats, h_sorted_splats.data(), h_sorted_splats.size() * sizeof(int),
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_splat_range_by_tile, h_splat_range_by_tile.data(), h_splat_range_by_tile.size() * sizeof(int),
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_num_splats_per_pixel, h_num_splats_per_pixel.data(),
+                        h_num_splats_per_pixel.size() * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_final_weight_per_pixel, h_final_weight_per_pixel.data(),
+                        h_final_weight_per_pixel.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(
+      cudaMemcpy(d_grad_image, h_grad_image.data(), h_grad_image.size() * sizeof(float), cudaMemcpyHostToDevice));
+
+  // Zero out gradient buffers
+  CUDA_CHECK(cudaMemset(d_grad_uv, 0, N * 2 * sizeof(float)));
+  CUDA_CHECK(cudaMemset(d_grad_opacity, 0, N * sizeof(float)));
+  CUDA_CHECK(cudaMemset(d_grad_conic, 0, N * 3 * sizeof(float)));
+  CUDA_CHECK(cudaMemset(d_grad_rgb, 0, N * 3 * sizeof(float)));
+
+  // Run kernel
+  render_image_backward(d_uvs, d_opacity, d_conic, d_rgb, d_background_rgb, d_sorted_splats, d_splat_range_by_tile,
+                        d_num_splats_per_pixel, d_final_weight_per_pixel, d_grad_image, image_width, image_height,
+                        d_grad_rgb, d_grad_opacity, d_grad_uv, d_grad_conic, 0);
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  // Copy results back
+  std::vector<float> h_grad_uv(N * 2), h_grad_opacity(N), h_grad_conic(N * 3), h_grad_rgb(N * 3);
+  CUDA_CHECK(cudaMemcpy(h_grad_uv.data(), d_grad_uv, h_grad_uv.size() * sizeof(float), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(
+      cudaMemcpy(h_grad_opacity.data(), d_grad_opacity, h_grad_opacity.size() * sizeof(float), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(
+      cudaMemcpy(h_grad_conic.data(), d_grad_conic, h_grad_conic.size() * sizeof(float), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_grad_rgb.data(), d_grad_rgb, h_grad_rgb.size() * sizeof(float), cudaMemcpyDeviceToHost));
+
+  // Numerical gradient check
+  auto compute_loss = [&](const std::vector<float> &image) {
+    double loss = 0.0;
+    for (size_t i = 0; i < image.size(); ++i) {
+      loss += (double)image[i] * h_grad_image[i];
+    }
+    return loss;
+  };
+
+  // Gradients for uvs
+  for (int i = 0; i < N * 2; ++i) {
+    std::vector<float> uvs_p = h_uvs, uvs_m = h_uvs;
+    uvs_p[i] += h;
+    uvs_m[i] -= h;
+    auto image_p = forward_render(uvs_p, h_opacity, h_conic, h_rgb, h_num_splats_per_pixel, h_final_weight_per_pixel);
+    auto image_m = forward_render(uvs_m, h_opacity, h_conic, h_rgb, h_num_splats_per_pixel, h_final_weight_per_pixel);
+    double loss_p = compute_loss(image_p);
+    double loss_m = compute_loss(image_m);
+    float num_grad = (loss_p - loss_m) / (2.0f * h);
+    EXPECT_NEAR(h_grad_uv[i], num_grad, 1e-3);
+  }
+
+  // Gradients for opacity
+  for (int i = 0; i < N; ++i) {
+    std::vector<float> opacity_p = h_opacity, opacity_m = h_opacity;
+    opacity_p[i] += h;
+    opacity_m[i] -= h;
+    auto image_p = forward_render(h_uvs, opacity_p, h_conic, h_rgb, h_num_splats_per_pixel, h_final_weight_per_pixel);
+    auto image_m = forward_render(h_uvs, opacity_m, h_conic, h_rgb, h_num_splats_per_pixel, h_final_weight_per_pixel);
+    double loss_p = compute_loss(image_p);
+    double loss_m = compute_loss(image_m);
+    float num_grad = (loss_p - loss_m) / (2.0f * h);
+    EXPECT_NEAR(h_grad_opacity[i], num_grad, 1e-3);
+  }
+
+  // Gradients for conic
+  for (int i = 0; i < N * 3; ++i) {
+    std::vector<float> conic_p = h_conic, conic_m = h_conic;
+    conic_p[i] += h;
+    conic_m[i] -= h;
+    auto image_p = forward_render(h_uvs, h_opacity, conic_p, h_rgb, h_num_splats_per_pixel, h_final_weight_per_pixel);
+    auto image_m = forward_render(h_uvs, h_opacity, conic_m, h_rgb, h_num_splats_per_pixel, h_final_weight_per_pixel);
+    double loss_p = compute_loss(image_p);
+    double loss_m = compute_loss(image_m);
+    float num_grad = (loss_p - loss_m) / (2.0f * h);
+    EXPECT_NEAR(h_grad_conic[i], num_grad, 1e-3);
+  }
+
+  // Gradients for rgb
+  for (int i = 0; i < N * 3; ++i) {
+    std::vector<float> rgb_p = h_rgb, rgb_m = h_rgb;
+    rgb_p[i] += h;
+    rgb_m[i] -= h;
+    auto image_p = forward_render(h_uvs, h_opacity, h_conic, rgb_p, h_num_splats_per_pixel, h_final_weight_per_pixel);
+    auto image_m = forward_render(h_uvs, h_opacity, h_conic, rgb_m, h_num_splats_per_pixel, h_final_weight_per_pixel);
+    double loss_p = compute_loss(image_p);
+    double loss_m = compute_loss(image_m);
+    float num_grad = (loss_p - loss_m) / (2.0f * h);
+    EXPECT_NEAR(h_grad_rgb[i], num_grad, 1e-0);
+  }
+
+  // Cleanup
+  CUDA_CHECK(cudaFree(d_uvs));
+  CUDA_CHECK(cudaFree(d_opacity));
+  CUDA_CHECK(cudaFree(d_conic));
+  CUDA_CHECK(cudaFree(d_rgb));
+  CUDA_CHECK(cudaFree(d_background_rgb));
+  CUDA_CHECK(cudaFree(d_sorted_splats));
+  CUDA_CHECK(cudaFree(d_splat_range_by_tile));
+  CUDA_CHECK(cudaFree(d_num_splats_per_pixel));
+  CUDA_CHECK(cudaFree(d_final_weight_per_pixel));
+  CUDA_CHECK(cudaFree(d_grad_image));
+  CUDA_CHECK(cudaFree(d_grad_uv));
+  CUDA_CHECK(cudaFree(d_grad_opacity));
+  CUDA_CHECK(cudaFree(d_grad_conic));
+  CUDA_CHECK(cudaFree(d_grad_rgb));
+}
+
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

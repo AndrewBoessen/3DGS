@@ -92,3 +92,30 @@ void compute_sigma_backward(const float *const quaternion, const float *const sc
  */
 void precompute_spherical_harmonics_backward(const float *const xyz_c, const float *const rgb_grad_out, const int l_max,
                                              const int N, float *sh_grad_in, cudaStream_t stream = 0);
+
+/**
+ * @brief Launch the CUDA kernel to compute rendering gradients.
+ * @param[in]  uvs                     Device pointer to 2D projected means.
+ * @param[in]  opacity                 Device pointer to opacities.
+ * @param[in]  conic                   Device pointer to 2D conic matrices.
+ * @param[in]  rgb                     Device pointer to SH coefficients.
+ * @param[in]  background_rgb          Device pointer to background color.
+ * @param[in]  sorted_splats           Device pointer to sorted splat indices.
+ * @param[in]  splat_range_by_tile     Device pointer to the start/end splat index for each tile.
+ * @param[in]  num_splats_per_pixel    Device pointer to the number of splats affecting each pixel.
+ * @param[in]  final_weight_per_pixel  Device pointer to the final alpha weight from the forward pass.
+ * @param[in]  grad_image              Device pointer to the upstream gradients from the rendered image.
+ * @param[in]  image_width             Width of the image in pixels.
+ * @param[in]  image_height            Height of the image in pixels.
+ * @param[out] grad_rgb                Device pointer for storing SH coefficient gradients.
+ * @param[out] grad_opacity            Device pointer for storing opacity gradients.
+ * @param[out] grad_uv                 Device pointer for storing 2D mean gradients.
+ * @param[out] grad_conic              Device pointer for storing 2D conic gradients.
+ * @param[in]  stream                  The CUDA stream for execution.
+ */
+void render_image_backward(const float *const uvs, const float *const opacity, const float *const conic,
+                           const float *const rgb, const float *const background_rgb, const int *const sorted_splats,
+                           const int *const splat_range_by_tile, const int *const num_splats_per_pixel,
+                           const float *const final_weight_per_pixel, const float *const grad_image,
+                           const int image_width, const int image_height, float *grad_rgb, float *grad_opacity,
+                           float *grad_uv, float *grad_conic, cudaStream_t stream = 0);
