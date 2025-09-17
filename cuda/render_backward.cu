@@ -77,10 +77,10 @@ __global__ void render_tiles_backward_kernel(
       _uvs[i * 2 + 1] = uvs[gaussian_idx * 2 + 1];
       _opacity[i] = opacity[gaussian_idx];
 
-#pragma unroll
+      #pragma unroll
       for (int j = 0; j < 3; j++)
         _rgb[i * 3 + j] = rgb[gaussian_idx * 3 + j];
-#pragma unroll
+      #pragma unroll
       for (int j = 0; j < 3; j++)
         _conic[i * 3 + j] = conic[gaussian_idx * 3 + j];
     }
@@ -101,9 +101,9 @@ __global__ void render_tiles_backward_kernel(
         const float u_diff = float(u_splat) - u_mean;
         const float v_diff = float(v_splat) - v_mean;
 
-        float a = _conic[i * 3 + 0] + 0.25f;
-        const float b = _conic[i * 3 + 1];
-        float c = _conic[i * 3 + 2] + 0.25f;
+        const float a = _conic[i * 3 + 0] + 0.25f;
+        const float b = _conic[i * 3 + 1] + 0.5f;
+        const float c = _conic[i * 3 + 2] + 0.25f;
 
         const float det = a * c - b * b;
         const float reciprocal_det = 1.0f / det;
@@ -119,7 +119,7 @@ __global__ void render_tiles_backward_kernel(
         if (!background_initialized) {
           const float background_weight = 1.0 - (alpha * weight + 1.0 - weight);
           if (background_weight > 0.001) {
-#pragma unroll
+            #pragma unroll
             for (int channel = 0; channel < 3; channel++) {
               color_accum[channel] += background_rgb[channel] * background_weight;
             }
@@ -133,13 +133,13 @@ __global__ void render_tiles_backward_kernel(
           weight *= reciprocal_one_minus_alpha;
         }
 
-#pragma unroll
+        #pragma unroll
         for (int channel = 0; channel < 3; channel++) {
           grad_rgb_local[channel] = alpha * weight * grad_image_local[channel];
         }
 
         float grad_alpha = 0.0f;
-#pragma unroll
+        #pragma unroll
         for (int channel = 0; channel < 3; channel++) {
           grad_alpha +=
               (_rgb[channel] * weight - color_accum[channel] * reciprocal_one_minus_alpha) * grad_image_local[channel];
@@ -149,15 +149,16 @@ __global__ void render_tiles_backward_kernel(
         float grad_prob = _opacity[i] * grad_alpha;
         float grad_mh_sq = -0.5f * norm_prob * grad_prob;
 
-        grad_u = -(2.0f * c * u_diff - 2.0f * b * v_diff) * reciprocal_det * grad_mh_sq;
-        grad_v = -(2.0f * a * v_diff - 2.0f * b * u_diff) * reciprocal_det * grad_mh_sq;
+        grad_u = -(-b * v_diff + 2.0f * c * u_diff) * reciprocal_det * grad_mh_sq;
+        grad_v = -(2.0f * a * v_diff - b * u_diff - b * u_diff) * reciprocal_det * grad_mh_sq;
 
-        const float common_frac = -mh_sq * reciprocal_det * grad_mh_sq;
-        grad_conic_splat[0] = (v_diff * v_diff * reciprocal_det - c * common_frac) * grad_mh_sq;
-        grad_conic_splat[1] = (-2.0f * u_diff * v_diff * reciprocal_det + 2.0f * b * common_frac) * grad_mh_sq;
-        grad_conic_splat[2] = (u_diff * u_diff * reciprocal_det - a * common_frac) * grad_mh_sq;
-
-#pragma unroll
+        const float common_frac =
+            (a * v_diff * v_diff - b * u_diff * v_diff - b * u_diff * v_diff + c * u_diff * u_diff) * reciprocal_det *
+            reciprocal_det;
+        grad_conic_splat[0] = (-c * common_frac + v_diff * v_diff * reciprocal_det) * grad_mh_sq;
+        grad_conic_splat[1] = (b * common_frac - u_diff * v_diff * reciprocal_det) * grad_mh_sq;
+        grad_conic_splat[2] = (-a * common_frac + u_diff * u_diff * reciprocal_det) * grad_mh_sq;
+        #pragma unroll
         for (int channel = 0; channel < 3; channel++) {
           color_accum[channel] += _rgb[channel] * alpha * weight;
         }
@@ -168,24 +169,24 @@ __global__ void render_tiles_backward_kernel(
       grad_u = warpReduceSum(grad_u);
       grad_v = warpReduceSum(grad_v);
 
-#pragma unroll
+      #pragma unroll
       for (int j = 0; j < 3; j++)
         grad_conic_splat[j] = warpReduceSum(grad_conic_splat[j]);
 
-#pragma unroll
+      #pragma unroll
       for (int j = 0; j < 3; j++)
         grad_rgb_local[j] = warpReduceSum(grad_rgb_local[j]);
 
       // Lane 0 of the warp performs the atomic write
       if (lane_id == 0) {
         const int gaussian_idx = _gaussian_idx_by_splat_idx[i];
-#pragma unroll
+        #pragma unroll
         for (int j = 0; j < 3; j++)
           atomicAdd(grad_rgb + gaussian_idx * 3 + j, grad_rgb_local[j]);
         atomicAdd(grad_opacity + gaussian_idx, grad_opa);
         atomicAdd(grad_uv + gaussian_idx * 2 + 0, grad_u);
         atomicAdd(grad_uv + gaussian_idx * 2 + 1, grad_v);
-#pragma unroll
+        #pragma unroll
         for (int j = 0; j < 3; j++)
           atomicAdd(grad_conic + gaussian_idx * 3 + j, grad_conic_splat[j]);
       }

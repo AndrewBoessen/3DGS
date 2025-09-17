@@ -574,11 +574,11 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
   // Host data
   std::vector<float> h_uvs = {0.4f, 0.4f,  // Gaussian 1
                               1.6f, 1.6f}; // Gaussian 2
-  std::vector<float> h_opacity = {0.8f, 0.7f};
-  std::vector<float> h_conic = {1.0f, 0.1f,  1.0f,  // Gaussian 1
-                                2.0f, -0.1f, 2.0f}; // Gaussian 2
-  std::vector<float> h_rgb = {0.1f, 0.2f, 0.8f,     // Gaussian 1
-                              0.9f, 0.1f, 0.2f};    // Gaussian 2
+  std::vector<float> h_opacity = {0.8f, 0.8f};
+  std::vector<float> h_conic = {0.5f, 0.1f,  0.5f,  // Gaussian 1
+                                1.0f, -0.1f, 1.0f}; // Gaussian 2
+  std::vector<float> h_rgb = {0.5f, 0.0f, 1.0f,     // Gaussian 1
+                              1.0f, 0.0f, 0.0f};    // Gaussian 2
   std::vector<float> h_background_rgb = {0.1f, 0.1f, 0.1f};
   std::vector<float> h_grad_image(image_width * image_height * 3);
   for (size_t i = 0; i < h_grad_image.size(); ++i)
@@ -608,7 +608,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
           const float v_diff = (float)v_splat - v_mean;
 
           const float a = conic[i * 3 + 0] + 0.25f;
-          const float b = conic[i * 3 + 1];
+          const float b = conic[i * 3 + 1] + 0.5f;
           const float c = conic[i * 3 + 2] + 0.25f;
 
           const float det = a * c - b * b;
