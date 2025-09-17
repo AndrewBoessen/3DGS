@@ -93,6 +93,7 @@ __global__ void render_tiles_backward_kernel(
       const int tile_splat_idx = chunk_idx * CHUNK_SIZE + i;
 
       float grad_opa = 0.0f, grad_u = 0.0f, grad_v = 0.0f;
+      float grad_rgb[3] = {0.0f, 0.0f, 0.0f};
       float grad_conic_splat[3] = {0.0f, 0.0f, 0.0f};
 
       if (valid_pixel && tile_splat_idx < num_splats_this_pixel) {
@@ -101,7 +102,6 @@ __global__ void render_tiles_backward_kernel(
         const float u_diff = float(u_splat) - u_mean;
         const float v_diff = float(v_splat) - v_mean;
 
-        // Always use fast_exp adjustments
         float a = _conic[i * 3 + 0] + 0.25f;
         const float b = _conic[i * 3 + 1];
         float c = _conic[i * 3 + 2] + 0.25f;
@@ -123,10 +123,9 @@ __global__ void render_tiles_backward_kernel(
           weight *= reciprocal_one_minus_alpha;
         }
 
-        float grad_rgb_local[3];
 #pragma unroll
         for (int channel = 0; channel < 3; channel++) {
-          grad_rgb_local[channel] = alpha * weight * grad_image_local[channel];
+          grad_rgb[channel] = alpha * weight * grad_image_local[channel];
         }
 
         float grad_alpha = 0.0f;
@@ -163,12 +162,16 @@ __global__ void render_tiles_backward_kernel(
       for (int j = 0; j < 3; j++)
         grad_conic_splat[j] = warpReduceSum(grad_conic_splat[j]);
 
+#pragma unroll
+      for (int j = 0; j < 3; j++)
+        grad_rgb[j] = warpReduceSum(grad_rgb[j]);
+
       // Lane 0 of the warp performs the atomic write
       if (lane_id == 0) {
         const int gaussian_idx = _gaussian_idx_by_splat_idx[i];
 #pragma unroll
         for (int j = 0; j < 3; j++)
-          atomicAdd(grad_rgb + gaussian_idx * 3 + j, grad_sh[j]);
+          atomicAdd(grad_rgb + gaussian_idx * 3 + j, grad_rgb[j]);
         atomicAdd(grad_opacity + gaussian_idx, grad_opa);
         atomicAdd(grad_uv + gaussian_idx * 2 + 0, grad_u);
         atomicAdd(grad_uv + gaussian_idx * 2 + 1, grad_v);
