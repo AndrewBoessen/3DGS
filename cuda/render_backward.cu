@@ -35,6 +35,7 @@ __global__ void render_tiles_backward_kernel(
   int num_splats_this_tile = splat_idx_end - splat_idx_start;
 
   // Per-pixel variables stored in registers
+  bool background_initialized = false;
   int num_splats_this_pixel;
   float weight;
   float grad_image_local[3];
@@ -114,6 +115,17 @@ __global__ void render_tiles_backward_kernel(
         }
 
         float alpha = min(0.9999f, _opacity[i] * norm_prob);
+
+        if (!background_initialized) {
+          const float background_weight = 1.0 - (alpha * weight + 1.0 - weight);
+          if (background_weight > 0.001) {
+#pragma unroll
+            for (int channel = 0; channel < 3; channel++) {
+              color_accum[channel] += background_rgb[channel] * background_weight;
+            }
+          }
+          background_initialized = true;
+        }
 
         // No need for the lower alpha bound check with fast_exp
         const float reciprocal_one_minus_alpha = 1.0f / (1.0f - alpha);
