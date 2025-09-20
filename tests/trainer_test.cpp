@@ -124,30 +124,27 @@ TEST_F(TrainerTest, ResetOpacity) {
   }
 }
 
-// NOTE: The add_sh_band function is currently empty in trainer.cpp. This test
-// is written against a plausible, correct implementation. It will fail until
-// the function is implemented.
 TEST_F(TrainerTest, AddShBand) {
   Gaussians gaussians_no_sh = create_sample_gaussians_for_trainer(5, false);
-  config.max_sh_band = 1;
+  config.max_sh_band = 2;
   Trainer trainer(config, std::move(gaussians_no_sh), {}, {});
-
-  // From no SH to SH band 0
-  trainer.add_sh_band();
-  ASSERT_TRUE(trainer.gaussians.sh.has_value());
-  ASSERT_EQ(trainer.gaussians.sh->size(), 5);
-  // Band 0 has (0+1)^2 = 1 coefficient
-  ASSERT_EQ((*trainer.gaussians.sh)[0].size(), 1);
 
   // From SH band 0 to SH band 1
   trainer.add_sh_band();
   ASSERT_TRUE(trainer.gaussians.sh.has_value());
-  // Band 1 has (1+1)^2 = 4 coefficients
-  ASSERT_EQ((*trainer.gaussians.sh)[0].size(), 4);
+  ASSERT_EQ(trainer.gaussians.sh->size(), 5);
+  // Band 1 has 3 coefficient
+  ASSERT_EQ((*trainer.gaussians.sh)[0].size(), 9);
 
-  // Should not add bands beyond max_sh_band
+  // From SH band 1 to SH band 2
   trainer.add_sh_band();
-  ASSERT_EQ((*trainer.gaussians.sh)[0].size(), 4);
+  ASSERT_TRUE(trainer.gaussians.sh.has_value());
+  // Band 2 has 5 coefficients
+  ASSERT_EQ((*trainer.gaussians.sh)[0].size(), 24);
+
+  // Should not add more
+  trainer.add_sh_band();
+  ASSERT_EQ((*trainer.gaussians.sh)[0].size(), 24);
 }
 
 // NOTE: The clone_gaussians function is not implemented yet in trainer.cpp.
