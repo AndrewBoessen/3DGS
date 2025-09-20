@@ -18,7 +18,7 @@ public:
       : config(std::move(config)), gaussians(std::move(gaussians)), images(std::move(images)),
         cameras(std::move(cameras)), optimizer(config.base_lr) {}
 
-  void test_train_split(const float split);
+  void test_train_split();
 
   void reset_opacity();
 
@@ -44,4 +44,6 @@ private:
   std::vector<Image> train_images;
 
   AdamOptimizer optimizer;
+
+  int iter = 0;
 };
