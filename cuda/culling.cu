@@ -128,7 +128,7 @@ __device__ __forceinline__ int get_write_index(const bool write, const int lane,
   return write ? (base_slot + prefix) : -1;
 }
 
-__device__ __forceinline__ int warpReduceMin(unsigned mask, int val) {
+__device__ __forceinline__ int warp_reduce_min(unsigned mask, int val) {
   for (int offset = 16; offset > 0; offset /= 2) {
     val = min(val, __shfl_down_sync(mask, val, offset));
   }
@@ -136,7 +136,7 @@ __device__ __forceinline__ int warpReduceMin(unsigned mask, int val) {
   return __shfl_sync(mask, val, 0);
 }
 
-__device__ __forceinline__ int warpReduceMax(unsigned mask, int val) {
+__device__ __forceinline__ int warp_reduce_max(unsigned mask, int val) {
   for (int offset = 16; offset > 0; offset /= 2) {
     val = max(val, __shfl_down_sync(mask, val, offset));
   }
@@ -181,10 +181,10 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
   }
 
   // Reduce to find the minimum start_x and maximum end_x in the warp
-  int warp_start_x = warpReduceMin(active_mask, start_tile_x);
-  int warp_end_x = warpReduceMax(active_mask, end_tile_x);
-  int warp_start_y = warpReduceMin(active_mask, start_tile_y);
-  int warp_end_y = warpReduceMax(active_mask, end_tile_y);
+  int warp_start_x = warp_reduce_min(active_mask, start_tile_x);
+  int warp_end_x = warp_reduce_max(active_mask, end_tile_x);
+  int warp_start_y = warp_reduce_min(active_mask, start_tile_y);
+  int warp_end_y = warp_reduce_max(active_mask, end_tile_y);
 
   for (int tile_x = warp_start_x; tile_x < warp_end_x; tile_x++) {
     for (int tile_y = warp_start_y; tile_y < warp_end_y; tile_y++) {
@@ -240,14 +240,6 @@ __global__ void find_tile_boundaries_kernel(const double *__restrict__ sorted_ke
   }
 }
 
-__device__ __forceinline__ float warp_reduce_max(float val) {
-  // Iteratively exchange values with threads at a decreasing offset.
-  for (int offset = 16; offset > 0; offset /= 2) {
-    val = fmaxf(val, __shfl_down_sync(0xffffffff, val, offset));
-  }
-  return val;
-}
-
 __global__ void max_reduce_strided_kernel(const float *input, float *output, int n, int stride) {
   // Shared memory to store the max value from each warp in the block.
   extern __shared__ float sdata[];
@@ -259,7 +251,7 @@ __global__ void max_reduce_strided_kernel(const float *input, float *output, int
   float my_val = (i < n) ? input[i * stride] : -CUDART_INF_F;
 
   // 2. Perform reduction at the warp level.
-  float warp_max = warp_reduce_max(my_val);
+  float warp_max = warp_reduce_max(0xFFFFFFFF, my_val);
 
   // 3. Lane 0 of each warp writes its warp's max to shared memory.
   if ((tid % 32) == 0) {
@@ -274,7 +266,7 @@ __global__ void max_reduce_strided_kernel(const float *input, float *output, int
   float block_max;
   if (tid < 32) {
     // block max will now be in first thread
-    block_max = warp_reduce_max(final_val);
+    block_max = warp_reduce_max(0xFFFFFFFF, final_val);
   }
   // store block max to output
   if (tid == 0) {

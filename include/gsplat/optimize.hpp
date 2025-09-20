@@ -1,6 +1,8 @@
+// optimize.hpp
+
 #pragma once
 
-#include "gsplat/gaussian.hpp" // Assumes the provided gaussian.hpp is in this path
+#include "gsplat/gaussian.hpp"
 #include <Eigen/Dense>
 #include <vector>
 

@@ -1,3 +1,5 @@
+// optimize.cpp
+
 #include "gsplat/optimize.hpp"
 #include <cassert>
 #include <cmath>
