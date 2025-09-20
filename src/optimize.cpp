@@ -1,3 +1,5 @@
+// optimize.cpp
+
 #include "gsplat/optimize.hpp"
 #include <cassert>
 #include <cmath>
@@ -178,4 +180,29 @@ void AdamOptimizer::append_states(size_t n) {
     state_.m_sh->insert(state_.m_sh->end(), n, Eigen::VectorXf::Zero(sh_dim));
     state_.v_sh->insert(state_.v_sh->end(), n, Eigen::VectorXf::Zero(sh_dim));
   }
+}
+
+void AdamOptimizer::upgrade_sh_states(size_t num_gaussians, size_t new_sh_coeffs_count) {
+  // Helper lambda to resize and update a single state vector
+  auto upgrade_vector = [&](std::optional<std::vector<Eigen::VectorXf>> &vec) {
+    if (!vec.has_value()) {
+      // Initialize the state vector for the first time
+      vec.emplace(num_gaussians, Eigen::VectorXf::Zero(new_sh_coeffs_count));
+    } else {
+      // Upgrade existing state vector
+      auto &state_vec = vec.value();
+      if (state_vec.empty() || state_vec[0].size() >= new_sh_coeffs_count) {
+        return; // No upgrade needed or invalid state
+      }
+      size_t old_sh_coeffs_count = state_vec[0].size();
+      for (auto &v : state_vec) {
+        v.conservativeResize(new_sh_coeffs_count);
+        v.tail(new_sh_coeffs_count - old_sh_coeffs_count).setZero();
+      }
+    }
+  };
+
+  // Upgrade both the first (m) and second (v) moment vectors for SH
+  upgrade_vector(state_.m_sh);
+  upgrade_vector(state_.v_sh);
 }

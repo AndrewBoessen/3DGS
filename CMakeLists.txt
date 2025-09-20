@@ -9,7 +9,7 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 # Find the Eigen3 library
-find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+find_package(Eigen3 REQUIRED NO_MODULE)
 # Find YAML library
 find_package(yaml-cpp REQUIRED)
 # Find CUDA Toolkit and its libraries (cuBLAS, etc.)
@@ -27,20 +27,19 @@ add_library(dataloader src/colmap.cpp)
 target_include_directories(dataloader
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    ${EIGEN3_INCLUDE_DIR}
 )
+target_link_libraries(dataloader PUBLIC Eigen3::Eigen)
 
 # ===================================================================
 # GSPLAT LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat src/utils.cpp src/gaussian.cpp src/raster.cpp src/optimize.cpp)
+add_library(gsplat src/utils.cpp src/gaussian.cpp src/raster.cpp src/optimize.cpp src/trainer.cpp)
 
 target_include_directories(gsplat
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    ${EIGEN3_INCLUDE_DIR}
 )
-target_link_libraries(gsplat PUBLIC yaml-cpp)
+target_link_libraries(gsplat PUBLIC yaml-cpp Eigen3::Eigen)
 
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION

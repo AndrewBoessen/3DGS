@@ -1,6 +1,8 @@
+// optimize.hpp
+
 #pragma once
 
-#include "gsplat/gaussian.hpp" // Assumes the provided gaussian.hpp is in this path
+#include "gsplat/gaussian.hpp"
 #include <Eigen/Dense>
 #include <vector>
 
@@ -48,7 +50,6 @@ public:
 
   /**
    * @brief Filters the optimizer's state (m and v vectors) using a boolean mask.
-   *
    * This method **must** be called after filtering the main Gaussians object to
    * ensure the optimizer's state remains synchronized with the parameters.
    * @param mask A boolean vector where `true` indicates an element to keep.
@@ -57,12 +58,18 @@ public:
 
   /**
    * @brief Appends zero-initialized states for a number of new Gaussians.
-   *
    * This method **must** be called after new Gaussians are appended (densified)
    * to initialize their corresponding optimizer states.
    * @param n The number of new Gaussians that were added.
    */
   void append_states(size_t n);
+
+  /**
+   * @brief Upgrades the spherical harmonics states to a new degree.
+   * @param num_gaussians The total number of Gaussians.
+   * @param new_sh_coeffs_count The new total number of SH coefficients per Gaussian.
+   */
+  void upgrade_sh_states(size_t num_gaussians, size_t new_sh_coeffs_count);
 
 private:
   // Hyperparameters

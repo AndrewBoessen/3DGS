@@ -228,6 +228,45 @@ TEST_F(AdamOptimizerTest, DynamicTrainingSimulation) {
   ASSERT_NO_THROW(optimizer.step(params, grads));
 }
 
+TEST_F(AdamOptimizerTest, UpgradeSHStates) {
+  // 1. Initial state: Create and step with Gaussians that have NO SH coefficients.
+  // This initializes the optimizer's states for all other parameters.
+  size_t num_gaussians = 3;
+  params = create_test_gaussians(num_gaussians, -1); // -1 indicates no SH
+  grads = create_test_gradients(params);
+  optimizer.step(params, grads);
+
+  // 2. Test Initialization: Upgrade from no SH to SH band 1.
+  // Band 1 has (1+1)^2 - 1 = 3 coefficients per color channel.
+  const size_t band_1_total_coeffs = 3 * 3;
+
+  // Call the function under test to initialize the optimizer's SH states.
+  optimizer.upgrade_sh_states(num_gaussians, band_1_total_coeffs);
+
+  // Create new Gaussians and Gradients that now include SH data.
+  Gaussians params_sh1 = create_test_gaussians(num_gaussians, -1);
+  params_sh1.sh.emplace(num_gaussians, Eigen::VectorXf::Random(band_1_total_coeffs));
+  Gradients grads_sh1 = create_test_gradients(params_sh1);
+
+  // A subsequent step should succeed without throwing an error.
+  ASSERT_NO_THROW(optimizer.step(params_sh1, grads_sh1));
+
+  // 3. Test Upgrading: Upgrade from SH band 1 to SH band 2.
+  // Band 2 has (2+1)^2 - 1 = 8 coefficients per color channel.
+  const size_t band_2_total_coeffs = 8 * 3;
+
+  // Call the function under test again to upgrade the existing SH states.
+  optimizer.upgrade_sh_states(num_gaussians, band_2_total_coeffs);
+
+  // Create new Gaussians and Gradients with the higher-degree SH data.
+  Gaussians params_sh2 = create_test_gaussians(num_gaussians, -1);
+  params_sh2.sh.emplace(num_gaussians, Eigen::VectorXf::Random(band_2_total_coeffs));
+  Gradients grads_sh2 = create_test_gradients(params_sh2);
+
+  // This step should also succeed, confirming the states were resized correctly.
+  ASSERT_NO_THROW(optimizer.step(params_sh2, grads_sh2));
+}
+
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
