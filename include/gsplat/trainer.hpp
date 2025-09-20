@@ -6,6 +6,7 @@
 #include "gsplat/gaussian.hpp"
 #include "gsplat/optimize.hpp"
 #include "gsplat/utils.hpp"
+#include <Eigen/Dense>
 #include <unordered_map>
 #include <vector>
 
@@ -24,12 +25,6 @@ public:
 
   void add_sh_band();
 
-  void filter_gaussians(const std::vector<bool> &mask);
-
-  void clone_gaussians(const std::vector<bool> &clone_mask);
-
-  void split_gaussians(const std::vector<bool> &split_mask);
-
   void adaptive_density();
 
   void train();
@@ -46,4 +41,8 @@ private:
   AdamOptimizer optimizer;
 
   int iter = 0;
+
+  void split_gaussians(const std::vector<bool> &split_mask);
+
+  void clone_gaussians(const std::vector<bool> &clone_mask);
 };

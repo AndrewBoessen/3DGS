@@ -98,3 +98,6 @@ add_gtest_executable(cuda_backward_tests tests/cuda_backward_test.cpp gsplat_cud
 
 # --- Optimizer Tests ---
 add_gtest_executable(optimizer_tests tests/optimize_test.cpp gsplat)
+
+# --- Trainer Tests ---
+add_gtest_executable(trainer_tests tests/trainer_test.cpp gsplat)

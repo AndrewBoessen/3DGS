@@ -1,6 +1,7 @@
 // trainer.cpp
 
 #include "gsplat/trainer.hpp"
+#include "gsplat/gaussian.hpp"
 #include <cmath>
 
 void Trainer::test_train_split() {
@@ -27,13 +28,10 @@ void Trainer::test_train_split() {
   // Handle edge cases for the split ratio
   if (split <= 0) {
     train_images = all_images;
-  } else if (split >= 1) {
-    test_images = all_images;
   } else {
     // Use the "every N-th image" strategy for a representative split
-    int step = static_cast<int>(std::round(1.0f / split));
     for (size_t i = 0; i < all_images.size(); ++i) {
-      if (i % step == 0) {
+      if (i % split == 0) {
         test_images.push_back(all_images[i]);
       } else {
         train_images.push_back(all_images[i]);
@@ -99,3 +97,97 @@ void Trainer::add_sh_band() {
     }
   }
 }
+
+void Trainer::split_gaussians(const std::vector<bool> &split_mask) {
+  // the number of Guassians to split into
+  const int num_samples = config.num_split_samples;
+
+  std::vector<Eigen::Quaternionf> split_quat;
+  std::vector<Eigen::Vector3f> split_scale;
+  std::vector<float> split_opacity;
+  std::vector<Eigen::Vector3f> split_rgb;
+  std::vector<Eigen::Vector3f> split_xyz;
+  std::vector<Eigen::VectorXf> split_sh;
+
+  assert(split_mask.size() == gaussians.xyz.size());
+
+  // Count how many Gaussians will be split to pre-allocate memory. This is an
+  // optimization that prevents the vectors from having to resize multiple times.
+  const size_t num_to_split = std::count(split_mask.begin(), split_mask.end(), true);
+  const size_t total_samples = num_to_split * num_samples;
+
+  split_quat.reserve(total_samples);
+  split_scale.reserve(total_samples);
+  split_opacity.reserve(total_samples);
+  split_rgb.reserve(total_samples);
+  split_xyz.reserve(total_samples);
+  if (gaussians.sh.has_value()) {
+    split_sh.reserve(total_samples);
+  }
+
+  // Apply mask to Gaussians
+  for (size_t i = 0; i < split_mask.size(); ++i) {
+    if (split_mask[i]) {
+      // duplicate j times
+      for (size_t j = 0; j < num_samples; ++j) {
+        split_xyz.push_back(gaussians.xyz[i]);
+        split_quat.push_back(gaussians.quaternion[i]);
+        split_scale.push_back(gaussians.scale[i]);
+        split_opacity.push_back(gaussians.opacity[i]);
+        split_rgb.push_back(gaussians.rgb[i]);
+
+        // Copy spherical harmonics coefficients if they are being used.
+        if (gaussians.sh.has_value()) {
+          split_sh.push_back(gaussians.sh.value()[i]);
+        }
+      }
+    }
+  }
+
+  // Sample from Gaussians
+  Eigen::Array<float, 3, Eigen::Dynamic> random_samples =
+      (Eigen::Array<float, 3, Eigen::Dynamic>::Random(3, total_samples) + 1.0f) * 0.5f;
+  // hack to remove 0.0 from samples
+  auto is_zero_mask = (random_samples == 0.0f);
+  random_samples = is_zero_mask.select(1.0f, random_samples);
+
+  // Map std::vectors to Eigen objects for vectorized operations (no copy)
+  Eigen::Map<Eigen::Array<float, 3, Eigen::Dynamic>> split_xyz_map((float *)split_xyz.data(), 3, total_samples);
+  Eigen::Map<Eigen::Array<float, 3, Eigen::Dynamic>> split_scale_map((float *)split_scale.data(), 3, total_samples);
+
+  // Scale the random samples by the exponential of the Gaussian scales
+  // random_samples = random_samples * exp(split_scale)
+  random_samples *= split_scale_map.exp();
+
+  // Rotate the scaled samples
+  for (size_t i = 0; i < total_samples; ++i) {
+    // Normalize the quaternion
+    split_quat[i].normalize();
+    // Apply rotation to the i-th sample
+    random_samples.col(i) = (split_quat[i].toRotationMatrix() * random_samples.col(i).matrix()).array();
+  }
+
+  // Translate the original means by the transformed random samples
+  // split_xyz += random_samples
+  split_xyz_map += random_samples;
+
+  // Update the scales
+  // split_scale = log(exp(split_scale) / config.split_scale_factor)
+  split_scale_map = (split_scale_map.exp() / config.split_scale_factor).log();
+
+  // Remove split Gaussians
+  std::vector<bool> keep_mask;
+  keep_mask.reserve(split_mask.size());
+  std::transform(split_mask.begin(), split_mask.end(), std::back_inserter(keep_mask), std::logical_not<bool>());
+
+  gaussians.filter(keep_mask);
+
+  Gaussians new_gaussians(std::move(split_xyz), std::move(split_rgb), std::move(split_opacity), std::move(split_scale),
+                          std::move(split_quat),
+                          gaussians.sh.has_value() ? std::make_optional(std::move(split_sh)) : std::nullopt);
+  gaussians.append(new_gaussians);
+}
+
+void Trainer::clone_gaussians(const std::vector<bool> &clone_mask) {}
+
+void Trainer::adaptive_density() {}
