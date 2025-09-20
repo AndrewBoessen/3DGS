@@ -186,6 +186,10 @@ void Trainer::split_gaussians(const std::vector<bool> &split_mask) {
                           std::move(split_quat),
                           gaussians.sh.has_value() ? std::make_optional(std::move(split_sh)) : std::nullopt);
   gaussians.append(new_gaussians);
+
+  // Update optimizer state
+  optimizer.filter_states(keep_mask);
+  optimizer.append_states(total_samples);
 }
 
 void Trainer::clone_gaussians(const std::vector<bool> &clone_mask) {}
