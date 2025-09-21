@@ -59,6 +59,14 @@ protected:
     config.initial_opacity = 0.1f;
     config.split_scale_factor = 1.6f;
     config.num_split_samples = 2;
+    config.use_delete = true;
+    config.use_split = true;
+    config.use_clone = true;
+    config.max_gaussians = 100;
+    config.delete_opacity_threshold = 0.01f;
+    config.clone_scale_threshold = 0.05f;
+    config.uv_grad_threshold = 0.0002f;
+    config.scale_norm_percentile = 0.9f;
 
     // Setup 16 images for splitting tests. Names are padded for correct sorting.
     for (int i = 1; i <= 16; ++i) {
@@ -201,4 +209,74 @@ TEST_F(TrainerTest, SplitGaussians) {
   // The logic is: new_scale = log(exp(old_scale) / factor)
   Eigen::Vector3f expected_scale_vec = (original_scale_2.array().exp() / config.split_scale_factor).log();
   ASSERT_TRUE(new_scale.isApprox(expected_scale_vec));
+}
+
+TEST_F(TrainerTest, AdaptiveDensityControl) {
+  // This test covers the combined logic of deletion, cloning, and splitting.
+  // Initial state: 7 Gaussians with specific properties to trigger each action.
+  Gaussians gaussians = create_sample_gaussians_for_trainer(7);
+  Trainer trainer(config, std::move(gaussians), {}, {});
+
+  trainer.optimizer.initialize_states_if_needed(trainer.gaussians);
+
+  // Initialize gradient accumulators
+  trainer.reset_grad_accum();
+
+  // --- Setup Gaussian States ---
+  // G0: Delete (low opacity)
+  trainer.gaussians.opacity[0] = -5.0f; // inverse_sigmoid(0.01) is approx -4.5
+
+  // G1: Delete (not viewed)
+  // grad_accum_dur is already 0 from reset_grad_accum, but we'll set others to be sure
+
+  // G2: Delete (zero grad)
+  trainer.uv_grad_accum[2] = Eigen::Vector2f::Zero();
+  trainer.grad_accum_dur[2] = 1;
+
+  // G3: Clone (high grad, small scale)
+  trainer.uv_grad_accum[3] = Eigen::Vector2f(1.0f, 1.0f);
+  trainer.grad_accum_dur[3] = 1;
+  trainer.gaussians.scale[3] = Eigen::Vector3f(-3.0f, -3.0f, -3.0f); // exp(-3) approx 0.05 < clone_scale_threshold
+
+  // G4: Split (high grad, large scale)
+  trainer.uv_grad_accum[4] = Eigen::Vector2f(1.0f, 1.0f);
+  trainer.grad_accum_dur[4] = 1;
+  trainer.gaussians.scale[4] = Eigen::Vector3f(-1.0f, -1.0f, -1.0f); // exp(-1) approx 0.37 > clone_scale_threshold
+
+  // G5: Split (too big)
+  trainer.uv_grad_accum[5] = Eigen::Vector2f(0.0001f, 0.0001f); // low grad
+  trainer.grad_accum_dur[5] = 1;
+  trainer.gaussians.scale[5] = Eigen::Vector3f(0.0f, 0.0f, 0.0f); // exp(0) = 1.0, very large
+
+  // G6: Keep (low grad, medium scale)
+  trainer.uv_grad_accum[6] = Eigen::Vector2f(0.0001f, 0.0001f);
+  trainer.grad_accum_dur[6] = 1;
+  trainer.gaussians.scale[6] = Eigen::Vector3f(-2.0f, -2.0f, -2.0f);
+
+  // Fill in remaining grad accumulators to be valid
+  // trainer.grad_accum_dur[0] = 1;
+  // trainer.uv_grad_accum[0] = Eigen::Vector2f(0.1f, 0.1f);
+  // trainer.uv_grad_accum[1] = Eigen::Vector2f(0.1f, 0.1f);
+
+  // --- Execute ---
+  trainer.iter = 50;
+  trainer.adaptive_density();
+
+  // --- Assert ---
+  // Initial: 7
+  // Deleted: 3 (G0, G1, G2) -> Remaining: 4
+  // Cloned: 1 (G3 is cloned) -> Total: 4 + 1 = 5
+  // Split: 2 (G4, G5) -> Originals removed, 2*2=4 new ones added -> Total: 5 - 2 + 4 = 7
+  ASSERT_EQ(trainer.gaussians.size(), 7);
+  ASSERT_EQ(trainer.grad_accum_dur.size(), 7);
+  ASSERT_EQ(trainer.uv_grad_accum.size(), 7);
+  ASSERT_EQ(trainer.xyz_grad_accum.size(), 7);
+
+  // Check that gradient accumulators were reset
+  for (const auto &dur : trainer.grad_accum_dur) {
+    ASSERT_EQ(dur, 0);
+  }
+  for (const auto &grad : trainer.uv_grad_accum) {
+    ASSERT_TRUE(grad.isZero());
+  }
 }

@@ -3,7 +3,21 @@
 #include "gsplat/trainer.hpp"
 #include "gsplat/gaussian.hpp"
 #include <cmath>
-#include <stdexcept>
+
+// Helper function to filter a vector based on a boolean mask.
+template <typename T> void filter_vector(std::vector<T> &vec, const std::vector<bool> &keep_mask) {
+  if (vec.empty())
+    return;
+  assert(vec.size() == keep_mask.size());
+  std::vector<T> filtered_vec;
+  filtered_vec.reserve(std::count(keep_mask.begin(), keep_mask.end(), true));
+  for (size_t i = 0; i < vec.size(); ++i) {
+    if (keep_mask[i]) {
+      filtered_vec.push_back(std::move(vec[i]));
+    }
+  }
+  vec = std::move(filtered_vec);
+}
 
 void Trainer::reset_grad_accum() {
   const int size = gaussians.size();
@@ -259,25 +273,153 @@ void Trainer::clone_gaussians(const std::vector<bool> &clone_mask, const std::ve
 }
 
 void Trainer::adaptive_density() {
-  // Get average gradient values
-  assert(xyz_grad_accum.size() == grad_accum_dur.size());
-  assert(uv_grad_accum.size() == grad_accum_dur.size());
+  if (!config.use_delete && !config.use_clone && !config.use_split) {
+    return;
+  }
 
-  std::vector<Eigen::Vector3f> xyz_grad_avg(xyz_grad_accum.size());
-  std::vector<Eigen::Vector2f> uv_grad_avg(uv_grad_accum.size());
+  // --- Step 1: Delete Gaussians ---
+  const float op_threshold = log(config.delete_opacity_threshold) - log(1.0f - config.delete_opacity_threshold);
+  std::vector<bool> keep_mask(gaussians.size());
+  size_t delete_count = 0;
 
-  std::transform(xyz_grad_accum.begin(), xyz_grad_accum.end(), grad_accum_dur.begin(), xyz_grad_avg.begin(),
-                 [](Eigen::Vector3f a, int b) {
-                   if (b == 0) {
-                     throw std::runtime_error("Error: Division by zero in grad avg");
-                   }
-                   return a / b;
-                 });
-  std::transform(uv_grad_accum.begin(), uv_grad_accum.end(), grad_accum_dur.begin(), uv_grad_avg.begin(),
-                 [](Eigen::Vector2f a, float b) {
-                   if (b == 0) {
-                     throw std::runtime_error("Error: Division by zero in grad avg");
-                   }
-                   return a / b;
-                 });
+  for (size_t i = 0; i < gaussians.size(); ++i) {
+    const bool low_opacity = gaussians.opacity[i] < op_threshold;
+    const bool not_viewed = grad_accum_dur[i] == 0;
+    const bool zero_grad = uv_grad_accum[i].norm() == 0.0f;
+    keep_mask[i] = !(low_opacity || not_viewed || zero_grad);
+    if (!keep_mask[i]) {
+      delete_count++;
+    }
+  }
+
+  if (delete_count > 0 && config.use_delete) {
+    gaussians.filter(keep_mask);
+    optimizer.filter_states(keep_mask);
+    // Filter gradient accumulators to keep them in sync
+    filter_vector(uv_grad_accum, keep_mask);
+    filter_vector(xyz_grad_accum, keep_mask);
+    filter_vector(grad_accum_dur, keep_mask);
+  }
+
+  // --- Check if max Gaussians are exceeded before densification ---
+  if (gaussians.size() > config.max_gaussians) {
+    reset_grad_accum();
+    return;
+  }
+
+  // --- Step 2: Densify Gaussians (Clone and Split) ---
+
+  // Calculate average gradients
+  std::vector<Eigen::Vector3f> xyz_grad_avg(gaussians.size());
+  std::vector<Eigen::Vector2f> uv_grad_avg(gaussians.size());
+  for (size_t i = 0; i < gaussians.size(); ++i) {
+    if (grad_accum_dur[i] > 0) {
+      xyz_grad_avg[i] = xyz_grad_accum[i] / grad_accum_dur[i];
+      uv_grad_avg[i] = uv_grad_accum[i] / grad_accum_dur[i];
+    } else {
+      xyz_grad_avg[i].setZero();
+      uv_grad_avg[i].setZero();
+    }
+  }
+
+  // Calculate norm of UV gradients
+  std::vector<float> uv_grad_avg_norm(gaussians.size());
+  std::transform(uv_grad_avg.begin(), uv_grad_avg.end(), uv_grad_avg_norm.begin(),
+                 [](const Eigen::Vector2f &v) { return v.norm(); });
+
+  // Determine the densification threshold
+  float uv_split_val;
+  if (config.use_fractional_densification) {
+    float scale_factor = 1.0f;
+    if (config.use_adaptive_fractional_densification) {
+      scale_factor = std::max(0.0f, (static_cast<float>(config.adaptive_control_end - iter) /
+                                     static_cast<float>(config.adaptive_control_end - config.adaptive_control_start)) *
+                                        2.0f);
+    }
+    float uv_percentile = 1.0f - (1.0f - config.uv_grad_percentile) * scale_factor;
+    std::vector<float> sorted_norms = uv_grad_avg_norm;
+    std::sort(sorted_norms.begin(), sorted_norms.end());
+    int index = std::min(static_cast<int>(uv_percentile * (sorted_norms.size() - 1)), (int)sorted_norms.size() - 1);
+    uv_split_val = sorted_norms[index];
+  } else {
+    uv_split_val = config.uv_grad_threshold;
+  }
+
+  // Identify Gaussians to densify
+  std::vector<bool> densify_mask(gaussians.size());
+  size_t densify_count = 0;
+  for (size_t i = 0; i < gaussians.size(); ++i) {
+    if (uv_grad_avg_norm[i] > uv_split_val) {
+      densify_mask[i] = true;
+      densify_count++;
+    } else {
+      densify_mask[i] = false;
+    }
+  }
+
+  // Get max scale component for each Gaussian
+  std::vector<float> scale_max(gaussians.size());
+  for (size_t i = 0; i < gaussians.size(); ++i) {
+    scale_max[i] = gaussians.scale[i].array().exp().maxCoeff();
+  }
+
+  // --- Step 2.1: Clone small Gaussians ---
+  std::vector<bool> clone_mask(gaussians.size());
+  size_t clone_count = 0;
+  for (size_t i = 0; i < gaussians.size(); ++i) {
+    clone_mask[i] = densify_mask[i] && (scale_max[i] <= config.clone_scale_threshold);
+    if (clone_mask[i]) {
+      clone_count++;
+    }
+  }
+
+  if (clone_count > 0 && config.use_clone) {
+    const size_t original_size = gaussians.size();
+    clone_gaussians(clone_mask, xyz_grad_avg);
+
+    // Append values for new Gaussians to keep vectors in sync for the split step
+    for (size_t i = 0; i < original_size; ++i) {
+      if (clone_mask[i]) {
+        densify_mask.push_back(densify_mask[i]);
+        scale_max.push_back(scale_max[i]);
+      }
+    }
+  }
+
+  // --- Step 2.2: Split large Gaussians ---
+  const size_t current_gaussians_count = gaussians.size();
+  std::vector<bool> split_mask(current_gaussians_count, false);
+
+  // Split based on densification candidates that were too large to clone
+  for (size_t i = 0; i < current_gaussians_count; ++i) {
+    if (densify_mask[i] && (scale_max[i] > config.clone_scale_threshold)) {
+      split_mask[i] = true;
+    }
+  }
+
+  // Split any Gaussians that are "too big", regardless of gradient
+  float scale_factor = 1.0f;
+  if (config.use_adaptive_fractional_densification) {
+    scale_factor = std::max(0.0f, (static_cast<float>(config.adaptive_control_end - iter) /
+                                   static_cast<float>(config.adaptive_control_end - config.adaptive_control_start)) *
+                                      2.0f);
+  }
+  float scale_percentile = 1.0f - (1.0f - config.scale_norm_percentile) * scale_factor;
+  std::vector<float> sorted_scales = scale_max;
+  std::sort(sorted_scales.begin(), sorted_scales.end());
+  int index = std::min(static_cast<int>(scale_percentile * (sorted_scales.size() - 1)), (int)sorted_scales.size() - 1);
+  float scale_split_val = sorted_scales[index];
+
+  for (size_t i = 0; i < current_gaussians_count; ++i) {
+    if (scale_max[i] > scale_split_val) {
+      split_mask[i] = true;
+    }
+  }
+
+  size_t split_count = std::count(split_mask.begin(), split_mask.end(), true);
+  if (split_count > 0 && config.use_split) {
+    split_gaussians(split_mask);
+  }
+
+  reset_grad_accum();
 }
