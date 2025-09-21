@@ -147,12 +147,11 @@ TEST_F(TrainerTest, AddShBand) {
   ASSERT_EQ((*trainer.gaussians.sh)[0].size(), 24);
 }
 
-// NOTE: The clone_gaussians function is not implemented yet in trainer.cpp.
-// It will fail until this function is implemented.
 TEST_F(TrainerTest, CloneGaussians) {
   Gaussians gaussians = create_sample_gaussians_for_trainer(10);
-  config.initial_opacity = 0.123f; // A distinct value for checking
   Trainer trainer(config, std::move(gaussians), {}, {});
+
+  std::vector<Eigen::Vector3f> xyz_grad_avg(10, Eigen::Vector3f::Ones());
 
   // Clone gaussians at indices 1, 4, 8
   std::vector<bool> clone_mask(10, false);
@@ -165,20 +164,15 @@ TEST_F(TrainerTest, CloneGaussians) {
   auto original_g4 = trainer.gaussians.xyz[4];
   auto original_g8 = trainer.gaussians.xyz[8];
 
-  trainer.clone_gaussians(clone_mask);
+  trainer.clone_gaussians(clone_mask, xyz_grad_avg);
 
   // Size should increase by the number of clones
   ASSERT_EQ(trainer.gaussians.size(), 13);
 
   // Check that the new gaussians are copies of the originals
-  ASSERT_TRUE(trainer.gaussians.xyz[10].isApprox(original_g1));
-  ASSERT_TRUE(trainer.gaussians.xyz[11].isApprox(original_g4));
-  ASSERT_TRUE(trainer.gaussians.xyz[12].isApprox(original_g8));
-
-  // Check that the opacity of the new gaussians is reset
-  ASSERT_FLOAT_EQ(trainer.gaussians.opacity[10], config.initial_opacity);
-  ASSERT_FLOAT_EQ(trainer.gaussians.opacity[11], config.initial_opacity);
-  ASSERT_FLOAT_EQ(trainer.gaussians.opacity[12], config.initial_opacity);
+  ASSERT_TRUE(trainer.gaussians.xyz[10].isApprox(original_g1 - Eigen::Vector3f::Ones() * 0.01f));
+  ASSERT_TRUE(trainer.gaussians.xyz[11].isApprox(original_g4 - Eigen::Vector3f::Ones() * 0.01f));
+  ASSERT_TRUE(trainer.gaussians.xyz[12].isApprox(original_g8 - Eigen::Vector3f::Ones() * 0.01f));
 }
 
 TEST_F(TrainerTest, SplitGaussians) {

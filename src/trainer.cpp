@@ -3,6 +3,15 @@
 #include "gsplat/trainer.hpp"
 #include "gsplat/gaussian.hpp"
 #include <cmath>
+#include <stdexcept>
+
+void Trainer::reset_grad_accum() {
+  const int size = gaussians.size();
+
+  uv_grad_accum.assign(size, Eigen::Vector2f::Zero());
+  xyz_grad_accum.assign(size, Eigen::Vector3f::Zero());
+  grad_accum_dur.assign(size, 0);
+}
 
 void Trainer::test_train_split() {
   const int split = config.test_split_ratio;
@@ -45,6 +54,9 @@ void Trainer::reset_opacity() {
   const double opc = config.reset_opacity_value;
   const double new_opc = log(opc) - log(1 - opc);
   std::fill(gaussians.opacity.begin(), gaussians.opacity.end(), new_opc);
+
+  // Reset gradient accumulators
+  reset_grad_accum();
 }
 
 void Trainer::add_sh_band() {
@@ -109,20 +121,21 @@ void Trainer::split_gaussians(const std::vector<bool> &split_mask) {
   std::vector<Eigen::Vector3f> split_xyz;
   std::vector<Eigen::VectorXf> split_sh;
 
-  assert(split_mask.size() == gaussians.xyz.size());
+  assert(split_mask.size() == gaussians.size());
 
   // Count how many Gaussians will be split to pre-allocate memory. This is an
   // optimization that prevents the vectors from having to resize multiple times.
   const size_t num_to_split = std::count(split_mask.begin(), split_mask.end(), true);
   const size_t total_samples = num_to_split * num_samples;
 
-  split_quat.reserve(total_samples);
-  split_scale.reserve(total_samples);
+  split_quat.reserve(total_samples * 4);
+  split_scale.reserve(total_samples * 3);
   split_opacity.reserve(total_samples);
-  split_rgb.reserve(total_samples);
-  split_xyz.reserve(total_samples);
+  split_rgb.reserve(total_samples * 3);
+  split_xyz.reserve(total_samples * 3);
   if (gaussians.sh.has_value()) {
-    split_sh.reserve(total_samples);
+    const int sh_params_size = gaussians.sh.value()[0].size();
+    split_sh.reserve(total_samples * sh_params_size);
   }
 
   // Apply mask to Gaussians
@@ -192,6 +205,81 @@ void Trainer::split_gaussians(const std::vector<bool> &split_mask) {
   optimizer.append_states(total_samples);
 }
 
-void Trainer::clone_gaussians(const std::vector<bool> &clone_mask) {}
+void Trainer::clone_gaussians(const std::vector<bool> &clone_mask, const std::vector<Eigen::Vector3f> &xyz_grad_avg) {
 
-void Trainer::adaptive_density() {}
+  std::vector<Eigen::Quaternionf> clone_quat;
+  std::vector<Eigen::Vector3f> clone_scale;
+  std::vector<float> clone_opacity;
+  std::vector<Eigen::Vector3f> clone_rgb;
+  std::vector<Eigen::Vector3f> clone_xyz;
+  std::vector<Eigen::VectorXf> clone_sh;
+
+  std::vector<Eigen::Vector3f> clone_xyz_grad_avg;
+
+  assert(clone_mask.size() == gaussians.size());
+
+  const size_t num_to_clone = std::count(clone_mask.begin(), clone_mask.end(), true);
+
+  clone_quat.reserve(num_to_clone * 4);
+  clone_scale.reserve(num_to_clone * 3);
+  clone_opacity.reserve(num_to_clone);
+  clone_rgb.reserve(num_to_clone * 3);
+  clone_xyz.reserve(num_to_clone * 3);
+  if (gaussians.sh.has_value()) {
+    const int sh_params_size = gaussians.sh.value()[0].size();
+    clone_sh.reserve(num_to_clone * sh_params_size);
+  }
+  clone_xyz_grad_avg.reserve(num_to_clone);
+
+  // Apply mask to Gaussians
+  for (size_t i = 0; i < clone_mask.size(); ++i) {
+    if (clone_mask[i]) {
+      clone_quat.push_back(gaussians.quaternion[i]);
+      clone_scale.push_back(gaussians.scale[i]);
+      clone_opacity.push_back(gaussians.opacity[i]);
+      clone_rgb.push_back(gaussians.rgb[i]);
+      clone_xyz.push_back(gaussians.xyz[i]);
+      if (gaussians.sh.has_value()) {
+        clone_sh.push_back(gaussians.sh.value()[i]);
+      }
+      clone_xyz_grad_avg.push_back(xyz_grad_avg[i]);
+    }
+  }
+
+  // Move cloned Gaussian means based on average gradients
+  std::transform(clone_xyz.begin(), clone_xyz.end(), clone_xyz_grad_avg.begin(), clone_xyz.begin(),
+                 [](Eigen::Vector3f xyz, Eigen::Vector3f grad) { return xyz - (grad * 0.01); });
+
+  // Initialize new cloned Gaussians
+  Gaussians new_gaussians(std::move(clone_xyz), std::move(clone_rgb), std::move(clone_opacity), std::move(clone_scale),
+                          std::move(clone_quat),
+                          gaussians.sh.has_value() ? std::make_optional(std::move(clone_sh)) : std::nullopt);
+
+  // Update gaussians and optimizer
+  gaussians.append(new_gaussians);
+  optimizer.append_states(num_to_clone);
+}
+
+void Trainer::adaptive_density() {
+  // Get average gradient values
+  assert(xyz_grad_accum.size() == grad_accum_dur.size());
+  assert(uv_grad_accum.size() == grad_accum_dur.size());
+
+  std::vector<Eigen::Vector3f> xyz_grad_avg(xyz_grad_accum.size());
+  std::vector<Eigen::Vector2f> uv_grad_avg(uv_grad_accum.size());
+
+  std::transform(xyz_grad_accum.begin(), xyz_grad_accum.end(), grad_accum_dur.begin(), xyz_grad_avg.begin(),
+                 [](Eigen::Vector3f a, int b) {
+                   if (b == 0) {
+                     throw std::runtime_error("Error: Division by zero in grad avg");
+                   }
+                   return a / b;
+                 });
+  std::transform(uv_grad_accum.begin(), uv_grad_accum.end(), grad_accum_dur.begin(), uv_grad_avg.begin(),
+                 [](Eigen::Vector2f a, float b) {
+                   if (b == 0) {
+                     throw std::runtime_error("Error: Division by zero in grad avg");
+                   }
+                   return a / b;
+                 });
+}

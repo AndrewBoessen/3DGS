@@ -37,6 +37,13 @@ public:
         cameras(std::move(cameras)), optimizer(config.base_lr) {}
 
   /**
+   * @breif Resets the gradient accumulation for xyz and uv.
+   * @note This will set all values for Gaussians to zero. This must be run
+   * only after the adaptive density in run and `gaussians` is resized.
+   */
+  void reset_grad_accum();
+
+  /**
    * @brief Splits the full image dataset into training and testing sets.
    * @note This method uses a deterministic "every N-th image" strategy based on the
    * `test_split_ratio` in the configuration. Images are sorted by name before
@@ -95,6 +102,15 @@ private:
   /// @brief The Adam optimizer used to update Gaussian parameters.
   AdamOptimizer optimizer;
 
+  /// @brief A vector to hold sum of gradients of image view.
+  std::vector<Eigen::Vector2f> uv_grad_accum;
+
+  /// @brief A vector to hold sum world corrdinates.
+  std::vector<Eigen::Vector3f> xyz_grad_accum;
+
+  /// @brief The duration of gradient accumulation.
+  std::vector<int> grad_accum_dur;
+
   /// @brief The current training iteration count.
   int iter = 0;
 
@@ -112,8 +128,10 @@ private:
    * @brief Clones specified Gaussians to increase density in under-reconstructed areas.
    * @param clone_mask A boolean vector where `true` indicates the Gaussian at
    * the corresponding index should be cloned.
+   * @param xyz_grad_avg A vector with average xyz gradients. This is used to set the
+   * position of cloned Gaussians.
    * @note This method duplicates Gaussians in place, effectively increasing their
    * influence in regions that require more geometric detail.
    */
-  void clone_gaussians(const std::vector<bool> &clone_mask);
+  void clone_gaussians(const std::vector<bool> &clone_mask, const std::vector<Eigen::Vector3f> &xyz_grad_avg);
 };
