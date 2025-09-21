@@ -424,3 +424,14 @@ void Trainer::adaptive_density() {
 
   reset_grad_accum();
 }
+
+void Trainer::train() {
+  // Init device parameter arrays
+
+  // Init gradient arrays
+  //
+  // Create test train split
+  // Reset grad accum
+  //
+  // Copy host vectors to device
+}
