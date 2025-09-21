@@ -128,14 +128,13 @@ void Trainer::split_gaussians(const std::vector<bool> &split_mask) {
   const size_t num_to_split = std::count(split_mask.begin(), split_mask.end(), true);
   const size_t total_samples = num_to_split * num_samples;
 
-  split_quat.reserve(total_samples * 4);
-  split_scale.reserve(total_samples * 3);
+  split_quat.reserve(total_samples);
+  split_scale.reserve(total_samples);
   split_opacity.reserve(total_samples);
-  split_rgb.reserve(total_samples * 3);
-  split_xyz.reserve(total_samples * 3);
+  split_rgb.reserve(total_samples);
+  split_xyz.reserve(total_samples);
   if (gaussians.sh.has_value()) {
-    const int sh_params_size = gaussians.sh.value()[0].size();
-    split_sh.reserve(total_samples * sh_params_size);
+    split_sh.reserve(total_samples);
   }
 
   // Apply mask to Gaussians
@@ -220,14 +219,13 @@ void Trainer::clone_gaussians(const std::vector<bool> &clone_mask, const std::ve
 
   const size_t num_to_clone = std::count(clone_mask.begin(), clone_mask.end(), true);
 
-  clone_quat.reserve(num_to_clone * 4);
-  clone_scale.reserve(num_to_clone * 3);
+  clone_quat.reserve(num_to_clone);
+  clone_scale.reserve(num_to_clone);
   clone_opacity.reserve(num_to_clone);
-  clone_rgb.reserve(num_to_clone * 3);
-  clone_xyz.reserve(num_to_clone * 3);
+  clone_rgb.reserve(num_to_clone);
+  clone_xyz.reserve(num_to_clone);
   if (gaussians.sh.has_value()) {
-    const int sh_params_size = gaussians.sh.value()[0].size();
-    clone_sh.reserve(num_to_clone * sh_params_size);
+    clone_sh.reserve(num_to_clone);
   }
   clone_xyz_grad_avg.reserve(num_to_clone);
 
