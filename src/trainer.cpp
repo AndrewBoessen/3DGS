@@ -259,8 +259,9 @@ void Trainer::clone_gaussians(const std::vector<bool> &clone_mask, const std::ve
   }
 
   // Move cloned Gaussian means based on average gradients
-  std::transform(clone_xyz.begin(), clone_xyz.end(), clone_xyz_grad_avg.begin(), clone_xyz.begin(),
-                 [](Eigen::Vector3f xyz, Eigen::Vector3f grad) { return xyz - (grad * 0.01); });
+  for (size_t i = 0; i < clone_xyz.size(); ++i) {
+    clone_xyz[i] = clone_xyz[i] - (clone_xyz_grad_avg[i] * 0.01f);
+  }
 
   // Initialize new cloned Gaussians
   Gaussians new_gaussians(std::move(clone_xyz), std::move(clone_rgb), std::move(clone_opacity), std::move(clone_scale),
