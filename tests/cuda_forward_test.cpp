@@ -426,7 +426,7 @@ TEST_F(CudaKernelTest, GetSortedGaussianList) {
   // G2 -> tile (2,2) [idx 10]
   // Total = 4 splats. The size is for the `double` sort keys.
   const int num_splats = 4;
-  ASSERT_EQ(sorted_gaussian_bytes, num_splats * sizeof(int));
+  ASSERT_EQ(sorted_gaussian_bytes, num_splats * sizeof(double));
 
   // --- PASS 2: Execute with allocated buffers ---
   CUDA_CHECK(cudaMalloc(&d_sorted_gaussians, sorted_gaussian_bytes));
