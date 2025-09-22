@@ -380,14 +380,14 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
     CHECK_CUDA(cudaGetLastError());
 
     CHECK_CUDA(cudaMemcpy(&sorted_gaussian_bytes, d_global_splat_counter, sizeof(int), cudaMemcpyDeviceToHost));
-    sorted_gaussian_bytes *= sizeof(int);
+    sorted_gaussian_bytes *= sizeof(double);
 
     CHECK_CUDA(cudaFree(d_global_splat_counter));
 
     return;
   }
 
-  const int num_splats = sorted_gaussian_bytes / sizeof(int);
+  const int num_splats = sorted_gaussian_bytes / sizeof(double);
 
   // get max z depth for key multiplier
   float *d_max_z;
