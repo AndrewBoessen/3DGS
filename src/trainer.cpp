@@ -1,8 +1,11 @@
 // trainer.cpp
 
 #include "gsplat/trainer.hpp"
+#include "gsplat/cuda_backward.hpp"
+#include "gsplat/cuda_forward.hpp"
 #include "gsplat/gaussian.hpp"
-#include <cmath>
+#include "gsplat/optimize.hpp"
+#include <iostream>
 
 // Helper function to filter a vector based on a boolean mask.
 template <typename T> void filter_vector(std::vector<T> &vec, const std::vector<bool> &keep_mask) {
@@ -427,11 +430,191 @@ void Trainer::adaptive_density() {
 
 void Trainer::train() {
   // Init device parameter arrays
+  constexpr int NUM_STREAMS = 4;
 
-  // Init gradient arrays
-  //
-  // Create test train split
-  // Reset grad accum
-  //
-  // Copy host vectors to device
+  int num_gaussians = gaussians.size();
+
+  const size_t max_gaussians = config.max_gaussians;
+  // Allocate Gaussian parameters for device
+  float *d_xyz, *d_rgb, *d_opacity, *d_scale, *d_quaternion;
+  CHECK_CUDA(cudaMalloc(&d_xyz, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_rgb, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_opacity, max_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_scale, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_quaternion, max_gaussians * 4 * sizeof(float)));
+
+  // Allocate gradients for device
+  float *d_grad_xyz, *d_grad_rgb, *d_grad_opacity, *d_grad_scale, *d_grad_quaternion;
+  CHECK_CUDA(cudaMalloc(&d_grad_xyz, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_grad_rgb, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_grad_opacity, max_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_grad_scale, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_grad_quaternion, max_gaussians * 4 * sizeof(float)));
+
+  // Camera parameters on the device
+  float *d_K, *d_T;
+  CHECK_CUDA(cudaMalloc(&d_K, 9 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_T, 12 * sizeof(float)));
+
+  // Temporary buffers for processing
+  float *d_uv, *d_xyz_c;
+  bool *d_mask;
+  CHECK_CUDA(cudaMalloc(&d_uv, max_gaussians * 2 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_xyz_c, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_mask, max_gaussians * sizeof(bool)));
+
+  // Arrays for culled values
+  float *d_xyz_culled, *d_rgb_culled, *d_opacity_culled, *d_scale_culled, *d_quaternion_culled, *d_uv_culled,
+      *d_xyz_c_culled;
+  CHECK_CUDA(cudaMalloc(&d_xyz_culled, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_rgb_culled, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_opacity_culled, max_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_scale_culled, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_quaternion_culled, max_gaussians * 4 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_uv_culled, max_gaussians * 2 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_xyz_c_culled, max_gaussians * 3 * sizeof(float)));
+
+  // Create test-train split
+  test_train_split();
+  // Initialize gradient accumulators
+  reset_grad_accum();
+
+  // Create CUDA streams for parallel execution
+  std::vector<cudaStream_t> streams(NUM_STREAMS);
+  for (int i = 0; i < NUM_STREAMS; ++i) {
+    CHECK_CUDA(cudaStreamCreate(&streams[i]));
+  }
+
+  // TRAINING LOOP
+  for (int iter = 0; iter < config.num_iters; ++iter) {
+    num_gaussians = gaussians.size();
+    // Zero gradients
+    CHECK_CUDA(cudaMemset(d_grad_xyz, 0.0f, num_gaussians));
+    CHECK_CUDA(cudaMemset(d_grad_rgb, 0.0f, num_gaussians));
+    CHECK_CUDA(cudaMemset(d_grad_opacity, 0.0f, num_gaussians));
+    CHECK_CUDA(cudaMemset(d_grad_scale, 0.0f, num_gaussians));
+    CHECK_CUDA(cudaMemset(d_grad_quaternion, 0.0f, num_gaussians));
+
+    // Copy Gaussian data from host to device
+    CHECK_CUDA(cudaMemcpy(d_xyz, gaussians.xyz.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_rgb, gaussians.rgb.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_opacity, gaussians.opacity.data(), num_gaussians * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_scale, gaussians.scale.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_quaternion, gaussians.quaternion.data(), num_gaussians * 4 * sizeof(float),
+                          cudaMemcpyHostToDevice));
+
+    // Get current training image
+    Image curr_image = train_images[iter % train_images.size()];
+    Camera curr_camera = cameras[curr_image.camera_id];
+
+    const int width = (int)curr_camera.width;
+    const int height = (int)curr_camera.height;
+
+    float *d_image_buffer, *d_weight_per_pixel;
+    CHECK_CUDA(cudaMalloc(&d_image_buffer, width * height * 3 * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_weight_per_pixel, width * height * sizeof(float)));
+    CHECK_CUDA(cudaMemset(d_image_buffer, 0, width * height * 3 * sizeof(float)));
+
+    // Prepare camera intrinsics (K)
+    float h_K[9] = {(float)curr_camera.params[0],
+                    0.f,
+                    (float)curr_camera.params[2],
+                    0.f,
+                    (float)curr_camera.params[1],
+                    (float)curr_camera.params[3],
+                    0.f,
+                    0.f,
+                    1.f};
+    // Prepare camera extrinsics (T)
+    Eigen::Matrix3d rot_mat_d = curr_image.QvecToRotMat();
+    Eigen::Vector3d t_vec_d = curr_image.tvec;
+    float h_T[12];
+    for (int i = 0; i < 3; ++i) {
+      for (int j = 0; j < 3; ++j) {
+        h_T[i * 4 + j] = (float)rot_mat_d(i, j);
+      }
+      h_T[i * 4 + 3] = (float)t_vec_d(i);
+    }
+    // Copy camera parameters to device
+    CHECK_CUDA(cudaMemcpy(d_K, h_K, 9 * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_T, h_T, 12 * sizeof(float), cudaMemcpyHostToDevice));
+
+    // FORWARD PASS
+    // Step 1: Projections and Culling (Parallelized across streams)
+    int offset = 0;
+    for (int i = 0; i < NUM_STREAMS; ++i) {
+      int remainder = num_gaussians % NUM_STREAMS;
+      int size = num_gaussians / NUM_STREAMS + (i < remainder ? 1 : 0);
+
+      if (size <= 0)
+        continue;
+
+      cudaStream_t stream = streams[i];
+      camera_extrinsic_projection(d_xyz + offset * 3, d_T, size, d_xyz_c + offset * 3, stream);
+      camera_intrinsic_projection(d_xyz_c + offset * 3, d_K, size, d_uv + offset * 2, stream);
+      cull_gaussians(d_uv + offset * 2, d_xyz_c + offset * 3, size, config.near_thresh, config.far_thresh,
+                     config.cull_mask_padding, width, height, d_mask + offset, stream);
+      offset += size;
+    }
+    CHECK_CUDA(cudaDeviceSynchronize()); // Sync streams to ensure mask is complete
+
+    // Step 2: Filter Gaussians based on the culling mask using CUB
+    int num_culled;
+    filter_gaussians_by_mask(num_gaussians, d_mask, d_xyz, d_rgb, d_opacity, d_scale, d_quaternion, d_uv, d_xyz_c,
+                             d_xyz_culled, d_rgb_culled, d_opacity_culled, d_scale_culled, d_quaternion_culled,
+                             d_uv_culled, d_xyz_c_culled, &num_culled);
+    if (num_culled == 0) {
+      std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;
+      continue;
+    }
+
+    // Step 3: Compute Covariance and Conics (Parallelized across streams)
+    float *d_sigma, *d_conic, *d_J;
+    CHECK_CUDA(cudaMalloc(&d_sigma, num_culled * 9 * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_conic, num_culled * 3 * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_J, num_culled * 6 * sizeof(float)));
+
+    offset = 0;
+    for (int i = 0; i < NUM_STREAMS; ++i) {
+      int remainder = num_culled % NUM_STREAMS;
+      int size = num_culled / NUM_STREAMS + (i < remainder ? 1 : 0);
+
+      if (size <= 0)
+        continue;
+
+      cudaStream_t stream = streams[i];
+      compute_sigma(d_quaternion_culled + offset * 4, d_scale_culled + offset * 3, size, d_sigma + offset * 9, stream);
+      compute_conic(d_xyz_c_culled + offset * 3, d_K, d_sigma + offset * 9, d_T, size, d_J + offset * 6,
+                    d_conic + offset * 3, stream);
+      offset += size;
+    }
+    CHECK_CUDA(cudaDeviceSynchronize()); // Sync streams for sorting
+
+    // Step 4: Sort Gaussians by tile
+    const int n_tiles_x = (width + 15) / 16;
+    const int n_tiles_y = (height + 15) / 16;
+    const int n_tiles = n_tiles_x * n_tiles_y;
+
+    int *d_sorted_gaussians, *d_splat_start_end_idx_by_tile_idx;
+    size_t sorted_gaussian_bytes = 0;
+
+    get_sorted_gaussian_list(d_uv_culled, d_xyz_c_culled, d_conic, n_tiles_x, n_tiles_y, config.mh_dist, num_culled,
+                             sorted_gaussian_bytes, nullptr, nullptr);
+
+    CHECK_CUDA(cudaMalloc(&d_splat_start_end_idx_by_tile_idx, (n_tiles + 1) * sizeof(int)));
+    CHECK_CUDA(cudaMalloc(&d_sorted_gaussians, sorted_gaussian_bytes));
+
+    get_sorted_gaussian_list(d_uv_culled, d_xyz_c_culled, d_conic, n_tiles_x, n_tiles_y, config.mh_dist, num_culled,
+                             sorted_gaussian_bytes, d_sorted_gaussians, d_splat_start_end_idx_by_tile_idx);
+
+    // Step 5: Render the final image
+    render_image(d_uv_culled, d_opacity_culled, d_conic, d_rgb_culled, 1.0f, d_sorted_gaussians,
+                 d_splat_start_end_idx_by_tile_idx, width, height, d_weight_per_pixel, d_image_buffer);
+
+    // BACKWARD PASS
+
+    // Optimizer step
+    Gradients gradients = {};
+    optimizer.step(gaussians, gradients);
+  }
 }

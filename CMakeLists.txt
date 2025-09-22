@@ -39,7 +39,7 @@ target_include_directories(gsplat
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat PUBLIC yaml-cpp Eigen3::Eigen)
+target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp Eigen3::Eigen)
 
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION
