@@ -24,6 +24,13 @@ jobs:
           cd build/
           cmake ..
           sudo make install
+          cd ~
+          git clone https://github.com/jlblancoc/nanoflann.git
+          cd nanoflann/
+          mkdir build
+          cd build/
+          cmake ..
+          sudo make install
 
       - name: Set up CUDA repository
         run: |

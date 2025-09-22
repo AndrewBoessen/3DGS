@@ -27,13 +27,22 @@ You will need a standard C++ development toolchain. Please install the following
 
 - **sphericart**
 
+- **nanoflann**
+
 For example, on Ubuntu 22.04, you can install these with:
 
 ```bash
 git clone https://github.com/lab-cosmo/sphericart
 cd sphericart/
-mkdir build
-cd build/
+mkdir build && cd build/
+cmake ..
+make install
+```
+
+```bash
+git https://github.com/jlblancoc/nanoflann.git
+cd nanoflann/
+mkdir build && cd build/
 cmake ..
 make install
 ```

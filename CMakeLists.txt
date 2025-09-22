@@ -18,6 +18,8 @@ find_package(CUDAToolkit REQUIRED)
 find_package(sphericart REQUIRED)
 # Find OpenMP for sphericart parallelization
 find_package(OpenMP REQUIRED)
+# Find nanoflann for nearest neighbor
+find_package(nanoflann)
 
 # ===================================================================
 # DATALODER LIBRARY DEFINITION
@@ -39,7 +41,7 @@ target_include_directories(gsplat
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp Eigen3::Eigen)
+target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp Eigen3::Eigen nanoflann::nanoflann)
 
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION
