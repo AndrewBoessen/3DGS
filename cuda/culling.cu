@@ -128,14 +128,6 @@ __device__ __forceinline__ int get_write_index(const bool write, const int lane,
   return write ? (base_slot + prefix) : -1;
 }
 
-__device__ __forceinline__ int warp_reduce_min(unsigned mask, int val) {
-  for (int offset = 16; offset > 0; offset /= 2) {
-    val = fminf(val, __shfl_down_sync(mask, val, offset));
-  }
-  // Broadcast the final result from lane 0 to all threads
-  return __shfl_sync(mask, val, 0);
-}
-
 __device__ __forceinline__ int warp_reduce_max(unsigned mask, int val) {
   for (int offset = 16; offset > 0; offset /= 2) {
     val = fmaxf(val, __shfl_down_sync(mask, val, offset));
@@ -175,19 +167,20 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
   const int start_tile_y = fmaxf(0, projected_tile_y - radius_tiles);
   const int end_tile_y = fminf(n_tiles_y, projected_tile_y + radius_tiles + 1);
 
+  const int x_range = end_tile_x - start_tile_x;
+  const int y_range = end_tile_y - start_tile_y;
+
   double tile_idx_key_multiplier = 0.0;
   if (store_values) {
     tile_idx_key_multiplier = *max_z + 1.0f;
   }
 
   // Reduce to find the minimum start_x and maximum end_x in the warp
-  int warp_start_x = warp_reduce_min(active_mask, start_tile_x);
-  int warp_end_x = warp_reduce_max(active_mask, end_tile_x);
-  int warp_start_y = warp_reduce_min(active_mask, start_tile_y);
-  int warp_end_y = warp_reduce_max(active_mask, end_tile_y);
+  int warp_range_x = warp_reduce_max(active_mask, x_range);
+  int warp_range_y = warp_reduce_max(active_mask, y_range);
 
-  for (int tile_x = warp_start_x; tile_x < warp_end_x; tile_x++) {
-    for (int tile_y = warp_start_y; tile_y < warp_end_y; tile_y++) {
+  for (int tile_x = start_tile_x; tile_x < start_tile_x + warp_range_x; tile_x++) {
+    for (int tile_y = start_tile_y; tile_y < start_tile_y + warp_range_y; tile_y++) {
       const bool in_thread_bounds =
           (tile_x >= start_tile_x && tile_x < end_tile_x && tile_y >= start_tile_y && tile_y < end_tile_y);
 
