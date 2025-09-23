@@ -84,24 +84,52 @@ split_axis_test(const float *__restrict__ obb,        // [tl_x, tl_y, tr_x, tr_y
 
 __device__ __forceinline__ int compute_obb(const float u, const float v, const float a, const float b, const float c,
                                            const float mh_dist, float *obb) {
-  const float left = (a + c) / 2.f;
-  const float right = sqrtf((a - c) * (a - c) / 4.0f + b * b);
-  const float lambda1 = left + right;
-  const float lambda2 = left - right;
-  const float r_major = mh_dist * sqrtf(lambda1);
-  const float r_minor = mh_dist * sqrtf(lambda2);
-  float theta = (fabsf(b) < 1e-16) ? (a >= c ? 0.0f : M_PI / 2.f) : atan2f(lambda1 - a, b);
-  const float cos_theta = cosf(theta);
-  const float sin_theta = sinf(theta);
-  obb[0] = -r_major * cos_theta + r_minor * sin_theta + u;
-  obb[1] = -r_major * sin_theta - r_minor * cos_theta + v;
-  obb[2] = r_major * cos_theta + r_minor * sin_theta + u;
-  obb[3] = r_major * sin_theta - r_minor * cos_theta + v;
-  obb[4] = -r_major * cos_theta - r_minor * sin_theta + u;
-  obb[5] = -r_major * sin_theta + r_minor * cos_theta + v;
-  obb[6] = r_major * cos_theta - r_minor * sin_theta + u;
-  obb[7] = r_major * sin_theta + r_minor * cos_theta + v;
-  return ceilf(r_major / 16.0f) + 1;
+  const float t_sum = a + c;
+  const float t_diff = a - c;
+  const float discriminant = t_diff * t_diff + 4.f * b * b;
+  const float root = sqrtf(discriminant);      // Guaranteed non-negative
+  const float lambda1 = 0.5f * (t_sum + root); // Major eigenvalue
+  const float lambda2 = 0.5f * (t_sum - root); // Minor eigenvalue
+
+  const float r_major = mh_dist * sqrtf(fmaxf(0.f, lambda1));
+  const float r_minor = mh_dist * sqrtf(fmaxf(0.f, lambda2));
+
+  float cos_theta, sin_theta;
+  if (fabsf(root) < 1e-7f) {
+    // Handle the case of a circle (a=c, b=0), where rotation is arbitrary.
+    cos_theta = 1.f;
+    sin_theta = 0.f;
+  } else {
+    // Use half-angle trigonometric identities:
+    // cos^2(t) = (1 + cos(2t))/2, sin^2(t) = (1 - cos(2t))/2
+    // where cos(2t) = (a-c)/root and sin(2t) = 2b/root.
+    const float inv_root = 1.f / root;
+    const float cos2theta = t_diff * inv_root;
+
+    cos_theta = sqrtf(0.5f * (1.f + cos2theta));
+    sin_theta = sqrtf(0.5f * (1.f - cos2theta));
+
+    // The sign of sin(theta) is the same as the sign of b.
+    sin_theta = copysignf(sin_theta, b);
+  }
+
+  // Calculate the two orthogonal vectors defining the OBB's orientation and size
+  const float v1_x = r_major * cos_theta;
+  const float v1_y = r_major * sin_theta;
+  const float v2_x = -r_minor * sin_theta;
+  const float v2_y = r_minor * cos_theta;
+
+  // Compute the 4 OBB corners by adding/subtracting vectors from the center
+  obb[0] = u - v1_x - v2_x; // Bottom-left corner
+  obb[1] = v - v1_y - v2_y;
+  obb[2] = u + v1_x - v2_x; // Bottom-right corner
+  obb[3] = v + v1_y - v2_y;
+  obb[4] = u - v1_x + v2_x; // Top-left corner
+  obb[5] = v - v1_y + v2_y;
+  obb[6] = u + v1_x + v2_x; // Top-right corner
+  obb[7] = v + v1_y + v2_y;
+
+  return ceilf(r_major * 0.0625f) + 1; // Use multiplication for division by 16
 }
 
 __device__ __forceinline__ int get_write_index(const bool write, const int lane, const unsigned int active_mask,
@@ -273,7 +301,7 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
   ASSERT_DEVICE_POINTER(xyz);
   ASSERT_DEVICE_POINTER(mask);
 
-  const int threads_per_block = 1024;
+  const int threads_per_block = 256;
   // Calculate the number of blocks needed to cover all N points
   const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
 
