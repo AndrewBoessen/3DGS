@@ -62,6 +62,7 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
       _uvs[i * 2 + 1] = uvs[gaussian_idx * 2 + 1];
       _opacity[i] = opacity[gaussian_idx];
 
+      #pragma unroll
       for (int channel = 0; channel < 3; channel++) {
         _rgb[i * 3 + channel] = rgb[gaussian_idx * 3 + channel];
       }
@@ -76,7 +77,7 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
     // mask invalid threads outside of image
     if (valid_pixel) {
       int batch_start = batch_idx * splat_batch_size;
-      int batch_end = min((batch_idx + 1) * splat_batch_size, num_splats_this_tile);
+      int batch_end = fminf((batch_idx + 1) * splat_batch_size, num_splats_this_tile);
       int num_splats_this_batch = batch_end - batch_start;
 
       for (int i = 0; i < num_splats_this_batch; i++) {
@@ -119,26 +120,21 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
         // update alpha_accum
         alpha_accum += weight;
       }
-      // wait for all threads to complete current batch
-      __syncthreads();
     }
+    // wait for all threads to complete current batch
+    __syncthreads();
   }
-  // add background color at end
   const int base_image_id = (threadIdx.y * TILE_SIZE + threadIdx.x) * 3;
-  if (valid_pixel) {
-    _image[base_image_id + 0] += background_opacity * (1.0 - alpha_accum); // R
-    _image[base_image_id + 1] += background_opacity * (1.0 - alpha_accum); // G
-    _image[base_image_id + 2] += background_opacity * (1.0 - alpha_accum); // B
-  }
-
-  __syncthreads();
   // copy back to global memory
   if (valid_pixel) {
     final_weight_per_pixel[v_splat * image_width + u_splat] = alpha_weight;
 
-    image[(v_splat * image_width + u_splat) * 3 + 0] = _image[base_image_id + 0]; // R
-    image[(v_splat * image_width + u_splat) * 3 + 1] = _image[base_image_id + 1]; // G
-    image[(v_splat * image_width + u_splat) * 3 + 2] = _image[base_image_id + 2]; // B
+    image[(v_splat * image_width + u_splat) * 3 + 0] =
+        _image[base_image_id + 0] + background_opacity * (1.0 - alpha_accum); // R
+    image[(v_splat * image_width + u_splat) * 3 + 1] =
+        _image[base_image_id + 1] + background_opacity * (1.0 - alpha_accum); // G
+    image[(v_splat * image_width + u_splat) * 3 + 2] =
+        _image[base_image_id + 2] + background_opacity * (1.0 - alpha_accum); // B
   }
 }
 
