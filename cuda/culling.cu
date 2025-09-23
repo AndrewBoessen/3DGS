@@ -130,7 +130,7 @@ __device__ __forceinline__ int get_write_index(const bool write, const int lane,
 
 __device__ __forceinline__ int warp_reduce_min(unsigned mask, int val) {
   for (int offset = 16; offset > 0; offset /= 2) {
-    val = min(val, __shfl_down_sync(mask, val, offset));
+    val = fminf(val, __shfl_down_sync(mask, val, offset));
   }
   // Broadcast the final result from lane 0 to all threads
   return __shfl_sync(mask, val, 0);
@@ -138,7 +138,7 @@ __device__ __forceinline__ int warp_reduce_min(unsigned mask, int val) {
 
 __device__ __forceinline__ int warp_reduce_max(unsigned mask, int val) {
   for (int offset = 16; offset > 0; offset /= 2) {
-    val = max(val, __shfl_down_sync(mask, val, offset));
+    val = fmaxf(val, __shfl_down_sync(mask, val, offset));
   }
   // Broadcast the final result from lane 0 to all threads
   return __shfl_sync(mask, val, 0);
@@ -169,11 +169,11 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
   const int radius_tiles = compute_obb(u, v, a, b, c, mh_dist, obb);
 
   const int projected_tile_x = floorf(u / 16.0f);
-  const int start_tile_x = max(0, projected_tile_x - radius_tiles);
-  const int end_tile_x = min(n_tiles_x, projected_tile_x + radius_tiles + 1);
+  const int start_tile_x = fmaxf(0, projected_tile_x - radius_tiles);
+  const int end_tile_x = fminf(n_tiles_x, projected_tile_x + radius_tiles + 1);
   const int projected_tile_y = floorf(v / 16.0f);
-  const int start_tile_y = max(0, projected_tile_y - radius_tiles);
-  const int end_tile_y = min(n_tiles_y, projected_tile_y + radius_tiles + 1);
+  const int start_tile_y = fmaxf(0, projected_tile_y - radius_tiles);
+  const int end_tile_y = fminf(n_tiles_y, projected_tile_y + radius_tiles + 1);
 
   double tile_idx_key_multiplier = 0.0;
   if (store_values) {

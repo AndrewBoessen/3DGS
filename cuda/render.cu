@@ -4,7 +4,7 @@
 #include "gsplat/cuda_forward.hpp"
 
 constexpr int TILE_SIZE = 16;
-constexpr int BATCH_SIZE = 960;
+constexpr int BATCH_SIZE = 256;
 
 template <unsigned int splat_batch_size>
 __global__ void
@@ -90,7 +90,7 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
         const float det = a * c - b * b;
         if (det <= 0.0f)
           continue; // Skip degenerate or invalid Gaussians
-        const float inv_det = 1.0f / det;
+        const float inv_det = __frcp_rn(det);
 
         // Compute Mahalanobis distance squared: d^2 = (x-μ)^T Σ^-1 (x-μ)
         const float mh_sq = inv_det * (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff);
