@@ -164,20 +164,81 @@ __device__ __forceinline__ int warp_reduce_max(unsigned mask, int val) {
   return __shfl_sync(mask, val, 0);
 }
 
-__global__ void generate_splats_kernel(const float *__restrict__ uvs, const float *__restrict__ xyz_camera_frame,
-                                       const float *__restrict__ conic, const int n_tiles_x, const int n_tiles_y,
-                                       const float mh_dist, const int N, float *max_z, int *gaussian_idx_by_splat_idx,
-                                       double *sort_keys, int *global_splat_counter) {
-  const bool store_values = !(gaussian_idx_by_splat_idx == nullptr || sort_keys == nullptr);
+__device__ __forceinline__ int warpSum(unsigned mask, int val) {
+  for (int offset = 16; offset > 0; offset /= 2)
+    val += __shfl_down_sync(mask, val, offset);
+  return val;
+}
 
-  int gaussian_idx = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float *__restrict__ conic,
+                                      const float mh_dist, const int n_tiles_x, const int n_tiles_y, const int N,
+                                      int *buffer_bytes, int2 *pairs, int *global_index) {
+  const int gaussian_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-  // Mask of all active threads
+  // mask active threads for warpSum
   unsigned active_mask = __ballot_sync(0xFFFFFFFF, gaussian_idx < N);
 
   if (gaussian_idx >= N)
     return;
 
+  const float u = uvs[gaussian_idx * 2];
+  const float v = uvs[gaussian_idx * 2 + 1];
+  const float a = conic[gaussian_idx * 3] + 0.25f;
+  const float b = conic[gaussian_idx * 3 + 1] / 2.0f;
+  const float c = conic[gaussian_idx * 3 + 2] + 0.25f;
+
+  float obb[8];
+  const int radius_tiles = compute_obb(u, v, a, b, c, mh_dist, obb);
+
+  const int projected_tile_x = floorf(u / 16.0f);
+  const int start_tile_x = fmaxf(0, projected_tile_x - radius_tiles);
+  const int end_tile_x = fminf(n_tiles_x, projected_tile_x + radius_tiles);
+  const int projected_tile_y = floorf(v / 16.0f);
+  const int start_tile_y = fmaxf(0, projected_tile_y - radius_tiles);
+  const int end_tile_y = fminf(n_tiles_y, projected_tile_y + radius_tiles);
+
+  const int num_pairs_for_thread = (end_tile_x - start_tile_x) * (end_tile_y - start_tile_y);
+  // Get required bytes for buffer
+  if (pairs == nullptr) {
+    const int lane_id = gaussian_idx & 0x1f;
+    const int warp_sum = warpSum(active_mask, num_pairs_for_thread);
+    // atomicAdd((unsigned long long int *)buffer_bytes, radius_tiles * radius_tiles);
+    if (lane_id == 0) {
+      atomicAdd(buffer_bytes, warp_sum * sizeof(int2));
+    }
+  } else {
+    // Write pairs to buffer
+    int write_offset = atomicAdd(global_index, num_pairs_for_thread);
+    int curr_pair_id = 0;
+    for (int tile_x = start_tile_x; tile_x <= end_tile_x; tile_x++) {
+      for (int tile_y = start_tile_y; tile_y <= end_tile_y; tile_y++) {
+        int2 pair = {tile_y * n_tiles_x + tile_x, gaussian_idx};
+        pairs[write_offset + curr_pair_id] = pair;
+        curr_pair_id++;
+      }
+    }
+  }
+};
+
+__global__ void generate_splats_kernel(const float *__restrict__ uvs, const float *__restrict__ xyz_camera_frame,
+                                       const float *__restrict__ conic, const int2 *__restrict__ pairs,
+                                       const float mh_dist, const int num_pairs, const int num_tiles_x,
+                                       const int num_tiles_y, float *max_z, int *gaussian_idx_by_splat_idx,
+                                       double *sort_keys, int *global_splat_counter) {
+  int pair_id = blockIdx.x * blockDim.x + threadIdx.x;
+
+  // Mask of all active threads
+  unsigned active_mask = __ballot_sync(0xFFFFFFFF, pair_id < num_pairs);
+
+  if (pair_id >= num_pairs)
+    return;
+
+  // load pair data
+  int2 pair_data = pairs[pair_id];
+  const int tile_idx = pair_data.x;
+  const int gaussian_idx = pair_data.y;
+
+  // get Guassian parameters
   const float u = uvs[gaussian_idx * 2];
   const float v = uvs[gaussian_idx * 2 + 1];
   const double z = (double)(xyz_camera_frame[gaussian_idx * 3 + 2]);
@@ -188,52 +249,28 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
   float obb[8];
   const int radius_tiles = compute_obb(u, v, a, b, c, mh_dist, obb);
 
-  const int projected_tile_x = floorf(u / 16.0f);
-  const int start_tile_x = fmaxf(0, projected_tile_x - radius_tiles);
-  const int end_tile_x = fminf(n_tiles_x, projected_tile_x + radius_tiles + 1);
-  const int projected_tile_y = floorf(v / 16.0f);
-  const int start_tile_y = fmaxf(0, projected_tile_y - radius_tiles);
-  const int end_tile_y = fminf(n_tiles_y, projected_tile_y + radius_tiles + 1);
-
-  const int x_range = end_tile_x - start_tile_x;
-  const int y_range = end_tile_y - start_tile_y;
+  const int tile_x = tile_idx % num_tiles_x;
+  const int tile_y = tile_idx / num_tiles_x;
 
   double tile_idx_key_multiplier = 0.0;
-  if (store_values) {
-    tile_idx_key_multiplier = *max_z + 1.0f;
-  }
+  tile_idx_key_multiplier = *max_z + 1.0f;
 
-  // Reduce to find the minimum start_x and maximum end_x in the warp
-  int warp_range_x = warp_reduce_max(active_mask, x_range);
-  int warp_range_y = warp_reduce_max(active_mask, y_range);
+  float tile_bounds[4];
+  tile_bounds[0] = __int2float_rn(tile_x) * 16.0f;
+  tile_bounds[1] = __int2float_rn(tile_x + 1) * 16.0f;
+  tile_bounds[2] = __int2float_rn(tile_y) * 16.0f;
+  tile_bounds[3] = __int2float_rn(tile_y + 1) * 16.0f;
 
-  for (int tile_x = start_tile_x; tile_x < start_tile_x + warp_range_x; tile_x++) {
-    for (int tile_y = start_tile_y; tile_y < start_tile_y + warp_range_y; tile_y++) {
-      const bool in_thread_bounds =
-          (tile_x >= start_tile_x && tile_x < end_tile_x && tile_y >= start_tile_y && tile_y < end_tile_y);
+  bool intersects = false;
+  intersects = split_axis_test(obb, tile_bounds);
 
-      float tile_bounds[4];
-      tile_bounds[0] = __int2float_rn(tile_x) * 16.0f;
-      tile_bounds[1] = __int2float_rn(tile_x + 1) * 16.0f;
-      tile_bounds[2] = __int2float_rn(tile_y) * 16.0f;
-      tile_bounds[3] = __int2float_rn(tile_y + 1) * 16.0f;
+  // get position of splat in global array
+  const int lane_id = gaussian_idx & 0x1f;
+  int splat_idx = get_write_index(intersects, lane_id, active_mask, global_splat_counter);
 
-      bool intersects = false;
-      if (in_thread_bounds) {
-        intersects = split_axis_test(obb, tile_bounds);
-      }
-
-      const int lane_id = gaussian_idx & 0x1f;
-
-      // get position of splat in global array
-      int splat_idx = get_write_index(intersects, lane_id, active_mask, global_splat_counter);
-
-      if (store_values && intersects) {
-        gaussian_idx_by_splat_idx[splat_idx] = gaussian_idx;
-        const int tile_idx = tile_y * n_tiles_x + tile_x;
-        sort_keys[splat_idx] = z + tile_idx_key_multiplier * __int2double_rn(tile_idx);
-      }
-    }
+  if (intersects) {
+    gaussian_idx_by_splat_idx[splat_idx] = gaussian_idx;
+    sort_keys[splat_idx] = z + tile_idx_key_multiplier * __int2double_rn(tile_idx);
   }
 }
 
@@ -385,30 +422,42 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   ASSERT_DEVICE_POINTER(xyz);
   ASSERT_DEVICE_POINTER(conic);
 
+  const int threads_per_block = 256;
+  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
+
   const int num_tiles = n_tiles_x * n_tiles_y;
 
-  int *d_global_splat_counter;
-  CHECK_CUDA(cudaMalloc(&d_global_splat_counter, sizeof(int)));
-  CHECK_CUDA(cudaMemset(d_global_splat_counter, 0, sizeof(int)));
+  int *d_buffer_index;
+  CHECK_CUDA(cudaMalloc(&d_buffer_index, sizeof(int)));
+  CHECK_CUDA(cudaMemset(d_buffer_index, 0, sizeof(int)));
+
+  int *d_buffer_bytes;
+  CHECK_CUDA(cudaMalloc(&d_buffer_bytes, sizeof(int)));
+  CHECK_CUDA(cudaMemset(d_buffer_bytes, 0, sizeof(int)));
 
   // get required size for output array
   if (sorted_gaussians == nullptr) {
-    const int threads_per_block = 256;
-    const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
-
-    generate_splats_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
-        uv, xyz, conic, n_tiles_x, n_tiles_y, mh_dist, N, nullptr, sorted_gaussians, nullptr, d_global_splat_counter);
+    coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N,
+                                                             d_buffer_bytes, nullptr, d_buffer_index);
     CHECK_CUDA(cudaGetLastError());
 
-    CHECK_CUDA(cudaMemcpy(&sorted_gaussian_bytes, d_global_splat_counter, sizeof(int), cudaMemcpyDeviceToHost));
-    sorted_gaussian_bytes *= sizeof(double);
+    // update host bytes counter
+    int temp_bytes = 0;
+    CHECK_CUDA(cudaMemcpy(&temp_bytes, d_buffer_bytes, sizeof(int), cudaMemcpyDeviceToHost));
+    sorted_gaussian_bytes = temp_bytes;
 
-    CHECK_CUDA(cudaFree(d_global_splat_counter));
-
+    // free memory before return
+    CHECK_CUDA(cudaFree(d_buffer_bytes));
+    CHECK_CUDA(cudaFree(d_buffer_index));
     return;
   }
+  // store pairs of guassians and tiles
+  int2 *d_pairs;
+  CHECK_CUDA(cudaMalloc(&d_pairs, sorted_gaussian_bytes));
 
-  const int num_splats = sorted_gaussian_bytes / sizeof(double);
+  coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N, d_buffer_bytes,
+                                                           d_pairs, d_buffer_index);
+  CHECK_CUDA(cudaGetLastError());
 
   // get max z depth for key multiplier
   float *d_max_z;
@@ -434,12 +483,23 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
   double *d_sort_keys;
   CHECK_CUDA(cudaMalloc(&d_sort_keys, sorted_gaussian_bytes));
+  int *d_global_splat_counter;
+  CHECK_CUDA(cudaMalloc(&d_global_splat_counter, sizeof(int)));
+  CHECK_CUDA(cudaMemset(d_global_splat_counter, 0, sizeof(int)));
 
-  const int threads_per_block = 256;
-  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
+  int num_pairs;
+  cudaMemcpy(&num_pairs, d_buffer_index, sizeof(int), cudaMemcpyDeviceToHost);
 
-  generate_splats_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
-      uv, xyz, conic, n_tiles_x, n_tiles_y, mh_dist, N, d_max_z, sorted_gaussians, d_sort_keys, d_global_splat_counter);
+  const int num_blocks_pairs = (num_pairs + threads_per_block - 1) / threads_per_block;
+  generate_splats_kernel<<<num_blocks_pairs, threads_per_block, 0, stream>>>(
+      uv, xyz, conic, d_pairs, mh_dist, num_pairs, n_tiles_x, n_tiles_y, d_max_z, sorted_gaussians, d_sort_keys,
+      d_global_splat_counter);
+
+  int num_splats;
+  CHECK_CUDA(cudaMemcpy(&num_splats, d_global_splat_counter, sizeof(int), cudaMemcpyDeviceToHost));
+  printf("NUM SPLATS %d\n", num_splats);
+
+  return;
 
   {
     void *d_temp_storage = nullptr;
@@ -461,5 +521,6 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
   CHECK_CUDA(cudaFree(d_max_z));
   CHECK_CUDA(cudaFree(d_sort_keys));
-  CHECK_CUDA(cudaFree(d_global_splat_counter));
+  CHECK_CUDA(cudaFree(d_buffer_bytes));
+  CHECK_CUDA(cudaFree(d_buffer_index));
 }
