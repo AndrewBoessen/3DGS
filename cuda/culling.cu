@@ -192,17 +192,16 @@ __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float
 
   const int projected_tile_x = floorf(u / 16.0f);
   const int start_tile_x = fmaxf(0, projected_tile_x - radius_tiles);
-  const int end_tile_x = fminf(n_tiles_x, projected_tile_x + radius_tiles);
+  const int end_tile_x = fminf(n_tiles_x, projected_tile_x + radius_tiles + 1);
   const int projected_tile_y = floorf(v / 16.0f);
   const int start_tile_y = fmaxf(0, projected_tile_y - radius_tiles);
-  const int end_tile_y = fminf(n_tiles_y, projected_tile_y + radius_tiles);
+  const int end_tile_y = fminf(n_tiles_y, projected_tile_y + radius_tiles + 1);
 
   const int num_pairs_for_thread = (end_tile_x - start_tile_x) * (end_tile_y - start_tile_y);
   // Get required bytes for buffer
   if (pairs == nullptr) {
     const int lane_id = gaussian_idx & 0x1f;
     const int warp_sum = warpSum(active_mask, num_pairs_for_thread);
-    // atomicAdd((unsigned long long int *)buffer_bytes, radius_tiles * radius_tiles);
     if (lane_id == 0) {
       atomicAdd(buffer_bytes, warp_sum * sizeof(int2));
     }
@@ -210,8 +209,8 @@ __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float
     // Write pairs to buffer
     int write_offset = atomicAdd(global_index, num_pairs_for_thread);
     int curr_pair_id = 0;
-    for (int tile_x = start_tile_x; tile_x <= end_tile_x; tile_x++) {
-      for (int tile_y = start_tile_y; tile_y <= end_tile_y; tile_y++) {
+    for (int tile_x = start_tile_x; tile_x < end_tile_x; tile_x++) {
+      for (int tile_y = start_tile_y; tile_y < end_tile_y; tile_y++) {
         int2 pair = {tile_y * n_tiles_x + tile_x, gaussian_idx};
         pairs[write_offset + curr_pair_id] = pair;
         curr_pair_id++;
@@ -265,7 +264,7 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
   intersects = split_axis_test(obb, tile_bounds);
 
   // get position of splat in global array
-  const int lane_id = gaussian_idx & 0x1f;
+  const int lane_id = pair_id & 0x1f;
   int splat_idx = get_write_index(intersects, lane_id, active_mask, global_splat_counter);
 
   if (intersects) {
@@ -489,6 +488,7 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
   int num_pairs;
   cudaMemcpy(&num_pairs, d_buffer_index, sizeof(int), cudaMemcpyDeviceToHost);
+  printf("NUM PAIRS %d\n", num_pairs);
 
   const int num_blocks_pairs = (num_pairs + threads_per_block - 1) / threads_per_block;
   generate_splats_kernel<<<num_blocks_pairs, threads_per_block, 0, stream>>>(
@@ -498,8 +498,6 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   int num_splats;
   CHECK_CUDA(cudaMemcpy(&num_splats, d_global_splat_counter, sizeof(int), cudaMemcpyDeviceToHost));
   printf("NUM SPLATS %d\n", num_splats);
-
-  return;
 
   {
     void *d_temp_storage = nullptr;
