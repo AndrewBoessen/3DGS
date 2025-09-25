@@ -487,7 +487,7 @@ void Trainer::train() {
   }
 
   // TRAINING LOOP
-  for (int iter = 100; iter < config.num_iters; ++iter) {
+  for (int iter = 0; iter < config.num_iters; ++iter) {
     num_gaussians = gaussians.size();
     // Zero gradients
     CHECK_CUDA(cudaMemset(d_grad_xyz, 0.0f, num_gaussians));

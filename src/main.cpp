@@ -10,24 +10,28 @@
 
 int main(int argc, char *argv[]) {
   // Check for the correct number of command-line arguments.
-  if (argc != 5) {
+  if (argc != 7) {
     std::cerr << "Usage: " << argv[0]
-              << "<path_to_config_file.yaml> <path_to_cameras.bin> <path_to_images.bin> <path_to_points3D.bin>"
+              << " <scaling factor> <path_to_config_file.yaml> <path_to_cameras.bin> <path_to_images.bin> "
+                 "<path_to_points3D.bin> "
+                 "<path_to_image_root_directory>"
               << std::endl;
     return 1; // Return an error code
   }
 
   // Get file paths from the arguments.
-  const std::string config_path = argv[1];
-  const std::string cameras_path = argv[2];
-  const std::string images_path = argv[3];
-  const std::string points3D_path = argv[4];
+  const int downsample_factor = *argv[1] - '0';
+  const std::string config_path = argv[2];
+  const std::string cameras_path = argv[3];
+  const std::string images_path = argv[4];
+  const std::string points3D_path = argv[5];
+  const std::string image_dir = argv[6];
 
   // --- 1. Declarations ---
   // All data is declared here to be accessible at the end of the main function.
   ConfigParameters config;
 
-  using CamerasType = decltype(ReadCamerasBinary({}))::value_type;
+  using CamerasType = decltype(ReadCamerasBinary({}, 1))::value_type;
   using ImagesType = decltype(ReadImagesBinary({}))::value_type;
   using Points3DType = decltype(ReadPoints3DBinary({}))::value_type;
 
@@ -53,7 +57,7 @@ int main(int argc, char *argv[]) {
   std::cout << "Points3D file: " << points3D_path << std::endl;
 
   // Read the cameras.bin file.
-  if (auto cameras_optional = ReadCamerasBinary(cameras_path)) {
+  if (auto cameras_optional = ReadCamerasBinary(cameras_path, downsample_factor)) {
     cameras = std::move(*cameras_optional); // Move data from optional to main variable
     std::cout << "Successfully read " << cameras.size() << " cameras." << std::endl;
   } else {

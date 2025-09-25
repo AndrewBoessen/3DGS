@@ -32,7 +32,8 @@ Eigen::Matrix3d Image::QvecToRotMat() const {
   return q.toRotationMatrix();
 }
 
-std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::filesystem::path &path) {
+std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::filesystem::path &path,
+                                                                 const int downsample_factor) {
   std::ifstream file(path, std::ios::binary);
   if (!file) {
     std::cerr << "Error: Could not open file " << path << std::endl;
@@ -59,6 +60,11 @@ std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::file
       return std::nullopt;
     }
 
+    if (model_id != 0 && model_id != 1) {
+      std::cerr << "Error: Only PINHOLE or SIMPLE_PINHOLE camera supported" << std::endl;
+      return std::nullopt;
+    }
+
     auto it = camera_models.find(model_id);
     if (it == camera_models.end()) {
       std::cerr << "Error: Unknown camera model ID: " << model_id << std::endl;
@@ -71,6 +77,13 @@ std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::file
       std::cerr << "Error: Failed to read camera parameters." << std::endl;
       return std::nullopt;
     }
+
+    for (double &param : cam.params) {
+      param /= (double)downsample_factor;
+    }
+    cam.height /= downsample_factor;
+    cam.width /= downsample_factor;
+
     cameras[cam.id] = std::move(cam);
   }
   return cameras;
