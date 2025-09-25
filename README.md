@@ -29,6 +29,8 @@ You will need a standard C++ development toolchain. Please install the following
 
 - **nanoflann**
 
+- **OpenCV**
+
 For example, on Ubuntu 22.04, you can install these with:
 
 ```bash
@@ -48,7 +50,7 @@ make install
 ```
 
 ```bash
-sudo apt install cmake build-essential g++-12 libeigen3-dev libyaml-cpp-dev
+sudo apt install cmake build-essential g++-12 libeigen3-dev libyaml-cpp-dev libopencv-dev
 ```
 
 ### 2. NVIDIA CUDA Toolkit

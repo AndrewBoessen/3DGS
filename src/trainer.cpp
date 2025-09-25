@@ -6,6 +6,7 @@
 #include "gsplat/gaussian.hpp"
 #include "gsplat/optimize.hpp"
 #include <iostream>
+#include <opencv2/opencv.hpp>
 
 // Helper function to filter a vector based on a boolean mask.
 template <typename T> void filter_vector(std::vector<T> &vec, const std::vector<bool> &keep_mask) {
@@ -486,7 +487,7 @@ void Trainer::train() {
   }
 
   // TRAINING LOOP
-  for (int iter = 0; iter < config.num_iters; ++iter) {
+  for (int iter = 100; iter < config.num_iters; ++iter) {
     num_gaussians = gaussians.size();
     // Zero gradients
     CHECK_CUDA(cudaMemset(d_grad_xyz, 0.0f, num_gaussians));
@@ -510,10 +511,12 @@ void Trainer::train() {
     const int width = (int)curr_camera.width;
     const int height = (int)curr_camera.height;
 
+    printf("WIDTH %d HEIGHT %d\n", width, height);
+
     float *d_image_buffer, *d_weight_per_pixel;
     CHECK_CUDA(cudaMalloc(&d_image_buffer, width * height * 3 * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&d_weight_per_pixel, width * height * sizeof(float)));
-    CHECK_CUDA(cudaMemset(d_image_buffer, 0, width * height * 3 * sizeof(float)));
+    CHECK_CUDA(cudaMemset(d_image_buffer, 0.0f, width * height * 3 * sizeof(float)));
 
     // Prepare camera intrinsics (K)
     float h_K[9] = {(float)curr_camera.params[0],
@@ -540,11 +543,17 @@ void Trainer::train() {
     CHECK_CUDA(cudaMemcpy(d_T, h_T, 12 * sizeof(float), cudaMemcpyHostToDevice));
 
     // FORWARD PASS
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start, 0);
     // Step 1: Projections and Culling (Parallelized across streams)
     int offset = 0;
     for (int i = 0; i < NUM_STREAMS; ++i) {
       int remainder = num_gaussians % NUM_STREAMS;
       int size = num_gaussians / NUM_STREAMS + (i < remainder ? 1 : 0);
+
+      printf("SIZE %d STREAM %d\n", size, i);
 
       if (size <= 0)
         continue;
@@ -563,6 +572,8 @@ void Trainer::train() {
     filter_gaussians_by_mask(num_gaussians, d_mask, d_xyz, d_rgb, d_opacity, d_scale, d_quaternion, d_uv, d_xyz_c,
                              d_xyz_culled, d_rgb_culled, d_opacity_culled, d_scale_culled, d_quaternion_culled,
                              d_uv_culled, d_xyz_c_culled, &num_culled);
+
+    printf("REMAINING AFTRE CULLING %d\n", num_culled);
     if (num_culled == 0) {
       std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;
       continue;
@@ -601,6 +612,8 @@ void Trainer::train() {
     get_sorted_gaussian_list(d_uv_culled, d_xyz_c_culled, d_conic, n_tiles_x, n_tiles_y, config.mh_dist, num_culled,
                              sorted_gaussian_bytes, nullptr, nullptr);
 
+    std::cout << "SORTED_BYTES " << sorted_gaussian_bytes << std::endl;
+
     CHECK_CUDA(cudaMalloc(&d_splat_start_end_idx_by_tile_idx, (n_tiles + 1) * sizeof(int)));
     CHECK_CUDA(cudaMalloc(&d_sorted_gaussians, sorted_gaussian_bytes));
 
@@ -611,10 +624,49 @@ void Trainer::train() {
     render_image(d_uv_culled, d_opacity_culled, d_conic, d_rgb_culled, 1.0f, d_sorted_gaussians,
                  d_splat_start_end_idx_by_tile_idx, width, height, d_weight_per_pixel, d_image_buffer);
 
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    // Record the stop event on the default stream
+    cudaEventRecord(stop, 0);
+
+    std::cout << "COMPLETED RENDER OF IMAGE" << std::endl;
+
+    // Wait for the stop event to complete
+    cudaEventSynchronize(stop);
+
+    float milliseconds = 0;
+    // Calculate the elapsed time between start and stop
+    cudaEventElapsedTime(&milliseconds, start, stop);
+
+    printf("Elapsed time for kernels: %f ms\n", milliseconds);
+
+    std::vector<float> image;
+    image.reserve(3 * width * height);
+    CHECK_CUDA(cudaMemcpy(image.data(), d_image_buffer, 3 * width * height * sizeof(float), cudaMemcpyDeviceToHost));
+
+    cv::Mat rgb_float_mat(height, width, CV_32FC3, image.data());
+    cv::Mat rgb_byte_mat;
+    // The '255.0' is a scaling factor.
+    rgb_float_mat.convertTo(rgb_byte_mat, CV_8UC3, 255.0);
+    cv::Mat bgr_byte_mat;
+    cv::cvtColor(rgb_byte_mat, bgr_byte_mat, cv::COLOR_RGB2BGR);
+
+    std::string filename = "output_opencv.png";
+    bool success = cv::imwrite(filename, bgr_byte_mat);
+
     // BACKWARD PASS
 
     // Optimizer step
     Gradients gradients = {};
     optimizer.step(gaussians, gradients);
+
+    // Free temporary buffers
+    CHECK_CUDA(cudaFree(d_image_buffer));
+    CHECK_CUDA(cudaFree(d_weight_per_pixel));
+    CHECK_CUDA(cudaFree(d_sigma));
+    CHECK_CUDA(cudaFree(d_conic));
+    CHECK_CUDA(cudaFree(d_J));
+    CHECK_CUDA(cudaFree(d_splat_start_end_idx_by_tile_idx));
+    CHECK_CUDA(cudaFree(d_sorted_gaussians));
   }
 }

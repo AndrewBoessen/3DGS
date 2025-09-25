@@ -20,6 +20,8 @@ find_package(sphericart REQUIRED)
 find_package(OpenMP REQUIRED)
 # Find nanoflann for nearest neighbor
 find_package(nanoflann)
+# Find OpenCV for image procesing
+find_package(OpenCV REQUIRED)
 
 # ===================================================================
 # DATALODER LIBRARY DEFINITION
@@ -41,7 +43,7 @@ target_include_directories(gsplat
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp Eigen3::Eigen nanoflann::nanoflann)
+target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp Eigen3::Eigen nanoflann::nanoflann ${OpenCV_LIBS})
 
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION
