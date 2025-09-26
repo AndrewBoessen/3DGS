@@ -5,7 +5,7 @@ const std::string TEST_DATA_PATH = TEST_DATA_DIR;
 
 // Test suite for the ReadCamerasBinary function
 TEST(ColmapIoTest, ReadCamerasBinary) {
-  const auto cameras_optional = ReadCamerasBinary(TEST_DATA_PATH + "/cameras.bin");
+  const auto cameras_optional = ReadCamerasBinary(TEST_DATA_PATH + "/cameras.bin", 1);
 
   // 1. Ensure the file was opened and read successfully
   ASSERT_TRUE(cameras_optional.has_value());

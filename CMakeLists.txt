@@ -18,6 +18,10 @@ find_package(CUDAToolkit REQUIRED)
 find_package(sphericart REQUIRED)
 # Find OpenMP for sphericart parallelization
 find_package(OpenMP REQUIRED)
+# Find nanoflann for nearest neighbor
+find_package(nanoflann)
+# Find OpenCV for image procesing
+find_package(OpenCV REQUIRED)
 
 # ===================================================================
 # DATALODER LIBRARY DEFINITION
@@ -33,13 +37,13 @@ target_link_libraries(dataloader PUBLIC Eigen3::Eigen)
 # ===================================================================
 # GSPLAT LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat src/utils.cpp src/gaussian.cpp src/raster.cpp src/optimize.cpp src/trainer.cpp)
+add_library(gsplat src/utils.cpp src/gaussian.cpp src/raster.cpp src/loss.cpp src/optimize.cpp src/trainer.cpp)
 
 target_include_directories(gsplat
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat PUBLIC yaml-cpp Eigen3::Eigen)
+target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp Eigen3::Eigen nanoflann::nanoflann ${OpenCV_LIBS})
 
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION
@@ -95,6 +99,9 @@ add_gtest_executable(cuda_forward_tests tests/cuda_forward_test.cpp gsplat_cuda)
 
 # --- CUDA Backward Tests ---
 add_gtest_executable(cuda_backward_tests tests/cuda_backward_test.cpp gsplat_cuda)
+
+# --- Loss Tests ---
+add_gtest_executable(loss_tests tests/loss_test.cpp gsplat)
 
 # --- Optimizer Tests ---
 add_gtest_executable(optimizer_tests tests/optimize_test.cpp gsplat)
