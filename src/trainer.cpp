@@ -642,7 +642,7 @@ void Trainer::train() {
     printf("Elapsed time for kernels: %f ms\n", milliseconds);
 
     std::vector<float> image;
-    image.reserve(3 * width * height);
+    image.resize(3 * width * height);
     CHECK_CUDA(cudaMemcpy(image.data(), d_image_buffer, 3 * width * height * sizeof(float), cudaMemcpyDeviceToHost));
 
     // cv::Mat rgb_float_mat(height, width, CV_32FC3, image.data());
@@ -655,15 +655,20 @@ void Trainer::train() {
     // std::string filename = "output_opencv.png";
     // bool success = cv::imwrite(filename, bgr_byte_mat);
     //
-    cv::Mat gt_image = cv::imread(curr_image.name, cv::IMREAD_COLOR_RGB);
+    // Create a vector to hold the ground truth data
+    std::vector<float> gt_image_data_vec;
+
+    cv::Mat bgr_gt_image = cv::imread(curr_image.name, cv::IMREAD_COLOR);
+    cv::Mat rgb_gt_image;
+    cv::cvtColor(bgr_gt_image, rgb_gt_image, cv::COLOR_BGR2RGB);
     cv::Mat float_gt_image;
-    gt_image.convertTo(float_gt_image, CV_32FC3, 1.0 / 255.0);
-    float *gt_image_data = reinterpret_cast<float *>(float_gt_image.data);
+    rgb_gt_image.convertTo(float_gt_image, CV_32FC3, 1.0 / 255.0);
+    gt_image_data_vec.assign((float *)float_gt_image.datastart, (float *)float_gt_image.dataend);
 
     // LOSS
-    //
-    float l1 = l1_loss(image.data(), gt_image_data, height, width, 3);
-    float ssim = ssim_loss(image.data(), gt_image_data, height, width, 3);
+
+    float l1 = l1_loss(image.data(), gt_image_data_vec.data(), height, width, 3);
+    float ssim = ssim_loss(image.data(), gt_image_data_vec.data(), height, width, 3);
 
     float loss = (1.0 - config.ssim_frac) * l1 + config.ssim_frac * ssim;
 

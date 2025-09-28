@@ -81,8 +81,9 @@ std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::file
     for (double &param : cam.params) {
       param /= (double)downsample_factor;
     }
-    cam.height /= downsample_factor;
-    cam.width /= downsample_factor;
+
+    cam.height = std::round(cam.height / (float)downsample_factor);
+    cam.width = std::round(cam.width / (float)downsample_factor);
 
     cameras[cam.id] = std::move(cam);
   }
@@ -116,7 +117,8 @@ ReadImagesBinary(const std::filesystem::path &path, const std::string img_root_d
       return std::nullopt;
     }
 
-    img.name = img_root_dir + "/images_" + std::to_string(downsample_factor) + "/";
+    img.name =
+        img_root_dir + (downsample_factor > 1 ? ("images_" + std::to_string(downsample_factor)) : ("images")) + "/";
     char name_char;
     while (ReadBinary(file, name_char) && name_char != '\0') {
       img.name += name_char;

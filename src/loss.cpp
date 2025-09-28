@@ -19,9 +19,9 @@ float ssim_loss(const float *predicted_data, const float *gt_data, int rows, int
   for (int c = 0; c < channels; ++c) {
     // Create a non-copying map for the current channel using strides
     Eigen::Map<const Eigen::MatrixXf, 0, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> pred_c(
-        predicted_data + c, rows, cols, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(cols * channels, channels));
+        predicted_data + c, rows, cols, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(channels, cols * channels));
     Eigen::Map<const Eigen::MatrixXf, 0, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>> gt_c(
-        gt_data + c, rows, cols, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(cols * channels, channels));
+        gt_data + c, rows, cols, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(channels, cols * channels));
 
     // Calculate SSIM for the current channel
     const float K1 = 0.01f, K2 = 0.03f, L = 1.0f;
