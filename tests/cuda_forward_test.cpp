@@ -703,3 +703,122 @@ TEST_F(CudaKernelTest, RenderImageMultipleGaussians) {
   CUDA_CHECK(cudaFree(d_weight_per_pixel));
   CUDA_CHECK(cudaFree(d_image));
 }
+
+// Define constants for SSIM calculation.
+namespace SSIMConstants {
+constexpr int WINDOW_SIZE = 11;
+constexpr int WINDOW_RADIUS = WINDOW_SIZE / 2;
+constexpr float K1 = 0.01f;
+constexpr float K2 = 0.03f;
+// Dynamic range of pixel values (assuming normalized to [0,1]).
+constexpr float L = 1.0f;
+constexpr float C1 = (K1 * L) * (K1 * L);
+constexpr float C2 = (K2 * L) * (K2 * L);
+} // namespace SSIMConstants
+
+// Test case for the fused_loss function.
+// This test verifies both the combined L1/SSIM loss value and the calculated gradients.
+TEST_F(CudaKernelTest, FusedLossKernel) {
+  // 1. Setup test parameters
+  const int rows = 16;
+  const int cols = 16;
+  const int channels = 3;
+  const float ssim_weight = 0.2f;
+  const int num_pixels = rows * cols;
+  const int total_size = num_pixels * channels;
+
+  // 2. Host-side data: uniform images to simplify host-side verification
+  std::vector<float> h_pred(total_size, 0.5f);
+  std::vector<float> h_gt(total_size, 0.6f);
+  std::vector<float> h_grad(total_size, 0.0f);
+
+  // 3. Device-side data setup
+  float *d_pred, *d_gt, *d_grad;
+  CUDA_CHECK(cudaMalloc(&d_pred, total_size * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_gt, total_size * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_grad, total_size * sizeof(float)));
+
+  CUDA_CHECK(cudaMemcpy(d_pred, h_pred.data(), total_size * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_gt, h_gt.data(), total_size * sizeof(float), cudaMemcpyHostToDevice));
+
+  // 4. Call the function to be tested
+  float gpu_loss = fused_loss(d_pred, d_gt, rows, cols, channels, ssim_weight, d_grad);
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  // 5. Copy gradient results back to host
+  CUDA_CHECK(cudaMemcpy(h_grad.data(), d_grad, total_size * sizeof(float), cudaMemcpyDeviceToHost));
+
+  // 6. Calculate expected results on the host
+  // Since the images are uniform, variance and covariance are zero, which simplifies SSIM.
+  const float mu_p = 0.5f;
+  const float mu_g = 0.6f;
+  const float var_p = 0.0f;
+  const float var_g = 0.0f;
+  const float cov_pg = 0.0f;
+
+  using namespace SSIMConstants;
+  float ssim_num = (2.0f * mu_p * mu_g + C1) * (2.0f * cov_pg + C2);
+  float ssim_den = (mu_p * mu_p + mu_g * mu_g + C1) * (var_p + var_g + C2);
+  float expected_ssim = ssim_num / ssim_den;
+
+  // Expected loss per pixel
+  float expected_l1_loss_pixel = fabsf(mu_p - mu_g);
+  float expected_ssim_loss_pixel = 1.0f - expected_ssim;
+  float expected_combined_loss_pixel =
+      (1.0f - ssim_weight) * expected_l1_loss_pixel + ssim_weight * expected_ssim_loss_pixel;
+  float expected_mean_loss = expected_combined_loss_pixel;
+
+  // Expected gradient calculation
+  std::vector<float> expected_grad(total_size, 0.0f);
+  // L1 part
+  float grad_l1 = (mu_p > mu_g) ? 1.0f : -1.0f;
+  for (int i = 0; i < total_size; ++i) {
+    expected_grad[i] = (1.0f - ssim_weight) * grad_l1;
+  }
+
+  // SSIM part
+  auto cpu_gaussian = [](int x, int y, float sigma) -> float {
+    float coeff = 1.0f / (2.0f * M_PI * sigma * sigma);
+    float exponent = -(x * x + y * y) / (2.0f * sigma * sigma);
+    return expf(exponent) * coeff;
+  };
+
+  const float gauss_sigma = 1.5f;
+  float total_weight = 0.0f;
+  for (int j = -WINDOW_RADIUS; j <= WINDOW_RADIUS; ++j) {
+    for (int i = -WINDOW_RADIUS; i <= WINDOW_RADIUS; ++i) {
+      total_weight += cpu_gaussian(i, j, gauss_sigma);
+    }
+  }
+  float w_i = cpu_gaussian(0, 0, gauss_sigma) / total_weight;
+
+  float d_mu_p = w_i;
+  float d_var_p = 2.0f * (mu_p - mu_p) * w_i; // 0 for uniform image
+  float d_cov_pg = (mu_g - mu_g) * w_i;       // 0 for uniform image
+
+  float dN = (2.0f * mu_g * d_mu_p) * (2.0f * cov_pg + C2);
+  float dD = (2.0f * mu_p * d_mu_p) * (var_p + var_g + C2);
+  float d_ssim = (dN * ssim_den - ssim_num * dD) / (ssim_den * ssim_den);
+
+  for (int i = 0; i < total_size; ++i) {
+    expected_grad[i] -= ssim_weight * d_ssim;
+  }
+
+  // 7. Compare results
+  ASSERT_NEAR(gpu_loss, expected_mean_loss, 1e-3);
+
+  for (int i = 0; i < total_size; ++i) {
+    // Border pixels have different clamping in the SSIM window, leading to different gradients.
+    // For simplicity, we only check the center pixels where the window is full and un-clamped.
+    int r = (i % num_pixels) / cols;
+    int c = (i % num_pixels) % cols;
+    if (r >= WINDOW_RADIUS && r < rows - WINDOW_RADIUS && c >= WINDOW_RADIUS && c < cols - WINDOW_RADIUS) {
+      ASSERT_NEAR(h_grad[i], expected_grad[i], 1e-5) << "Gradient mismatch at index " << i;
+    }
+  }
+
+  // 8. Cleanup
+  CUDA_CHECK(cudaFree(d_pred));
+  CUDA_CHECK(cudaFree(d_gt));
+  CUDA_CHECK(cudaFree(d_grad));
+}

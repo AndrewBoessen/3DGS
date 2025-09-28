@@ -4,7 +4,6 @@
 #include "gsplat/cuda_backward.hpp"
 #include "gsplat/cuda_forward.hpp"
 #include "gsplat/gaussian.hpp"
-#include "gsplat/loss.hpp"
 #include "gsplat/optimize.hpp"
 #include <iostream>
 #include <opencv2/opencv.hpp>
@@ -554,8 +553,6 @@ void Trainer::train() {
       int remainder = num_gaussians % NUM_STREAMS;
       int size = num_gaussians / NUM_STREAMS + (i < remainder ? 1 : 0);
 
-      printf("SIZE %d STREAM %d\n", size, i);
-
       if (size <= 0)
         continue;
 
@@ -574,7 +571,6 @@ void Trainer::train() {
                              d_xyz_culled, d_rgb_culled, d_opacity_culled, d_scale_culled, d_quaternion_culled,
                              d_uv_culled, d_xyz_c_culled, &num_culled);
 
-    printf("REMAINING AFTRE CULLING %d\n", num_culled);
     if (num_culled == 0) {
       std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;
       continue;
@@ -645,19 +641,8 @@ void Trainer::train() {
     image.resize(3 * width * height);
     CHECK_CUDA(cudaMemcpy(image.data(), d_image_buffer, 3 * width * height * sizeof(float), cudaMemcpyDeviceToHost));
 
-    // cv::Mat rgb_float_mat(height, width, CV_32FC3, image.data());
-    // cv::Mat rgb_byte_mat;
-    //// The '255.0' is a scaling factor.
-    // rgb_float_mat.convertTo(rgb_byte_mat, CV_8UC3, 255.0);
-    // cv::Mat bgr_byte_mat;
-    // cv::cvtColor(rgb_byte_mat, bgr_byte_mat, cv::COLOR_RGB2BGR);
-
-    // std::string filename = "output_opencv.png";
-    // bool success = cv::imwrite(filename, bgr_byte_mat);
-    //
-    // Create a vector to hold the ground truth data
+    // Load ground truth image
     std::vector<float> gt_image_data_vec;
-
     cv::Mat bgr_gt_image = cv::imread(curr_image.name, cv::IMREAD_COLOR);
     cv::Mat rgb_gt_image;
     cv::cvtColor(bgr_gt_image, rgb_gt_image, cv::COLOR_BGR2RGB);
@@ -665,14 +650,19 @@ void Trainer::train() {
     rgb_gt_image.convertTo(float_gt_image, CV_32FC3, 1.0 / 255.0);
     gt_image_data_vec.assign((float *)float_gt_image.datastart, (float *)float_gt_image.dataend);
 
+    float *d_gt_image;
+    CHECK_CUDA(cudaMalloc(&d_gt_image, height * width * 3 * sizeof(float)));
+    CHECK_CUDA(
+        cudaMemcpy(d_gt_image, gt_image_data_vec.data(), height * width * 3 * sizeof(float), cudaMemcpyHostToDevice));
+
     // LOSS
+    float *d_grad_image;
+    CHECK_CUDA(cudaMalloc(&d_grad_image, height * width * 3 * sizeof(float)));
+    CHECK_CUDA(cudaMemset(d_grad_image, 0.0f, height * width * 3));
 
-    float l1 = l1_loss(image.data(), gt_image_data_vec.data(), height, width, 3);
-    float ssim = ssim_loss(image.data(), gt_image_data_vec.data(), height, width, 3);
+    float loss = fused_loss(d_image_buffer, d_gt_image, height, width, 3, config.ssim_frac, d_grad_image);
 
-    float loss = (1.0 - config.ssim_frac) * l1 + config.ssim_frac * ssim;
-
-    printf("LOSS L1 %f SSIM %f TOTAL %f\n", l1, ssim, loss);
+    printf("LOSS TOTAL %f\n", loss);
 
     // BACKWARD PASS
 
@@ -681,6 +671,7 @@ void Trainer::train() {
     optimizer.step(gaussians, gradients);
 
     // Free temporary buffers
+    CHECK_CUDA(cudaFree(d_grad_image));
     CHECK_CUDA(cudaFree(d_image_buffer));
     CHECK_CUDA(cudaFree(d_weight_per_pixel));
     CHECK_CUDA(cudaFree(d_sigma));

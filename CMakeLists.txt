@@ -37,7 +37,7 @@ target_link_libraries(dataloader PUBLIC Eigen3::Eigen)
 # ===================================================================
 # GSPLAT LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat src/utils.cpp src/gaussian.cpp src/raster.cpp src/loss.cpp src/optimize.cpp src/trainer.cpp)
+add_library(gsplat src/utils.cpp src/gaussian.cpp src/raster.cpp src/optimize.cpp src/trainer.cpp)
 
 target_include_directories(gsplat
   PUBLIC
@@ -48,7 +48,7 @@ target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp Eigen3::Eige
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu cuda/spherical_harmonics.cu cuda/render.cu cuda/projection_backward.cu cuda/gaussian_backward.cu cuda/spherical_harmonics_backward.cu cuda/render_backward.cu)
+add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu cuda/spherical_harmonics.cu cuda/render.cu cuda/loss.cu cuda/projection_backward.cu cuda/gaussian_backward.cu cuda/spherical_harmonics_backward.cu cuda/render_backward.cu)
 
 target_include_directories(gsplat_cuda
   PUBLIC
@@ -99,9 +99,6 @@ add_gtest_executable(cuda_forward_tests tests/cuda_forward_test.cpp gsplat_cuda)
 
 # --- CUDA Backward Tests ---
 add_gtest_executable(cuda_backward_tests tests/cuda_backward_test.cpp gsplat_cuda)
-
-# --- Loss Tests ---
-add_gtest_executable(loss_tests tests/loss_test.cpp gsplat)
 
 # --- Optimizer Tests ---
 add_gtest_executable(optimizer_tests tests/optimize_test.cpp gsplat)
