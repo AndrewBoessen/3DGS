@@ -89,7 +89,8 @@ std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::file
   return cameras;
 }
 
-std::optional<std::unordered_map<int, Image>> ReadImagesBinary(const std::filesystem::path &path) {
+std::optional<std::unordered_map<int, Image>>
+ReadImagesBinary(const std::filesystem::path &path, const std::string img_root_dir, const int downsample_factor) {
   std::ifstream file(path, std::ios::binary);
   if (!file) {
     std::cerr << "Error: Could not open file " << path << std::endl;
@@ -115,6 +116,7 @@ std::optional<std::unordered_map<int, Image>> ReadImagesBinary(const std::filesy
       return std::nullopt;
     }
 
+    img.name = img_root_dir + "/images_" + std::to_string(downsample_factor) + "/";
     char name_char;
     while (ReadBinary(file, name_char) && name_char != '\0') {
       img.name += name_char;

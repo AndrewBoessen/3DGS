@@ -4,6 +4,7 @@
 #include "gsplat/cuda_backward.hpp"
 #include "gsplat/cuda_forward.hpp"
 #include "gsplat/gaussian.hpp"
+#include "gsplat/loss.hpp"
 #include "gsplat/optimize.hpp"
 #include <iostream>
 #include <opencv2/opencv.hpp>
@@ -644,15 +645,29 @@ void Trainer::train() {
     image.reserve(3 * width * height);
     CHECK_CUDA(cudaMemcpy(image.data(), d_image_buffer, 3 * width * height * sizeof(float), cudaMemcpyDeviceToHost));
 
-    cv::Mat rgb_float_mat(height, width, CV_32FC3, image.data());
-    cv::Mat rgb_byte_mat;
-    // The '255.0' is a scaling factor.
-    rgb_float_mat.convertTo(rgb_byte_mat, CV_8UC3, 255.0);
-    cv::Mat bgr_byte_mat;
-    cv::cvtColor(rgb_byte_mat, bgr_byte_mat, cv::COLOR_RGB2BGR);
+    // cv::Mat rgb_float_mat(height, width, CV_32FC3, image.data());
+    // cv::Mat rgb_byte_mat;
+    //// The '255.0' is a scaling factor.
+    // rgb_float_mat.convertTo(rgb_byte_mat, CV_8UC3, 255.0);
+    // cv::Mat bgr_byte_mat;
+    // cv::cvtColor(rgb_byte_mat, bgr_byte_mat, cv::COLOR_RGB2BGR);
 
-    std::string filename = "output_opencv.png";
-    bool success = cv::imwrite(filename, bgr_byte_mat);
+    // std::string filename = "output_opencv.png";
+    // bool success = cv::imwrite(filename, bgr_byte_mat);
+    //
+    cv::Mat gt_image = cv::imread(curr_image.name, cv::IMREAD_COLOR_RGB);
+    cv::Mat float_gt_image;
+    gt_image.convertTo(float_gt_image, CV_32FC3, 1.0 / 255.0);
+    float *gt_image_data = reinterpret_cast<float *>(float_gt_image.data);
+
+    // LOSS
+    //
+    float l1 = l1_loss(image.data(), gt_image_data, height, width, 3);
+    float ssim = ssim_loss(image.data(), gt_image_data, height, width, 3);
+
+    float loss = (1.0 - config.ssim_frac) * l1 + config.ssim_frac * ssim;
+
+    printf("LOSS L1 %f SSIM %f TOTAL %f\n", l1, ssim, loss);
 
     // BACKWARD PASS
 

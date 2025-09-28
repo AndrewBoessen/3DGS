@@ -32,7 +32,7 @@ int main(int argc, char *argv[]) {
   ConfigParameters config;
 
   using CamerasType = decltype(ReadCamerasBinary({}, 1))::value_type;
-  using ImagesType = decltype(ReadImagesBinary({}))::value_type;
+  using ImagesType = decltype(ReadImagesBinary({}, "", 1))::value_type;
   using Points3DType = decltype(ReadPoints3DBinary({}))::value_type;
 
   CamerasType cameras;
@@ -66,7 +66,7 @@ int main(int argc, char *argv[]) {
   }
 
   // Read the images.bin file.
-  if (auto images_optional = ReadImagesBinary(images_path)) {
+  if (auto images_optional = ReadImagesBinary(images_path, image_dir, downsample_factor)) {
     images = std::move(*images_optional);
     std::cout << "Successfully read " << images.size() << " images." << std::endl;
   } else {

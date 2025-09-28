@@ -68,7 +68,8 @@ std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::file
  * @return An optional map from image ID to Image struct.
  * Returns std::nullopt if the file cannot be opened or read.
  */
-std::optional<std::unordered_map<int, Image>> ReadImagesBinary(const std::filesystem::path &path);
+std::optional<std::unordered_map<int, Image>>
+ReadImagesBinary(const std::filesystem::path &path, const std::string img_root_dir, const int downsample_factor);
 
 /**
  * @brief Reads 3D point data from a COLMAP points3D.bin file.
