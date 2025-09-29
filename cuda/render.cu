@@ -7,12 +7,13 @@ constexpr int TILE_SIZE = 16;
 constexpr int BATCH_SIZE = 256;
 
 template <unsigned int splat_batch_size>
-__global__ void
-render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opacity, const float *__restrict__ rgb,
-                    const float *__restrict__ conic, const float background_opacity,
-                    const int *__restrict__ splat_start_end_idx_by_tile_idx,
-                    const int *__restrict__ gaussian_idx_by_splat_idx, const int image_width, const int image_height,
-                    float *__restrict__ final_weight_per_pixel, float *__restrict__ image) {
+__global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opacity,
+                                    const float *__restrict__ rgb, const float *__restrict__ conic,
+                                    const float background_opacity,
+                                    const int *__restrict__ splat_start_end_idx_by_tile_idx,
+                                    const int *__restrict__ gaussian_idx_by_splat_idx, const int image_width,
+                                    const int image_height, int *__restrict__ splats_per_pixel,
+                                    float *__restrict__ final_weight_per_pixel, float *__restrict__ image) {
   // grid = tiles, blocks = pixels within each tile
   const int u_splat = blockIdx.x * blockDim.x + threadIdx.x;
   const int v_splat = blockIdx.y * blockDim.y + threadIdx.y;
@@ -31,6 +32,7 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
   // Pixel-local accumulators
   float alpha_accum = 0.0f;
   float3 accumulated_rgb = {0.0f, 0.0f, 0.0f};
+  int num_splats = 0;
 
   // shared memory copies of inputs
   __shared__ float _uvs[splat_batch_size * 2];
@@ -94,16 +96,20 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
 
         // Compute Mahalanobis distance squared: d^2 = (x-μ)^T Σ^-1 (x-μ)
         const float mh_sq = inv_det * (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff);
-        if (mh_sq <= 0.0f)
+        if (mh_sq <= 0.0f) {
+          num_splats++;
           continue; // Gaussian has no influence
+        }
 
         // Calculate alpha based on opacity and Gaussian falloff
         const float alpha = _opacity[i] * __expf(-0.5f * mh_sq);
 
         // Alpha blending: C_out = α * C_in + (1 - α) * C_bg
         const float weight = alpha * (1.0f - alpha_accum);
-        if (weight <= 1e-4f)
+        if (weight <= 1e-4f) {
+          num_splats++;
           continue; // Skip negligible contributions
+        }
 
         const int base_rgb_id = i * 3;
         accumulated_rgb.x += _rgb[base_rgb_id + 0] * weight;
@@ -111,6 +117,7 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
         accumulated_rgb.z += _rgb[base_rgb_id + 2] * weight;
 
         alpha_accum += weight;
+        num_splats++;
       }
     }
     __syncthreads(); // Ensure all threads finish before loading the next batch
@@ -118,6 +125,7 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
 
   // Final write to global memory
   if (valid_pixel) {
+    splats_per_pixel[v_splat * image_width + u_splat] = num_splats;
     final_weight_per_pixel[v_splat * image_width + u_splat] = 1.0f - alpha_accum;
 
     const float background_contribution = 1.0f - alpha_accum;
@@ -130,14 +138,15 @@ render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opa
 
 void render_image(const float *uv, const float *opacity, const float *conic, const float *rgb,
                   const float background_opacity, const int *sorted_splats, const int *splat_range_by_tile,
-                  const int image_width, const int image_height, float *weight_per_pixel, float *image,
-                  cudaStream_t stream) {
+                  const int image_width, const int image_height, int *splats_per_pixel, float *weight_per_pixel,
+                  float *image, cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(uv);
   ASSERT_DEVICE_POINTER(opacity);
   ASSERT_DEVICE_POINTER(conic);
   ASSERT_DEVICE_POINTER(rgb);
   ASSERT_DEVICE_POINTER(sorted_splats);
   ASSERT_DEVICE_POINTER(splat_range_by_tile);
+  ASSERT_DEVICE_POINTER(splats_per_pixel);
   ASSERT_DEVICE_POINTER(weight_per_pixel);
   ASSERT_DEVICE_POINTER(image);
 
@@ -147,7 +156,7 @@ void render_image(const float *uv, const float *opacity, const float *conic, con
   dim3 block_size(TILE_SIZE, TILE_SIZE, 1);
   dim3 grid_size(num_tiles_x, num_tiles_y, 1);
 
-  render_tiles_kernel<BATCH_SIZE><<<grid_size, block_size, 0, stream>>>(uv, opacity, rgb, conic, background_opacity,
-                                                                        splat_range_by_tile, sorted_splats, image_width,
-                                                                        image_height, weight_per_pixel, image);
+  render_tiles_kernel<BATCH_SIZE><<<grid_size, block_size, 0, stream>>>(
+      uv, opacity, rgb, conic, background_opacity, splat_range_by_tile, sorted_splats, image_width, image_height,
+      splats_per_pixel, weight_per_pixel, image);
 }

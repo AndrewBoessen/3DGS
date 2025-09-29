@@ -4,7 +4,7 @@
 #include "gsplat/cuda_backward.hpp"
 
 constexpr int TILE_SIZE = 16;
-constexpr int BATCH_SIZE = 960;
+constexpr int BATCH_SIZE = 256;
 
 __device__ __forceinline__ float warpReduceSum(float val) {
   const unsigned int FULL_MASK = 0xffffffff;
@@ -106,7 +106,7 @@ __global__ void render_tiles_backward_kernel(
         const float c = _conic[i * 3 + 2] + 0.25f;
 
         const float det = a * c - b * b;
-        const float reciprocal_det = 1.0f / det;
+        const float reciprocal_det = __frcp_rn(det);
         const float mh_sq = (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff) * reciprocal_det;
 
         float norm_prob = 0.0f;
@@ -114,7 +114,7 @@ __global__ void render_tiles_backward_kernel(
           norm_prob = __expf(-0.5f * mh_sq);
         }
 
-        float alpha = min(0.9999f, _opacity[i] * norm_prob);
+        float alpha = fminf(0.9999f, _opacity[i] * norm_prob);
 
         if (!background_initialized) {
           const float background_weight = 1.0 - (alpha * weight + 1.0 - weight);
@@ -128,7 +128,7 @@ __global__ void render_tiles_backward_kernel(
         }
 
         // No need for the lower alpha bound check with fast_exp
-        const float reciprocal_one_minus_alpha = 1.0f / (1.0f - alpha);
+        const float reciprocal_one_minus_alpha = __frcp_rn(1.0f - alpha);
         if (i < num_splats_this_pixel - 1) {
           weight *= reciprocal_one_minus_alpha;
         }

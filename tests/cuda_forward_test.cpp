@@ -606,7 +606,7 @@ TEST_F(CudaKernelTest, RenderImageMultipleGaussians) {
 
   // 4. Device-side data setup
   float *d_uv, *d_opacity, *d_conic, *d_rgb, *d_weight_per_pixel, *d_image;
-  int *d_sorted_splats, *d_splat_range_by_tile;
+  int *d_sorted_splats, *d_splat_range_by_tile, *d_splats_per_pixel;
 
   CUDA_CHECK(cudaMalloc(&d_uv, h_uv.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_opacity, h_opacity.size() * sizeof(float)));
@@ -615,6 +615,7 @@ TEST_F(CudaKernelTest, RenderImageMultipleGaussians) {
   CUDA_CHECK(cudaMalloc(&d_sorted_splats, h_sorted_splats.size() * sizeof(int)));
   CUDA_CHECK(cudaMalloc(&d_splat_range_by_tile, h_splat_range_by_tile.size() * sizeof(int)));
   CUDA_CHECK(cudaMalloc(&d_weight_per_pixel, h_weight_per_pixel.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_splats_per_pixel, h_weight_per_pixel.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_image, h_image.size() * sizeof(float)));
 
   CUDA_CHECK(cudaMemcpy(d_uv, h_uv.data(), h_uv.size() * sizeof(float), cudaMemcpyHostToDevice));
@@ -628,7 +629,7 @@ TEST_F(CudaKernelTest, RenderImageMultipleGaussians) {
 
   // 5. Call the function to be tested
   render_image(d_uv, d_opacity, d_conic, d_rgb, background_opacity, d_sorted_splats, d_splat_range_by_tile, width,
-               height, d_weight_per_pixel, d_image);
+               height, d_splats_per_pixel, d_weight_per_pixel, d_image);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // 6. Copy results back to host
@@ -701,6 +702,7 @@ TEST_F(CudaKernelTest, RenderImageMultipleGaussians) {
   CUDA_CHECK(cudaFree(d_sorted_splats));
   CUDA_CHECK(cudaFree(d_splat_range_by_tile));
   CUDA_CHECK(cudaFree(d_weight_per_pixel));
+  CUDA_CHECK(cudaFree(d_splats_per_pixel));
   CUDA_CHECK(cudaFree(d_image));
 }
 

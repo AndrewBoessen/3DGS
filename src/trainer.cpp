@@ -445,12 +445,18 @@ void Trainer::train() {
   CHECK_CUDA(cudaMalloc(&d_quaternion, max_gaussians * 4 * sizeof(float)));
 
   // Allocate gradients for device
-  float *d_grad_xyz, *d_grad_rgb, *d_grad_opacity, *d_grad_scale, *d_grad_quaternion;
+  float *d_grad_xyz, *d_grad_rgb, *d_grad_opacity, *d_grad_scale, *d_grad_quaternion, *d_grad_conic, *d_grad_uv,
+      *d_grad_J, *d_grad_sigma, *d_grad_xyz_c;
   CHECK_CUDA(cudaMalloc(&d_grad_xyz, max_gaussians * 3 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&d_grad_rgb, max_gaussians * 3 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&d_grad_opacity, max_gaussians * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&d_grad_scale, max_gaussians * 3 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&d_grad_quaternion, max_gaussians * 4 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_grad_conic, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_grad_uv, max_gaussians * 2 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_grad_J, max_gaussians * 6 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_grad_sigma, max_gaussians * 9 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_grad_xyz_c, max_gaussians * 3 * sizeof(float)));
 
   // Camera parameters on the device
   float *d_K, *d_T;
@@ -490,11 +496,16 @@ void Trainer::train() {
   for (int iter = 0; iter < config.num_iters; ++iter) {
     num_gaussians = gaussians.size();
     // Zero gradients
-    CHECK_CUDA(cudaMemset(d_grad_xyz, 0.0f, num_gaussians));
-    CHECK_CUDA(cudaMemset(d_grad_rgb, 0.0f, num_gaussians));
+    CHECK_CUDA(cudaMemset(d_grad_xyz, 0.0f, 3 * num_gaussians));
+    CHECK_CUDA(cudaMemset(d_grad_rgb, 0.0f, 3 * num_gaussians));
     CHECK_CUDA(cudaMemset(d_grad_opacity, 0.0f, num_gaussians));
-    CHECK_CUDA(cudaMemset(d_grad_scale, 0.0f, num_gaussians));
-    CHECK_CUDA(cudaMemset(d_grad_quaternion, 0.0f, num_gaussians));
+    CHECK_CUDA(cudaMemset(d_grad_scale, 0.0f, 3 * num_gaussians));
+    CHECK_CUDA(cudaMemset(d_grad_quaternion, 0.0f, 4 * num_gaussians));
+    CHECK_CUDA(cudaMemset(d_grad_conic, 0.0f, 3 * num_gaussians));
+    CHECK_CUDA(cudaMemset(d_grad_uv, 0.0f, 2 * num_gaussians));
+    CHECK_CUDA(cudaMemset(d_grad_J, 0.0f, 6 * num_gaussians));
+    CHECK_CUDA(cudaMemset(d_grad_sigma, 0.0f, 9 * num_gaussians));
+    CHECK_CUDA(cudaMemset(d_grad_xyz_c, 0.0f, 3 * num_gaussians));
 
     // Copy Gaussian data from host to device
     CHECK_CUDA(cudaMemcpy(d_xyz, gaussians.xyz.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
@@ -511,11 +522,11 @@ void Trainer::train() {
     const int width = (int)curr_camera.width;
     const int height = (int)curr_camera.height;
 
-    printf("WIDTH %d HEIGHT %d\n", width, height);
-
     float *d_image_buffer, *d_weight_per_pixel;
+    int *d_splats_per_pixel;
     CHECK_CUDA(cudaMalloc(&d_image_buffer, width * height * 3 * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&d_weight_per_pixel, width * height * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_splats_per_pixel, width * height * sizeof(int)));
     CHECK_CUDA(cudaMemset(d_image_buffer, 0.0f, width * height * 3 * sizeof(float)));
 
     // Prepare camera intrinsics (K)
@@ -619,7 +630,8 @@ void Trainer::train() {
 
     // Step 5: Render the final image
     render_image(d_uv_culled, d_opacity_culled, d_conic, d_rgb_culled, 1.0f, d_sorted_gaussians,
-                 d_splat_start_end_idx_by_tile_idx, width, height, d_weight_per_pixel, d_image_buffer);
+                 d_splat_start_end_idx_by_tile_idx, width, height, d_splats_per_pixel, d_weight_per_pixel,
+                 d_image_buffer);
 
     CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -627,15 +639,6 @@ void Trainer::train() {
     cudaEventRecord(stop, 0);
 
     std::cout << "COMPLETED RENDER OF IMAGE" << std::endl;
-
-    // Wait for the stop event to complete
-    cudaEventSynchronize(stop);
-
-    float milliseconds = 0;
-    // Calculate the elapsed time between start and stop
-    cudaEventElapsedTime(&milliseconds, start, stop);
-
-    printf("Elapsed time for kernels: %f ms\n", milliseconds);
 
     std::vector<float> image;
     image.resize(3 * width * height);
@@ -662,9 +665,35 @@ void Trainer::train() {
 
     float loss = fused_loss(d_image_buffer, d_gt_image, height, width, 3, config.ssim_frac, d_grad_image);
 
-    printf("LOSS TOTAL %f\n", loss);
+    std::cout << "LOSS TOTAL " << loss << std::endl;
 
     // BACKWARD PASS
+
+    render_image_backward(d_uv_culled, d_opacity_culled, d_conic, d_rgb_culled, d_rgb_culled, d_sorted_gaussians,
+                          d_splat_start_end_idx_by_tile_idx, d_splats_per_pixel, d_weight_per_pixel, d_grad_image,
+                          width, height, d_grad_rgb, d_grad_opacity, d_grad_uv, d_grad_conic);
+
+    compute_conic_backward(d_J, d_sigma, d_T, d_grad_conic, num_culled, d_grad_J, d_grad_sigma);
+
+    compute_projection_jacobian_backward(d_xyz_c_culled, d_K, d_grad_J, num_culled, d_grad_xyz_c);
+
+    compute_sigma_backward(d_quaternion_culled, d_scale_culled, d_grad_sigma, num_culled, d_grad_quaternion,
+                           d_grad_scale);
+
+    camera_intrinsic_projection_backward(d_xyz_c_culled, d_K, d_grad_uv, num_culled, d_grad_xyz);
+
+    camera_extrinsic_projection_backward(d_xyz_culled, d_T, d_grad_xyz_c, num_culled, d_grad_xyz);
+
+    // Wait for the stop event to complete
+    cudaEventSynchronize(stop);
+
+    float milliseconds = 0;
+    // Calculate the elapsed time between start and stop
+    cudaEventElapsedTime(&milliseconds, start, stop);
+
+    std::cout << "Elapsed time for kernels: " << milliseconds << "ms" << std::endl;
+
+    std::cout << "BACKWARD COMPLETE" << std::endl;
 
     // Optimizer step
     Gradients gradients = {};
@@ -674,6 +703,7 @@ void Trainer::train() {
     CHECK_CUDA(cudaFree(d_grad_image));
     CHECK_CUDA(cudaFree(d_image_buffer));
     CHECK_CUDA(cudaFree(d_weight_per_pixel));
+    CHECK_CUDA(cudaFree(d_splats_per_pixel));
     CHECK_CUDA(cudaFree(d_sigma));
     CHECK_CUDA(cudaFree(d_conic));
     CHECK_CUDA(cudaFree(d_J));

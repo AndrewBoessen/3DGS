@@ -144,15 +144,16 @@ void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficien
  * @param[in]  splat_range_by_tile  A device pointer to start and end ids into sorted_splats
  * @param[in]  image_width          The width of image in pixels
  * @param[in]  image_height         The height of image in pixels
- * @param[in]  stream The CUDA stream to execute kernel on
+ * @param[in]  stream               The CUDA stream to execute kernel on
+ * @param[in]  splats_per_pixel     A device array to output total splats contributing to each pixel
  * @param[out] weight_per_pixel     A device pointer to output final alpha weights per pixel
  * @param[out] image                A device pointer to output image rgb values
  * @param[in]  stream               The CUDA stream to execute kernel on
  */
 void render_image(const float *uv, const float *opacity, const float *conic, const float *rgb,
                   const float background_opacity, const int *sorted_splats, const int *splat_range_by_tile,
-                  const int image_width, const int image_height, float *weight_per_pixel, float *image,
-                  cudaStream_t stream = 0);
+                  const int image_width, const int image_height, int *splats_per_pixel, float *weight_per_pixel,
+                  float *image, cudaStream_t stream = 0);
 
 /**
  * @brief Launch CUDA kernel to compute L1 and SSIM loss with gradient output

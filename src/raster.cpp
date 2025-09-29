@@ -176,12 +176,15 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
 
   // Step 5: Render the final image
   float *d_image_buffer, *d_weight_per_pixel;
+  int *d_splats_per_pixel;
   CHECK_CUDA(cudaMalloc(&d_image_buffer, width * height * 3 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&d_weight_per_pixel, width * height * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_splats_per_pixel, width * height * sizeof(int)));
   CHECK_CUDA(cudaMemset(d_image_buffer, 0, width * height * 3 * sizeof(float)));
 
   render_image(d_uv_culled, d_opacity_culled, d_conic, d_rgb_culled, 1.0f, d_sorted_gaussians,
-               d_splat_start_end_idx_by_tile_idx, width, height, d_weight_per_pixel, d_image_buffer);
+               d_splat_start_end_idx_by_tile_idx, width, height, d_splats_per_pixel, d_weight_per_pixel,
+               d_image_buffer);
 
   // Copy final image from device to host
   CHECK_CUDA(cudaMemcpy(out_image, d_image_buffer, width * height * 3 * sizeof(float), cudaMemcpyDeviceToHost));
@@ -211,6 +214,7 @@ void rasterize_image(ConfigParameters config, Gaussians gaussians, Image image, 
   CHECK_CUDA(cudaFree(d_splat_start_end_idx_by_tile_idx));
   CHECK_CUDA(cudaFree(d_image_buffer));
   CHECK_CUDA(cudaFree(d_weight_per_pixel));
+  CHECK_CUDA(cudaFree(d_splats_per_pixel));
 
   for (int i = 0; i < NUM_STREAMS; ++i) {
     CHECK_CUDA(cudaStreamDestroy(streams[i]));
