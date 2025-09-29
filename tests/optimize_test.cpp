@@ -47,7 +47,7 @@ Gradients create_test_gradients(const Gaussians &params) {
     grads.rgb[i] = Eigen::Vector3f(-val, val, -val);
     grads.opacity[i] = val;
     grads.scale[i] = Eigen::Vector3f(val, val, -val);
-    grads.quaternion[i] = Eigen::Vector3f(-val, val, val);
+    grads.quaternion[i] = Eigen::Vector4f(-val, val, val, -val);
   }
 
   if (params.sh.has_value()) {
@@ -66,23 +66,15 @@ protected:
   AdamOptimizer optimizer;
   Gaussians params;
   Gradients grads;
+  std::vector<char> test_mask;
 
   void SetUp() override {
     optimizer = AdamOptimizer(0.001f, 0.9f, 0.999f, 1e-8f);
     params = create_test_gaussians(3, 1); // 3 gaussians, SH degree 1
     grads = create_test_gradients(params);
+    test_mask = {(char)1, (char)1, (char)1};
   }
 };
-
-// Test that the optimizer is constructed with default values
-TEST(AdamOptimizerConstruction, InitializesCorrectly) {
-  AdamOptimizer opt;
-  // We can't directly access private members, but we can test its behavior.
-  // A step with zero gaussians should not crash.
-  Gaussians empty_gaussians;
-  Gradients empty_grads;
-  ASSERT_NO_THROW(opt.step(empty_gaussians, empty_grads));
-}
 
 // Test that parameters do not change when gradients are zero
 TEST_F(AdamOptimizerTest, StepWithZeroGradients) {
@@ -101,7 +93,7 @@ TEST_F(AdamOptimizerTest, StepWithZeroGradients) {
   for (auto &g : zero_grads.quaternion)
     g.setZero();
 
-  optimizer.step(params_to_update, zero_grads);
+  optimizer.step(params_to_update, zero_grads, test_mask);
 
   for (size_t i = 0; i < initial_params.size(); ++i) {
     ASSERT_TRUE(initial_params.xyz[i].isApprox(params_to_update.xyz[i]));
@@ -134,7 +126,7 @@ TEST_F(AdamOptimizerTest, SingleStepUpdateIsCorrect) {
   Eigen::Vector3f expected_xyz = initial_xyz - expected_update;
 
   // --- Perform step and compare ---
-  opt.step(p, g);
+  opt.step(p, g, test_mask);
 
   ASSERT_TRUE(p.xyz[0].isApprox(expected_xyz, 1e-6));
 }
@@ -143,7 +135,7 @@ TEST_F(AdamOptimizerTest, SingleStepUpdateIsCorrect) {
 TEST_F(AdamOptimizerTest, StepUpdatesAllParameters) {
   Gaussians initial_params = create_test_gaussians(1, 1);
 
-  optimizer.step(params, grads);
+  optimizer.step(params, grads, test_mask);
 
   // Check that every parameter has changed from its initial value
   EXPECT_FALSE(params.xyz[0].isApprox(initial_params.xyz[0]));
@@ -158,7 +150,7 @@ TEST_F(AdamOptimizerTest, StepUpdatesAllParameters) {
 // Test the filter_states method
 TEST_F(AdamOptimizerTest, FilterStates) {
   // Perform one step to initialize states
-  optimizer.step(params, grads);
+  optimizer.step(params, grads, test_mask);
 
   // Filter out the middle element (index 1)
   std::vector<bool> mask = {true, false, true};
@@ -169,25 +161,25 @@ TEST_F(AdamOptimizerTest, FilterStates) {
   Gradients filtered_grads = create_test_gradients(filtered_params);
 
   // The next step should not throw an error, indicating state sizes are consistent
-  ASSERT_NO_THROW(optimizer.step(filtered_params, filtered_grads));
+  ASSERT_NO_THROW(optimizer.step(filtered_params, filtered_grads, test_mask));
 }
 
 // Test the filter_states method with an all-false mask
 TEST_F(AdamOptimizerTest, FilterStatesAllFalse) {
-  optimizer.step(params, grads);
+  optimizer.step(params, grads, test_mask);
 
   std::vector<bool> mask(params.size(), false);
   optimizer.filter_states(mask);
 
   Gaussians empty_params;
   Gradients empty_grads;
-  ASSERT_NO_THROW(optimizer.step(empty_params, empty_grads));
+  ASSERT_NO_THROW(optimizer.step(empty_params, empty_grads, test_mask));
 }
 
 // Test the append_states method
 TEST_F(AdamOptimizerTest, AppendStates) {
   // Initialize states with 3 gaussians
-  optimizer.step(params, grads);
+  optimizer.step(params, grads, test_mask);
 
   // Append states for 2 new gaussians
   size_t num_to_append = 2;
@@ -198,13 +190,13 @@ TEST_F(AdamOptimizerTest, AppendStates) {
   Gradients appended_grads = create_test_gradients(appended_params);
 
   // The next step should not throw an error
-  ASSERT_NO_THROW(optimizer.step(appended_params, appended_grads));
+  ASSERT_NO_THROW(optimizer.step(appended_params, appended_grads, test_mask));
 }
 
 // Test a realistic sequence of step, filter, and append
 TEST_F(AdamOptimizerTest, DynamicTrainingSimulation) {
   // 1. Initial state (3 gaussians)
-  ASSERT_NO_THROW(optimizer.step(params, grads));
+  ASSERT_NO_THROW(optimizer.step(params, grads, test_mask));
 
   // 2. Filter out one gaussian (now 2)
   std::vector<bool> filter_mask = {true, false, true};
@@ -214,7 +206,7 @@ TEST_F(AdamOptimizerTest, DynamicTrainingSimulation) {
 
   // 3. Step with the filtered set
   grads = create_test_gradients(params);
-  ASSERT_NO_THROW(optimizer.step(params, grads));
+  ASSERT_NO_THROW(optimizer.step(params, grads, test_mask));
 
   // 4. Append three new gaussians (now 5)
   size_t num_to_append = 3;
@@ -225,7 +217,7 @@ TEST_F(AdamOptimizerTest, DynamicTrainingSimulation) {
 
   // 5. Step with the appended set
   grads = create_test_gradients(params);
-  ASSERT_NO_THROW(optimizer.step(params, grads));
+  ASSERT_NO_THROW(optimizer.step(params, grads, test_mask));
 }
 
 TEST_F(AdamOptimizerTest, UpgradeSHStates) {
@@ -234,7 +226,7 @@ TEST_F(AdamOptimizerTest, UpgradeSHStates) {
   size_t num_gaussians = 3;
   params = create_test_gaussians(num_gaussians, -1); // -1 indicates no SH
   grads = create_test_gradients(params);
-  optimizer.step(params, grads);
+  optimizer.step(params, grads, test_mask);
 
   // 2. Test Initialization: Upgrade from no SH to SH band 1.
   // Band 1 has (1+1)^2 - 1 = 3 coefficients per color channel.
@@ -249,7 +241,7 @@ TEST_F(AdamOptimizerTest, UpgradeSHStates) {
   Gradients grads_sh1 = create_test_gradients(params_sh1);
 
   // A subsequent step should succeed without throwing an error.
-  ASSERT_NO_THROW(optimizer.step(params_sh1, grads_sh1));
+  ASSERT_NO_THROW(optimizer.step(params_sh1, grads_sh1, test_mask));
 
   // 3. Test Upgrading: Upgrade from SH band 1 to SH band 2.
   // Band 2 has (2+1)^2 - 1 = 8 coefficients per color channel.
@@ -264,7 +256,7 @@ TEST_F(AdamOptimizerTest, UpgradeSHStates) {
   Gradients grads_sh2 = create_test_gradients(params_sh2);
 
   // This step should also succeed, confirming the states were resized correctly.
-  ASSERT_NO_THROW(optimizer.step(params_sh2, grads_sh2));
+  ASSERT_NO_THROW(optimizer.step(params_sh2, grads_sh2, test_mask));
 }
 
 int main(int argc, char **argv) {

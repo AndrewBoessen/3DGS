@@ -18,7 +18,7 @@ struct Gradients {
   std::vector<float> opacity;
   std::vector<Eigen::Vector3f> scale;
   /// @brief Gradients for quaternions are 3D vectors in the tangent space.
-  std::vector<Eigen::Vector3f> quaternion;
+  std::vector<Eigen::Vector4f> quaternion;
   std::optional<std::vector<Eigen::VectorXf>> sh;
 };
 
@@ -45,8 +45,9 @@ public:
    * @brief Performs a single optimization step, updating the Gaussian parameters.
    * @param params A reference to the Gaussians object to be updated.
    * @param grads A const reference to the Gradients object containing the derivatives.
+   * @param mask A mask to filter out Gaussians not active in image.
    */
-  void step(Gaussians &params, const Gradients &grads);
+  void step(Gaussians &params, const Gradients &grads, const std::vector<char> &mask);
 
   /**
    * @brief Filters the optimizer's state (m and v vectors) using a boolean mask.
@@ -85,7 +86,7 @@ private:
     std::vector<Eigen::Vector3f> m_rgb, v_rgb;
     std::vector<float> m_opacity, v_opacity;
     std::vector<Eigen::Vector3f> m_scale, v_scale;
-    std::vector<Eigen::Vector3f> m_quaternion, v_quaternion;
+    std::vector<Eigen::Vector4f> m_quaternion, v_quaternion;
     std::optional<std::vector<Eigen::VectorXf>> m_sh, v_sh;
   } state_;
 

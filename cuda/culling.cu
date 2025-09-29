@@ -488,7 +488,6 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
   int num_pairs;
   cudaMemcpy(&num_pairs, d_buffer_index, sizeof(int), cudaMemcpyDeviceToHost);
-  printf("NUM PAIRS %d\n", num_pairs);
 
   const int num_blocks_pairs = (num_pairs + threads_per_block - 1) / threads_per_block;
   generate_splats_kernel<<<num_blocks_pairs, threads_per_block, 0, stream>>>(
@@ -497,7 +496,6 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
   int num_splats;
   CHECK_CUDA(cudaMemcpy(&num_splats, d_global_splat_counter, sizeof(int), cudaMemcpyDeviceToHost));
-  printf("NUM SPLATS %d\n", num_splats);
 
   {
     void *d_temp_storage = nullptr;

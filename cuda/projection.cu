@@ -80,7 +80,7 @@ void camera_extrinsic_projection(float *const xyz_w, const float *T, const int N
   ASSERT_DEVICE_POINTER(T);
   ASSERT_DEVICE_POINTER(xyz_c);
 
-  const int threads_per_block = 256;
+  const int threads_per_block = 1024;
   // Calculate the number of blocks needed to cover all N points
   const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
 
@@ -95,7 +95,7 @@ void camera_intrinsic_projection(float *const xyz, const float *K, const int N, 
   ASSERT_DEVICE_POINTER(K);
   ASSERT_DEVICE_POINTER(uv);
 
-  const int threads_per_block = 256;
+  const int threads_per_block = 1024;
   // Calculate the number of blocks needed to cover all N points
   const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
 

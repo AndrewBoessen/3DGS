@@ -3,6 +3,7 @@
 #include "gsplat/optimize.hpp"
 #include <cassert>
 #include <cmath>
+#include <iostream>
 
 AdamOptimizer::AdamOptimizer(float lr, float beta1, float beta2, float epsilon)
     : lr_(lr), beta1_(beta1), beta2_(beta2), epsilon_(epsilon) {}
@@ -24,8 +25,8 @@ void AdamOptimizer::initialize_states_if_needed(const Gaussians &params) {
   state_.v_opacity.assign(n, 0.0f);
   state_.m_scale.assign(n, Eigen::Vector3f::Zero());
   state_.v_scale.assign(n, Eigen::Vector3f::Zero());
-  state_.m_quaternion.assign(n, Eigen::Vector3f::Zero());
-  state_.v_quaternion.assign(n, Eigen::Vector3f::Zero());
+  state_.m_quaternion.assign(n, Eigen::Vector4f::Zero());
+  state_.v_quaternion.assign(n, Eigen::Vector4f::Zero());
 
   if (params.sh.has_value()) {
     const auto &sh_params = *params.sh;
@@ -40,7 +41,7 @@ void AdamOptimizer::initialize_states_if_needed(const Gaussians &params) {
   }
 }
 
-void AdamOptimizer::step(Gaussians &params, const Gradients &grads) {
+void AdamOptimizer::step(Gaussians &params, const Gradients &grads, const std::vector<char> &mask) {
   // Lazily initialize optimizer state on the first call to step().
   initialize_states_if_needed(params);
 
@@ -48,15 +49,19 @@ void AdamOptimizer::step(Gaussians &params, const Gradients &grads) {
   if (n == 0)
     return;
 
-  assert(grads.xyz.size() == n && "Gradient and parameter sizes must match.");
+  assert(params.size() == mask.size() && "Mask and parameter sizes must match.");
 
   t_++; // Increment timestep
+
+  int i = 0;
 
   // Compute bias correction factors
   const float m_hat_corr = 1.0f / (1.0f - std::pow(beta1_, t_));
   const float v_hat_corr = 1.0f / (1.0f - std::pow(beta2_, t_));
 
-  for (size_t i = 0; i < n; ++i) {
+  for (size_t j = 0; j < n; ++j) {
+    if ((bool)mask[j] == false)
+      continue;
     // --- Update XYZ ---
     state_.m_xyz[i] = beta1_ * state_.m_xyz[i] + (1 - beta1_) * grads.xyz[i];
     state_.v_xyz[i] = beta2_ * state_.v_xyz[i] + (1 - beta2_) * grads.xyz[i].cwiseProduct(grads.xyz[i]);
@@ -89,16 +94,18 @@ void AdamOptimizer::step(Gaussians &params, const Gradients &grads) {
     state_.m_quaternion[i] = beta1_ * state_.m_quaternion[i] + (1 - beta1_) * grads.quaternion[i];
     state_.v_quaternion[i] =
         beta2_ * state_.v_quaternion[i] + (1 - beta2_) * grads.quaternion[i].cwiseProduct(grads.quaternion[i]);
-    Eigen::Vector3f m_hat_quat = state_.m_quaternion[i] * m_hat_corr;
-    Eigen::Vector3f v_hat_quat = state_.v_quaternion[i] * v_hat_corr;
-    Eigen::Vector3f update_vec = m_hat_quat.cwiseQuotient((v_hat_quat.cwiseSqrt().array() + epsilon_).matrix());
+    Eigen::Vector4f m_hat_quat = state_.m_quaternion[i] * m_hat_corr;
+    Eigen::Vector4f v_hat_quat = state_.v_quaternion[i] * v_hat_corr;
+    params.quaternion[i].coeffs() -=
+        lr_ * m_hat_quat.cwiseQuotient((v_hat_quat.cwiseSqrt().array() + epsilon_).matrix());
+    // Eigen::Vector3f update_vec = m_hat_quat.cwiseQuotient((v_hat_quat.cwiseSqrt().array() + epsilon_).matrix());
 
-    float angle = lr_ * update_vec.norm();
-    if (angle > 0.0f) {
-      Eigen::Vector3f axis = update_vec.normalized();
-      Eigen::Quaternionf dq(Eigen::AngleAxisf(angle, axis));
-      params.quaternion[i] = (dq * params.quaternion[i]).normalized();
-    }
+    // float angle = lr_ * update_vec.norm();
+    // if (angle > 0.0f) {
+    //   Eigen::Vector3f axis = update_vec.normalized();
+    //   Eigen::Quaternionf dq(Eigen::AngleAxisf(angle, axis));
+    //   params.quaternion[i] = (dq * params.quaternion[i]).normalized();
+    // }
 
     // --- Update SH (if they exist) ---
     if (params.sh.has_value() && grads.sh.has_value() && state_.m_sh.has_value()) {
@@ -113,6 +120,7 @@ void AdamOptimizer::step(Gaussians &params, const Gradients &grads) {
       Eigen::VectorXf v_hat_sh = v_sh_vec[i] * v_hat_corr;
       param_sh_vec[i] -= lr_ * m_hat_sh.cwiseQuotient((v_hat_sh.cwiseSqrt().array() + epsilon_).matrix());
     }
+    i++;
   }
 }
 
@@ -172,8 +180,8 @@ void AdamOptimizer::append_states(size_t n) {
   state_.v_opacity.insert(state_.v_opacity.end(), n, 0.0f);
   state_.m_scale.insert(state_.m_scale.end(), n, Eigen::Vector3f::Zero());
   state_.v_scale.insert(state_.v_scale.end(), n, Eigen::Vector3f::Zero());
-  state_.m_quaternion.insert(state_.m_quaternion.end(), n, Eigen::Vector3f::Zero());
-  state_.v_quaternion.insert(state_.v_quaternion.end(), n, Eigen::Vector3f::Zero());
+  state_.m_quaternion.insert(state_.m_quaternion.end(), n, Eigen::Vector4f::Zero());
+  state_.v_quaternion.insert(state_.v_quaternion.end(), n, Eigen::Vector4f::Zero());
 
   if (state_.m_sh.has_value()) {
     assert(sh_dim > 0 && "Cannot append SH states if initial SH dimension is unknown.");

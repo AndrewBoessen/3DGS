@@ -53,7 +53,7 @@ void compute_projection_jacobian_backward(const float *const xyz_c, const float 
   ASSERT_DEVICE_POINTER(J_grad_out);
   ASSERT_DEVICE_POINTER(xyz_c_grad_in);
 
-  const int threads = 256;
+  const int threads = 1024;
   const int blocks = (N + threads - 1) / threads;
   compute_proj_jacobian_backward_kernel<<<blocks, threads, 0, stream>>>(xyz_c, K, J_grad_out, N, xyz_c_grad_in);
 }
@@ -150,7 +150,7 @@ void compute_conic_backward(const float *const J, const float *const sigma, cons
   ASSERT_DEVICE_POINTER(J_grad_in);
   ASSERT_DEVICE_POINTER(sigma_grad_in);
 
-  const int threads = 256;
+  const int threads = 1024;
   const int blocks = (N + threads - 1) / threads;
   conic_backward_kernel<<<blocks, threads, 0, stream>>>(J, sigma, T, conic_grad_out, N, J_grad_in, sigma_grad_in);
 }
@@ -307,7 +307,7 @@ void compute_sigma_backward(const float *const quaternion, const float *const sc
   ASSERT_DEVICE_POINTER(quaternion_grad_in);
   ASSERT_DEVICE_POINTER(scale_grad_in);
 
-  const int threads = 256;
+  const int threads = 1024;
   const int blocks = (N + threads - 1) / threads;
   sigma_backward_kernel<<<blocks, threads, 0, stream>>>(quaternion, scale, sigma_grad_out, N, quaternion_grad_in,
                                                         scale_grad_in);
