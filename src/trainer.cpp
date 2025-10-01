@@ -4,7 +4,6 @@
 #include "gsplat/cuda_backward.hpp"
 #include "gsplat/cuda_forward.hpp"
 #include "gsplat/gaussian.hpp"
-#include "gsplat/optimize.hpp"
 #include <iostream>
 #include <opencv2/opencv.hpp>
 
@@ -89,7 +88,6 @@ void Trainer::add_sh_band() {
     const size_t sh_coeffs_count = 3 * 3; // 3 coeffs * 3 channels
 
     gaussians.sh.emplace(num_gaussians, Eigen::VectorXf::Zero(sh_coeffs_count));
-    optimizer.upgrade_sh_states(num_gaussians, sh_coeffs_count);
     return;
   }
 
@@ -111,7 +109,6 @@ void Trainer::add_sh_band() {
         sh.conservativeResize(new_sh_coeffs_count);
         sh.tail(new_sh_coeffs_count - old_total_coeffs).setZero();
       }
-      optimizer.upgrade_sh_states(num_gaussians, new_sh_coeffs_count);
     }
     // Case 3: Current band is 2 (8 coeffs/channel), and config allows for band 3.
     else if (old_coeffs_per_channel == 8 && config.max_sh_band > 2) {
@@ -123,7 +120,6 @@ void Trainer::add_sh_band() {
         sh.conservativeResize(new_sh_coeffs_count);
         sh.tail(new_sh_coeffs_count - old_total_coeffs).setZero();
       }
-      optimizer.upgrade_sh_states(num_gaussians, new_sh_coeffs_count);
     }
   }
 }
@@ -216,10 +212,6 @@ void Trainer::split_gaussians(const std::vector<bool> &split_mask) {
                           std::move(split_quat),
                           gaussians.sh.has_value() ? std::make_optional(std::move(split_sh)) : std::nullopt);
   gaussians.append(new_gaussians);
-
-  // Update optimizer state
-  optimizer.filter_states(keep_mask);
-  optimizer.append_states(total_samples);
 }
 
 void Trainer::clone_gaussians(const std::vector<bool> &clone_mask, const std::vector<Eigen::Vector3f> &xyz_grad_avg) {
@@ -272,9 +264,8 @@ void Trainer::clone_gaussians(const std::vector<bool> &clone_mask, const std::ve
                           std::move(clone_quat),
                           gaussians.sh.has_value() ? std::make_optional(std::move(clone_sh)) : std::nullopt);
 
-  // Update gaussians and optimizer
+  // Update gaussians
   gaussians.append(new_gaussians);
-  optimizer.append_states(num_to_clone);
 }
 
 void Trainer::adaptive_density() {
@@ -299,7 +290,6 @@ void Trainer::adaptive_density() {
 
   if (delete_count > 0 && config.use_delete) {
     gaussians.filter(keep_mask);
-    optimizer.filter_states(keep_mask);
     // Filter gradient accumulators to keep them in sync
     filter_vector(uv_grad_accum, keep_mask);
     filter_vector(xyz_grad_accum, keep_mask);
@@ -482,14 +472,6 @@ void Trainer::train() {
   CHECK_CUDA(cudaMalloc(&d_uv_culled, max_gaussians * 2 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&d_xyz_c_culled, max_gaussians * 3 * sizeof(float)));
 
-  // Host gradient vectors
-  std::vector<Eigen::Vector3f> xyz_grad;
-  std::vector<Eigen::Vector3f> rgb_grad;
-  std::vector<float> opacity_grad;
-  std::vector<Eigen::Vector3f> scale_grad;
-  std::vector<Eigen::Vector4f> quaternion_grad;
-  std::optional<std::vector<Eigen::VectorXf>> sh_grad;
-
   // Create test-train split
   test_train_split();
   // Initialize gradient accumulators
@@ -502,7 +484,8 @@ void Trainer::train() {
   }
 
   // TRAINING LOOP
-  for (int iter = 0; iter < config.num_iters; ++iter) {
+  for (int iter = 0; iter < 1; ++iter) {
+    std::cout << "ITER " << iter << std::endl;
     num_gaussians = gaussians.size();
     // Zero gradients
     CHECK_CUDA(cudaMemset(d_grad_xyz, 0.0f, 3 * num_gaussians * sizeof(float)));
@@ -629,22 +612,16 @@ void Trainer::train() {
     get_sorted_gaussian_list(d_uv_culled, d_xyz_c_culled, d_conic, n_tiles_x, n_tiles_y, config.mh_dist, num_culled,
                              sorted_gaussian_bytes, nullptr, nullptr);
 
-    CHECK_CUDA(cudaDeviceSynchronize());
-
     CHECK_CUDA(cudaMalloc(&d_splat_start_end_idx_by_tile_idx, (n_tiles + 1) * sizeof(int)));
     CHECK_CUDA(cudaMalloc(&d_sorted_gaussians, sorted_gaussian_bytes));
 
     get_sorted_gaussian_list(d_uv_culled, d_xyz_c_culled, d_conic, n_tiles_x, n_tiles_y, config.mh_dist, num_culled,
                              sorted_gaussian_bytes, d_sorted_gaussians, d_splat_start_end_idx_by_tile_idx);
 
-    CHECK_CUDA(cudaDeviceSynchronize());
-
     // Step 5: Render the final image
     render_image(d_uv_culled, d_opacity_culled, d_conic, d_rgb_culled, 1.0f, d_sorted_gaussians,
                  d_splat_start_end_idx_by_tile_idx, width, height, d_splats_per_pixel, d_weight_per_pixel,
                  d_image_buffer);
-
-    CHECK_CUDA(cudaDeviceSynchronize());
 
     std::vector<float> image;
     image.resize(3 * width * height);
@@ -667,7 +644,7 @@ void Trainer::train() {
     // LOSS
     float *d_grad_image;
     CHECK_CUDA(cudaMalloc(&d_grad_image, height * width * 3 * sizeof(float)));
-    CHECK_CUDA(cudaMemset(d_grad_image, 0.0f, height * width * 3));
+    CHECK_CUDA(cudaMemset(d_grad_image, 0.0f, height * width * 3 * sizeof(float)));
 
     float loss = fused_loss(d_image_buffer, d_gt_image, height, width, 3, config.ssim_frac, d_grad_image);
 
@@ -719,26 +696,8 @@ void Trainer::train() {
 
     std::cout << "Elapsed time for kernels: " << milliseconds << "ms" << std::endl;
 
-    // Optimizer step
-    xyz_grad.resize(num_culled);
-    rgb_grad.resize(num_culled);
-    opacity_grad.resize(num_culled);
-    scale_grad.resize(num_culled);
-    quaternion_grad.resize(num_culled);
-
-    // Copy gradients to host
-    CHECK_CUDA(cudaMemcpy(xyz_grad.data(), d_grad_xyz, num_culled * 3 * sizeof(float), cudaMemcpyDeviceToHost));
-    CHECK_CUDA(cudaMemcpy(rgb_grad.data(), d_grad_rgb, num_culled * 3 * sizeof(float), cudaMemcpyDeviceToHost));
-    CHECK_CUDA(cudaMemcpy(opacity_grad.data(), d_grad_opacity, num_culled * sizeof(float), cudaMemcpyDeviceToHost));
-    CHECK_CUDA(cudaMemcpy(scale_grad.data(), d_grad_scale, num_culled * 3 * sizeof(float), cudaMemcpyDeviceToHost));
-    CHECK_CUDA(
-        cudaMemcpy(quaternion_grad.data(), d_grad_quaternion, num_culled * 4 * sizeof(float), cudaMemcpyDeviceToHost));
-
-    std::vector<char> mask(num_gaussians);
-    CHECK_CUDA(cudaMemcpy(mask.data(), d_mask, num_gaussians * sizeof(bool), cudaMemcpyDeviceToHost));
-
-    Gradients gradients = {xyz_grad, rgb_grad, opacity_grad, scale_grad, quaternion_grad};
-    optimizer.step(gaussians, gradients, mask);
+    // Gradients gradients = {xyz_grad, rgb_grad, opacity_grad, scale_grad, quaternion_grad};
+    // optimizer.step(gaussians, gradients, mask);
 
     // Free temporary buffers
     CHECK_CUDA(cudaFree(d_gt_image));
@@ -752,4 +711,31 @@ void Trainer::train() {
     CHECK_CUDA(cudaFree(d_splat_start_end_idx_by_tile_idx));
     CHECK_CUDA(cudaFree(d_sorted_gaussians));
   }
+  CHECK_CUDA(cudaFree(d_xyz));
+  CHECK_CUDA(cudaFree(d_rgb));
+  CHECK_CUDA(cudaFree(d_opacity));
+  CHECK_CUDA(cudaFree(d_scale));
+  CHECK_CUDA(cudaFree(d_quaternion));
+  CHECK_CUDA(cudaFree(d_grad_xyz));
+  CHECK_CUDA(cudaFree(d_grad_rgb));
+  CHECK_CUDA(cudaFree(d_grad_opacity));
+  CHECK_CUDA(cudaFree(d_grad_scale));
+  CHECK_CUDA(cudaFree(d_grad_quaternion));
+  CHECK_CUDA(cudaFree(d_grad_conic));
+  CHECK_CUDA(cudaFree(d_grad_uv));
+  CHECK_CUDA(cudaFree(d_grad_J));
+  CHECK_CUDA(cudaFree(d_grad_sigma));
+  CHECK_CUDA(cudaFree(d_grad_xyz_c));
+  CHECK_CUDA(cudaFree(d_K));
+  CHECK_CUDA(cudaFree(d_T));
+  CHECK_CUDA(cudaFree(d_uv));
+  CHECK_CUDA(cudaFree(d_xyz_c));
+  CHECK_CUDA(cudaFree(d_mask));
+  CHECK_CUDA(cudaFree(d_xyz_culled));
+  CHECK_CUDA(cudaFree(d_rgb_culled));
+  CHECK_CUDA(cudaFree(d_opacity_culled));
+  CHECK_CUDA(cudaFree(d_scale_culled));
+  CHECK_CUDA(cudaFree(d_quaternion_culled));
+  CHECK_CUDA(cudaFree(d_uv_culled));
+  CHECK_CUDA(cudaFree(d_xyz_c_culled));
 }

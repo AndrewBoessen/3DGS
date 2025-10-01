@@ -4,7 +4,6 @@
 
 #include "dataloader/colmap.hpp"
 #include "gsplat/gaussian.hpp"
-#include "gsplat/optimize.hpp"
 #include "gsplat/utils.hpp"
 #include <Eigen/Dense>
 #include <unordered_map>
@@ -34,7 +33,7 @@ public:
   Trainer(ConfigParameters config, Gaussians gaussians, std::unordered_map<int, Image> images,
           std::unordered_map<int, Camera> cameras)
       : config(std::move(config)), gaussians(std::move(gaussians)), images(std::move(images)),
-        cameras(std::move(cameras)), optimizer(config.base_lr) {}
+        cameras(std::move(cameras)) {}
 
   /**
    * @breif Resets the gradient accumulation for xyz and uv.
@@ -98,9 +97,6 @@ private:
   std::vector<Image> test_images;
   /// @brief A vector of images designated for the training set.
   std::vector<Image> train_images;
-
-  /// @brief The Adam optimizer used to update Gaussian parameters.
-  AdamOptimizer optimizer;
 
   /// @brief A vector to hold sum of gradients of image view.
   std::vector<Eigen::Vector2f> uv_grad_accum;

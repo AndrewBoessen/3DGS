@@ -37,7 +37,7 @@ target_link_libraries(dataloader PUBLIC Eigen3::Eigen)
 # ===================================================================
 # GSPLAT LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat src/utils.cpp src/gaussian.cpp src/raster.cpp src/optimize.cpp src/trainer.cpp)
+add_library(gsplat src/utils.cpp src/gaussian.cpp src/raster.cpp src/trainer.cpp)
 
 target_include_directories(gsplat
   PUBLIC
@@ -99,9 +99,3 @@ add_gtest_executable(cuda_forward_tests tests/cuda_forward_test.cpp gsplat_cuda)
 
 # --- CUDA Backward Tests ---
 add_gtest_executable(cuda_backward_tests tests/cuda_backward_test.cpp gsplat_cuda)
-
-# --- Optimizer Tests ---
-add_gtest_executable(optimizer_tests tests/optimize_test.cpp gsplat)
-
-# --- Trainer Tests ---
-add_gtest_executable(trainer_tests tests/trainer_test.cpp gsplat)

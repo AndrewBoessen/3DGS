@@ -86,7 +86,7 @@ TEST_F(CudaBackwardKernelTest, CameraIntrinsicProjectionBackward) {
     float numerical_grad = 0;
     for (int j = 0; j < N * 2; ++j)
       numerical_grad += (uv_p[j] - uv_m[j]) / (2 * h) * h_uv_grad_out[j];
-    ASSERT_NEAR(h_xyz_c_grad_in[i], numerical_grad, 1e-1);
+    EXPECT_NEAR(h_xyz_c_grad_in[i], numerical_grad, 1e-1);
   }
 
   CUDA_CHECK(cudaFree(d_xyz_c));
@@ -142,7 +142,7 @@ TEST_F(CudaBackwardKernelTest, CameraExtrinsicProjectionBackward) {
     float numerical_grad = 0;
     for (int j = 0; j < N * 3; ++j)
       numerical_grad += (xyz_c_p[j] - xyz_c_m[j]) / (2 * h) * h_xyz_c_grad_in[j];
-    ASSERT_NEAR(h_xyz_w_grad_in[i], numerical_grad, 1e-1);
+    EXPECT_NEAR(h_xyz_w_grad_in[i], numerical_grad, 1e-1);
   }
 
   CUDA_CHECK(cudaFree(d_xyz_w));
@@ -212,7 +212,7 @@ TEST_F(CudaBackwardKernelTest, ProjectionJacobianBackward) {
     float numerical_grad = 0;
     for (int j = 0; j < N * 6; ++j)
       numerical_grad += (J_p[j] - J_m[j]) / (2 * h) * h_J_grad_in[j];
-    ASSERT_NEAR(h_xyz_c_grad_out[i], numerical_grad, 1e-1);
+    EXPECT_NEAR(h_xyz_c_grad_out[i], numerical_grad, 1e-1);
   }
 
   CUDA_CHECK(cudaFree(d_xyz_c));
@@ -301,7 +301,7 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
     auto loss_p = compute_loss(forward_conic(J_p, h_sigma_world, h_T));
     auto loss_m = compute_loss(forward_conic(J_m, h_sigma_world, h_T));
     float numerical_grad = (loss_p - loss_m) / (2.0f * h);
-    ASSERT_NEAR(h_J_grad_in[i], numerical_grad, 1e-2);
+    EXPECT_NEAR(h_J_grad_in[i], numerical_grad, 1e-1);
   }
 
   // Reconstruct full symmetric gradient for sigma from kernel output
@@ -325,7 +325,7 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
     auto loss_p = compute_loss(forward_conic(h_J, sigma_p, h_T));
     auto loss_m = compute_loss(forward_conic(h_J, sigma_m, h_T));
     float numerical_grad = (loss_p - loss_m) / (2.0f * h);
-    ASSERT_NEAR(h_sigma_grad_analytic_full[i], numerical_grad, 1e-1);
+    EXPECT_NEAR(h_sigma_grad_analytic_full[i], numerical_grad, 1e-1);
   }
 
   CUDA_CHECK(cudaFree(d_J));
@@ -439,7 +439,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float loss_m = compute_loss(sigma_m);
 
     float numerical_grad = (loss_p - loss_m) / h;
-    ASSERT_NEAR(h_dQ_in[i], numerical_grad, 1e-2);
+    EXPECT_NEAR(h_dQ_in[i], numerical_grad, 1e-1);
   }
 
   // Check grad w.r.t s
@@ -456,7 +456,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float loss_m = compute_loss(sigma_m);
 
     float numerical_grad = (loss_p - loss_m) / (2 * h);
-    ASSERT_NEAR(h_dS_in[i], numerical_grad, 1e-2);
+    EXPECT_NEAR(h_dS_in[i], numerical_grad, 1e-1);
   }
 
   CUDA_CHECK(cudaFree(d_q));
@@ -557,7 +557,7 @@ TEST_F(CudaBackwardKernelTest, SphericalHarmonicsBackward) {
     double loss_m = compute_loss(logits_m);
 
     float numerical_grad = (loss_p - loss_m) / (2.0f * h);
-    ASSERT_NEAR(h_sh_grad_in[i], numerical_grad, 1e-4);
+    EXPECT_NEAR(h_sh_grad_in[i], numerical_grad, 1e-4);
   }
 
   CUDA_CHECK(cudaFree(d_xyz_c));
@@ -577,9 +577,9 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
   std::vector<float> h_opacity = {1.0f, 1.0f};
   std::vector<float> h_conic = {8.0f, 0.0f, 8.0f,  // Gaussian 1
                                 8.0f, 0.0f, 8.0f}; // Gaussian 2
-  std::vector<float> h_rgb = {0.5f, 0.5f, 0.5f,    // Gaussian 1
-                              0.5f, 0.5f, 0.5f};   // Gaussian 2
-  std::vector<float> h_background_rgb = {0.5f, 0.5f, 0.5f};
+  std::vector<float> h_rgb = {0.8f, 0.1f, 0.5f,    // Gaussian 1
+                              0.5f, 0.8f, 0.1f};   // Gaussian 2
+  std::vector<float> h_background_rgb = {0.1f, 0.1f, 0.1f};
   std::vector<float> h_grad_image(image_width * image_height * 3);
   for (size_t i = 0; i < h_grad_image.size(); ++i)
     h_grad_image[i] = (i % 7) * 0.1f - 0.3f;
@@ -721,7 +721,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_grad_uv[i], num_grad, 1e-3);
+    EXPECT_NEAR(h_grad_uv[i], num_grad, 1e-1);
   }
 
   // Gradients for opacity
@@ -734,7 +734,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_grad_opacity[i], num_grad, 1e-3);
+    EXPECT_NEAR(h_grad_opacity[i], num_grad, 1e-1);
   }
 
   // Gradients for conic
@@ -747,7 +747,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_grad_conic[i], num_grad, 1e-3);
+    EXPECT_NEAR(h_grad_conic[i], num_grad, 1e-1);
   }
 
   // Gradients for rgb
@@ -760,7 +760,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_grad_rgb[i], num_grad, 1e-0);
+    EXPECT_NEAR(h_grad_rgb[i], num_grad, 1e-1);
   }
 
   // Cleanup

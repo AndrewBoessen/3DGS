@@ -519,4 +519,6 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   CHECK_CUDA(cudaFree(d_sort_keys));
   CHECK_CUDA(cudaFree(d_buffer_bytes));
   CHECK_CUDA(cudaFree(d_buffer_index));
+  CHECK_CUDA(cudaFree(d_pairs));
+  CHECK_CUDA(cudaFree(d_global_splat_counter));
 }
