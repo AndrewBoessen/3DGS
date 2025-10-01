@@ -88,6 +88,7 @@ __global__ void render_tiles_backward_kernel(
 
     int chunk_start = chunk_idx * CHUNK_SIZE;
     int chunk_end = min((chunk_idx + 1) * CHUNK_SIZE, num_splats_this_tile);
+    bool after_first_contribution = false;
     for (int i = chunk_end - chunk_start - 1; i >= 0; i--) {
       const int tile_splat_idx = chunk_idx * CHUNK_SIZE + i;
 
@@ -127,10 +128,12 @@ __global__ void render_tiles_backward_kernel(
           background_initialized = true;
         }
 
-        // No need for the lower alpha bound check with fast_exp
         const float reciprocal_one_minus_alpha = __frcp_rn(1.0f - alpha);
-        if (i < num_splats_this_pixel - 1) {
-          weight *= reciprocal_one_minus_alpha;
+        // update weight if this is not the first iteration
+        if (after_first_contribution) {
+          weight = weight * reciprocal_one_minus_alpha;
+        } else {
+          after_first_contribution = true;
         }
 
         #pragma unroll

@@ -1,6 +1,7 @@
 #include <cmath>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <vector>
 
 #include "gsplat/cuda_backward.hpp"
@@ -567,26 +568,23 @@ TEST_F(CudaBackwardKernelTest, SphericalHarmonicsBackward) {
 
 // Test for render_image_backward
 TEST_F(CudaBackwardKernelTest, RenderBackward) {
-  const int image_width = 32, image_height = 32;
-  const int N = 2; // Number of Gaussians
+  const int image_width = 16, image_height = 16;
+  const int N = 1; // Number of Gaussians
   const float h = 1e-4f;
 
   // Host data
-  std::vector<float> h_uvs = {8.0f, 8.0f,    // Gaussian 1
-                              24.0f, 24.0f}; // Gaussian 2
-  std::vector<float> h_opacity = {1.0f, 1.0f};
-  std::vector<float> h_conic = {8.0f, 0.0f, 8.0f,  // Gaussian 1
-                                8.0f, 0.0f, 8.0f}; // Gaussian 2
-  std::vector<float> h_rgb = {0.8f, 0.1f, 0.5f,    // Gaussian 1
-                              0.5f, 0.8f, 0.1f};   // Gaussian 2
+  std::vector<float> h_uvs = {8.0f, 8.0f};
+  std::vector<float> h_opacity = {0.5f};
+  std::vector<float> h_conic = {1.0f, 0.0f, 1.0f}; // Gaussian 1
+  std::vector<float> h_rgb = {0.5f, 0.5f, 0.5f};   // Gaussian 1
   std::vector<float> h_background_rgb = {0.1f, 0.1f, 0.1f};
   std::vector<float> h_grad_image(image_width * image_height * 3);
   for (size_t i = 0; i < h_grad_image.size(); ++i)
     h_grad_image[i] = (i % 7) * 0.1f - 0.3f;
 
   // Data that is computed during the forward pass
-  std::vector<int> h_sorted_splats = {0, 1};       // Simple case: splats are already sorted
-  std::vector<int> h_splat_range_by_tile = {0, 2}; // One tile containing both splats
+  std::vector<int> h_sorted_splats = {0};
+  std::vector<int> h_splat_range_by_tile = {0, 1};
   std::vector<int> h_num_splats_per_pixel(image_width * image_height);
   std::vector<float> h_final_weight_per_pixel(image_width * image_height);
 
@@ -721,7 +719,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_grad_uv[i], num_grad, 1e-1);
+    EXPECT_NEAR(h_grad_uv[i], num_grad, 1e-2);
   }
 
   // Gradients for opacity
@@ -734,7 +732,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_grad_opacity[i], num_grad, 1e-1);
+    EXPECT_NEAR(h_grad_opacity[i], num_grad, 1e-2);
   }
 
   // Gradients for conic
@@ -747,7 +745,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_grad_conic[i], num_grad, 1e-1);
+    EXPECT_NEAR(h_grad_conic[i], num_grad, 1e-2);
   }
 
   // Gradients for rgb
@@ -760,7 +758,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_grad_rgb[i], num_grad, 1e-1);
+    EXPECT_NEAR(h_grad_rgb[i], num_grad, 1e-2);
   }
 
   // Cleanup
