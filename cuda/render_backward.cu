@@ -88,7 +88,6 @@ __global__ void render_tiles_backward_kernel(
 
     int chunk_start = chunk_idx * CHUNK_SIZE;
     int chunk_end = min((chunk_idx + 1) * CHUNK_SIZE, num_splats_this_tile);
-    bool after_first_contribution = false;
     for (int i = chunk_end - chunk_start - 1; i >= 0; i--) {
       const int tile_splat_idx = chunk_idx * CHUNK_SIZE + i;
 
@@ -115,26 +114,11 @@ __global__ void render_tiles_backward_kernel(
           norm_prob = __expf(-0.5f * mh_sq);
         }
 
-        float alpha = fminf(0.9999f, _opacity[i] * norm_prob);
+        float alpha = fminf(0.999f, _opacity[i] * norm_prob);
 
-        if (!background_initialized) {
-          const float background_weight = 1.0 - (alpha * weight + 1.0 - weight);
-          if (background_weight > 0.001) {
-            #pragma unroll
-            for (int channel = 0; channel < 3; channel++) {
-              color_accum[channel] += background_rgb[channel] * background_weight;
-            }
-          }
-          background_initialized = true;
-        }
-
+        // compute current transmitance
         const float reciprocal_one_minus_alpha = __frcp_rn(1.0f - alpha);
-        // update weight if this is not the first iteration
-        if (after_first_contribution) {
-          weight = weight * reciprocal_one_minus_alpha;
-        } else {
-          after_first_contribution = true;
-        }
+        weight = weight * reciprocal_one_minus_alpha;
 
         #pragma unroll
         for (int channel = 0; channel < 3; channel++) {
@@ -146,6 +130,19 @@ __global__ void render_tiles_backward_kernel(
         for (int channel = 0; channel < 3; channel++) {
           grad_alpha +=
               (_rgb[channel] * weight - color_accum[channel] * reciprocal_one_minus_alpha) * grad_image_local[channel];
+        }
+
+        // grad_alpha += T_final * ra * v_render_a
+
+        if (!background_initialized) {
+          const float background_weight = 1.0 - (alpha * weight + 1.0 - weight);
+          if (background_weight > 0.001) {
+#pragma unroll
+            for (int channel = 0; channel < 3; channel++) {
+              color_accum[channel] += background_rgb[channel] * background_weight;
+            }
+          }
+          background_initialized = true;
         }
 
         grad_opa = norm_prob * grad_alpha;
