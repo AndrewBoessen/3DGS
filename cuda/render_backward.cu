@@ -9,7 +9,6 @@ namespace cg = cooperative_groups;
 
 constexpr int TILE_SIZE = 16;
 constexpr int BATCH_SIZE = 256;
-constexpr int TG_SIZE = 32;
 
 template <unsigned int CHUNK_SIZE>
 __global__ void render_tiles_backward_kernel(
@@ -118,17 +117,17 @@ __global__ void render_tiles_backward_kernel(
       }
 
       // --- Block-Level Reduction ---
-      grad_opa = cg::reduce(tile_thread_group, grad_opa, cg::plus<float>());
-      grad_u = cg::reduce(tile_thread_group, grad_u, cg::plus<float>());
-      grad_v = cg::reduce(tile_thread_group, grad_v, cg::plus<float>());
+      auto block_tile = cg::tiled_partition<TILE_SIZE * TILE_SIZE>(tile_thread_group);
+      grad_opa = cg::reduce(block_tile, grad_opa, cg::plus<float>());
+      grad_u = cg::reduce(block_tile, grad_u, cg::plus<float>());
+      grad_v = cg::reduce(block_tile, grad_v, cg::plus<float>());
+#pragma unroll
+      for (int j = 0; j < 3; j++)
+        grad_conic_splat[j] = cg::reduce(block_tile, grad_conic_splat[j], cg::plus<float>());
 
 #pragma unroll
       for (int j = 0; j < 3; j++)
-        grad_conic_splat[j] = cg::reduce(tile_thread_group, grad_conic_splat[j], cg::plus<float>());
-
-#pragma unroll
-      for (int j = 0; j < 3; j++)
-        grad_rgb_local[j] = cg::reduce(tile_thread_group, grad_rgb_local[j], cg::plus<float>());
+        grad_rgb_local[j] = cg::reduce(block_tile, grad_rgb_local[j], cg::plus<float>());
 
       // Lane 0 of the warp performs the atomic write
       const int gaussian_idx = _gaussian_idx_by_splat_idx[i];
