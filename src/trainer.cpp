@@ -1,8 +1,11 @@
 // trainer.cpp
 
 #include "gsplat/trainer.hpp"
-#include "gsplat/gaussian.hpp"
-#include <cmath>
+#include "gsplat/cuda_backward.hpp"
+#include "gsplat/cuda_forward.hpp"
+#include "gsplat/raster.hpp"
+#include <iostream>
+#include <opencv2/opencv.hpp>
 
 // Helper function to filter a vector based on a boolean mask.
 template <typename T> void filter_vector(std::vector<T> &vec, const std::vector<bool> &keep_mask) {
@@ -85,7 +88,6 @@ void Trainer::add_sh_band() {
     const size_t sh_coeffs_count = 3 * 3; // 3 coeffs * 3 channels
 
     gaussians.sh.emplace(num_gaussians, Eigen::VectorXf::Zero(sh_coeffs_count));
-    optimizer.upgrade_sh_states(num_gaussians, sh_coeffs_count);
     return;
   }
 
@@ -107,7 +109,6 @@ void Trainer::add_sh_band() {
         sh.conservativeResize(new_sh_coeffs_count);
         sh.tail(new_sh_coeffs_count - old_total_coeffs).setZero();
       }
-      optimizer.upgrade_sh_states(num_gaussians, new_sh_coeffs_count);
     }
     // Case 3: Current band is 2 (8 coeffs/channel), and config allows for band 3.
     else if (old_coeffs_per_channel == 8 && config.max_sh_band > 2) {
@@ -119,7 +120,6 @@ void Trainer::add_sh_band() {
         sh.conservativeResize(new_sh_coeffs_count);
         sh.tail(new_sh_coeffs_count - old_total_coeffs).setZero();
       }
-      optimizer.upgrade_sh_states(num_gaussians, new_sh_coeffs_count);
     }
   }
 }
@@ -212,10 +212,6 @@ void Trainer::split_gaussians(const std::vector<bool> &split_mask) {
                           std::move(split_quat),
                           gaussians.sh.has_value() ? std::make_optional(std::move(split_sh)) : std::nullopt);
   gaussians.append(new_gaussians);
-
-  // Update optimizer state
-  optimizer.filter_states(keep_mask);
-  optimizer.append_states(total_samples);
 }
 
 void Trainer::clone_gaussians(const std::vector<bool> &clone_mask, const std::vector<Eigen::Vector3f> &xyz_grad_avg) {
@@ -268,9 +264,8 @@ void Trainer::clone_gaussians(const std::vector<bool> &clone_mask, const std::ve
                           std::move(clone_quat),
                           gaussians.sh.has_value() ? std::make_optional(std::move(clone_sh)) : std::nullopt);
 
-  // Update gaussians and optimizer
+  // Update gaussians
   gaussians.append(new_gaussians);
-  optimizer.append_states(num_to_clone);
 }
 
 void Trainer::adaptive_density() {
@@ -295,7 +290,6 @@ void Trainer::adaptive_density() {
 
   if (delete_count > 0 && config.use_delete) {
     gaussians.filter(keep_mask);
-    optimizer.filter_states(keep_mask);
     // Filter gradient accumulators to keep them in sync
     filter_vector(uv_grad_accum, keep_mask);
     filter_vector(xyz_grad_accum, keep_mask);
@@ -423,4 +417,174 @@ void Trainer::adaptive_density() {
   }
 
   reset_grad_accum();
+}
+
+float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera, CudaDataManager &cuda,
+                             ForwardPassData &pass_data, const std::vector<cudaStream_t> &streams) {
+  const int NUM_STREAMS = streams.size();
+  const int width = (int)curr_camera.width;
+  const int height = (int)curr_camera.height;
+
+  // Load ground truth image and copy to device
+  cv::Mat bgr_gt_image = cv::imread(curr_image.name, cv::IMREAD_COLOR);
+  cv::Mat rgb_gt_image;
+  cv::cvtColor(bgr_gt_image, rgb_gt_image, cv::COLOR_BGR2RGB);
+  cv::Mat float_gt_image;
+  rgb_gt_image.convertTo(float_gt_image, CV_32FC3, 1.0 / 255.0);
+  std::vector<float> gt_image_data_vec((float *)float_gt_image.datastart, (float *)float_gt_image.dataend);
+
+  float *d_gt_image;
+  CHECK_CUDA(cudaMalloc(&d_gt_image, height * width * 3 * sizeof(float)));
+  CHECK_CUDA(
+      cudaMemcpy(d_gt_image, gt_image_data_vec.data(), height * width * 3 * sizeof(float), cudaMemcpyHostToDevice));
+
+  // Compute loss and image gradient
+  float *d_grad_image;
+  CHECK_CUDA(cudaMalloc(&d_grad_image, height * width * 3 * sizeof(float)));
+  float loss = fused_loss(pass_data.d_image_buffer, d_gt_image, height, width, 3, config.ssim_frac, d_grad_image);
+
+  // Backpropagate gradients from image to Gaussian parameters
+  render_image_backward(cuda.d_uv_culled, cuda.d_opacity_culled, pass_data.d_conic, cuda.d_rgb_culled,
+                        cuda.d_rgb_culled, pass_data.d_sorted_gaussians, pass_data.d_splat_start_end_idx_by_tile_idx,
+                        pass_data.d_splats_per_pixel, pass_data.d_weight_per_pixel, d_grad_image, width, height,
+                        cuda.d_grad_rgb, cuda.d_grad_opacity, cuda.d_grad_uv, cuda.d_grad_conic);
+
+  int offset = 0;
+  for (int i = 0; i < NUM_STREAMS; ++i) {
+    int remainder = pass_data.num_culled % NUM_STREAMS;
+    int size = pass_data.num_culled / NUM_STREAMS + (i < remainder ? 1 : 0);
+    if (size <= 0)
+      continue;
+
+    cudaStream_t stream = streams[i];
+    compute_conic_backward(pass_data.d_J + offset * 6, pass_data.d_sigma + offset * 9, cuda.d_T,
+                           cuda.d_grad_conic + offset * 3, size, cuda.d_grad_J + offset * 6,
+                           cuda.d_grad_sigma + offset * 9, stream);
+    compute_projection_jacobian_backward(cuda.d_xyz_c_culled + offset * 3, cuda.d_K, cuda.d_grad_J + offset * 6, size,
+                                         cuda.d_grad_xyz_c + offset * 3, stream);
+    compute_sigma_backward(cuda.d_quaternion_culled + offset * 4, cuda.d_scale_culled + offset * 3,
+                           cuda.d_grad_sigma + offset * 9, size, cuda.d_grad_quaternion + offset * 4,
+                           cuda.d_grad_scale + offset * 3, stream);
+    camera_intrinsic_projection_backward(cuda.d_xyz_c_culled + offset * 3, cuda.d_K, cuda.d_grad_uv + offset * 2, size,
+                                         cuda.d_grad_xyz + offset * 3, stream);
+    camera_extrinsic_projection_backward(cuda.d_xyz_culled + offset * 3, cuda.d_T, cuda.d_grad_xyz_c + offset * 3, size,
+                                         cuda.d_grad_xyz + offset * 3, stream);
+    offset += size;
+  }
+
+  CHECK_CUDA(cudaFree(d_gt_image));
+  CHECK_CUDA(cudaFree(d_grad_image));
+
+  return loss;
+}
+
+void Trainer::cleanup_iteration_buffers(ForwardPassData &pass_data) {
+  CHECK_CUDA(cudaFree(pass_data.d_image_buffer));
+  CHECK_CUDA(cudaFree(pass_data.d_weight_per_pixel));
+  CHECK_CUDA(cudaFree(pass_data.d_splats_per_pixel));
+  CHECK_CUDA(cudaFree(pass_data.d_sigma));
+  CHECK_CUDA(cudaFree(pass_data.d_conic));
+  CHECK_CUDA(cudaFree(pass_data.d_J));
+  CHECK_CUDA(cudaFree(pass_data.d_splat_start_end_idx_by_tile_idx));
+  CHECK_CUDA(cudaFree(pass_data.d_sorted_gaussians));
+}
+
+void Trainer::train() {
+  constexpr int NUM_STREAMS = 4;
+
+  // Setup: Initialize CUDA data manager, streams, and data splits
+  CudaDataManager cuda(config.max_gaussians);
+  std::vector<cudaStream_t> streams(NUM_STREAMS);
+  for (int i = 0; i < NUM_STREAMS; ++i) {
+    CHECK_CUDA(cudaStreamCreate(&streams[i]));
+  }
+  test_train_split();
+  reset_grad_accum();
+
+  // TRAINING LOOP
+  for (int iter = 0; iter < config.num_iters; ++iter) {
+    std::cout << "ITER " << iter << std::endl;
+    const int num_gaussians = gaussians.size();
+
+    // Zero out gradients
+    CHECK_CUDA(cudaMemset(cuda.d_grad_xyz, 0.0f, 3 * num_gaussians * sizeof(float)));
+    CHECK_CUDA(cudaMemset(cuda.d_grad_rgb, 0.0f, 3 * num_gaussians * sizeof(float)));
+    CHECK_CUDA(cudaMemset(cuda.d_grad_opacity, 0.0f, num_gaussians * sizeof(float)));
+    CHECK_CUDA(cudaMemset(cuda.d_grad_scale, 0.0f, 3 * num_gaussians * sizeof(float)));
+    CHECK_CUDA(cudaMemset(cuda.d_grad_quaternion, 0.0f, 4 * num_gaussians * sizeof(float)));
+    CHECK_CUDA(cudaMemset(cuda.d_grad_conic, 0.0f, 3 * num_gaussians * sizeof(float)));
+    CHECK_CUDA(cudaMemset(cuda.d_grad_uv, 0.0f, 2 * num_gaussians * sizeof(float)));
+    CHECK_CUDA(cudaMemset(cuda.d_grad_J, 0.0f, 6 * num_gaussians * sizeof(float)));
+    CHECK_CUDA(cudaMemset(cuda.d_grad_sigma, 0.0f, 9 * num_gaussians * sizeof(float)));
+    CHECK_CUDA(cudaMemset(cuda.d_grad_xyz_c, 0.0f, 3 * num_gaussians * sizeof(float)));
+
+    // Copy Gaussian data from host to device
+    CHECK_CUDA(cudaMemcpy(cuda.d_xyz, gaussians.xyz.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(cuda.d_rgb, gaussians.rgb.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(
+        cudaMemcpy(cuda.d_opacity, gaussians.opacity.data(), num_gaussians * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(
+        cudaMemcpy(cuda.d_scale, gaussians.scale.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(cuda.d_quaternion, gaussians.quaternion.data(), num_gaussians * 4 * sizeof(float),
+                          cudaMemcpyHostToDevice));
+
+    // Get current training image and camera
+    Image curr_image = train_images[iter % train_images.size()];
+    Camera curr_camera = cameras[curr_image.camera_id];
+
+    // Prepare and copy camera parameters to device
+    float h_K[9] = {(float)curr_camera.params[0],
+                    0.f,
+                    (float)curr_camera.params[2],
+                    0.f,
+                    (float)curr_camera.params[1],
+                    (float)curr_camera.params[3],
+                    0.f,
+                    0.f,
+                    1.f};
+    Eigen::Matrix3d rot_mat_d = curr_image.QvecToRotMat();
+    Eigen::Vector3d t_vec_d = curr_image.tvec;
+    float h_T[12];
+    for (int i = 0; i < 3; ++i) {
+      for (int j = 0; j < 3; ++j)
+        h_T[i * 4 + j] = (float)rot_mat_d(i, j);
+      h_T[i * 4 + 3] = (float)t_vec_d(i);
+    }
+    CHECK_CUDA(cudaMemcpy(cuda.d_K, h_K, 9 * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(cuda.d_T, h_T, 12 * sizeof(float), cudaMemcpyHostToDevice));
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start, 0);
+
+    // --- FORWARD PASS via RASTERIZE MODULE ---
+    ForwardPassData pass_data;
+    rasterize_image(num_gaussians, curr_camera, config, cuda, pass_data, streams);
+
+    if (pass_data.num_culled == 0) {
+      std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;
+      cleanup_iteration_buffers(pass_data);
+      continue;
+    }
+
+    // --- BACKWARD PASS ---
+    float loss = backward_pass(curr_image, curr_camera, cuda, pass_data, streams);
+    std::cout << "LOSS TOTAL " << loss << std::endl;
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    std::cout << "Elapsed time for kernels: " << milliseconds << "ms" << std::endl;
+
+    // Gradients gradients = {xyz_grad, rgb_grad, opacity_grad, scale_grad, quaternion_grad};
+    // optimizer.step(gaussians, gradients, mask);
+
+    // Free temporary buffers for this iteration
+    cleanup_iteration_buffers(pass_data);
+  }
+
+  // adaptive_density();
 }

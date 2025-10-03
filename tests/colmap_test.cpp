@@ -5,7 +5,7 @@ const std::string TEST_DATA_PATH = TEST_DATA_DIR;
 
 // Test suite for the ReadCamerasBinary function
 TEST(ColmapIoTest, ReadCamerasBinary) {
-  const auto cameras_optional = ReadCamerasBinary(TEST_DATA_PATH + "/cameras.bin");
+  const auto cameras_optional = ReadCamerasBinary(TEST_DATA_PATH + "/cameras.bin", 1);
 
   // 1. Ensure the file was opened and read successfully
   ASSERT_TRUE(cameras_optional.has_value());
@@ -29,7 +29,7 @@ TEST(ColmapIoTest, ReadCamerasBinary) {
 
 // Test suite for the ReadImagesBinary function
 TEST(ColmapIoTest, ReadImagesBinary) {
-  const auto images_optional = ReadImagesBinary(TEST_DATA_PATH + "/images.bin");
+  const auto images_optional = ReadImagesBinary(TEST_DATA_PATH + "/images.bin", "root/dir/", 1);
 
   ASSERT_TRUE(images_optional.has_value());
   const auto &images = images_optional.value();
@@ -39,7 +39,7 @@ TEST(ColmapIoTest, ReadImagesBinary) {
 
   const auto &img = images.at(1);
   EXPECT_EQ(img.id, 1);
-  EXPECT_EQ(img.name, "test.jpg");
+  EXPECT_EQ(img.name, "root/dir/images/test.jpg");
   EXPECT_EQ(img.camera_id, 1);
 
   EXPECT_NEAR(img.qvec(0), 0.8, 1e-9); // w

@@ -32,7 +32,8 @@ Eigen::Matrix3d Image::QvecToRotMat() const {
   return q.toRotationMatrix();
 }
 
-std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::filesystem::path &path) {
+std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::filesystem::path &path,
+                                                                 const int downsample_factor) {
   std::ifstream file(path, std::ios::binary);
   if (!file) {
     std::cerr << "Error: Could not open file " << path << std::endl;
@@ -59,6 +60,11 @@ std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::file
       return std::nullopt;
     }
 
+    if (model_id != 0 && model_id != 1) {
+      std::cerr << "Error: Only PINHOLE or SIMPLE_PINHOLE camera supported" << std::endl;
+      return std::nullopt;
+    }
+
     auto it = camera_models.find(model_id);
     if (it == camera_models.end()) {
       std::cerr << "Error: Unknown camera model ID: " << model_id << std::endl;
@@ -71,12 +77,21 @@ std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::file
       std::cerr << "Error: Failed to read camera parameters." << std::endl;
       return std::nullopt;
     }
+
+    for (double &param : cam.params) {
+      param /= (double)downsample_factor;
+    }
+
+    cam.height = std::round(cam.height / (float)downsample_factor);
+    cam.width = std::round(cam.width / (float)downsample_factor);
+
     cameras[cam.id] = std::move(cam);
   }
   return cameras;
 }
 
-std::optional<std::unordered_map<int, Image>> ReadImagesBinary(const std::filesystem::path &path) {
+std::optional<std::unordered_map<int, Image>>
+ReadImagesBinary(const std::filesystem::path &path, const std::string img_root_dir, const int downsample_factor) {
   std::ifstream file(path, std::ios::binary);
   if (!file) {
     std::cerr << "Error: Could not open file " << path << std::endl;
@@ -102,6 +117,8 @@ std::optional<std::unordered_map<int, Image>> ReadImagesBinary(const std::filesy
       return std::nullopt;
     }
 
+    img.name =
+        img_root_dir + (downsample_factor > 1 ? ("images_" + std::to_string(downsample_factor)) : ("images")) + "/";
     char name_char;
     while (ReadBinary(file, name_char) && name_char != '\0') {
       img.name += name_char;

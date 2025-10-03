@@ -194,7 +194,7 @@ void compute_sigma(float *const quaternion, float *const scale, const int N, flo
   ASSERT_DEVICE_POINTER(scale);
   ASSERT_DEVICE_POINTER(sigma);
 
-  const int threads_per_block = 256;
+  const int threads_per_block = 1024;
   // Calculate the number of blocks needed to cover all N points
   const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
 
@@ -216,7 +216,7 @@ void compute_conic(float *const xyz, const float *K, float *const sigma, const f
   ASSERT_DEVICE_POINTER(J);
   ASSERT_DEVICE_POINTER(conic);
 
-  const int threads_per_block = 256;
+  const int threads_per_block = 1024;
 
   // Calculate the number of blocks needed to cover all N Gaussians.
   const int num_blocks = (N + threads_per_block - 1) / threads_per_block;

@@ -55,10 +55,12 @@ const std::unordered_map<int, CameraModel> &GetCameraModels();
 /**
  * @brief Reads camera data from a COLMAP cameras.bin file.
  * @param path The path to the cameras.bin file.
+ * @param downsample_factor The image downsample factor 1,2,4,8
  * @return An optional map from camera ID to Camera struct.
  * Returns std::nullopt if the file cannot be opened or read.
  */
-std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::filesystem::path &path);
+std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::filesystem::path &path,
+                                                                 const int downsample_factor);
 
 /**
  * @brief Reads image data from a COLMAP images.bin file.
@@ -66,7 +68,8 @@ std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::file
  * @return An optional map from image ID to Image struct.
  * Returns std::nullopt if the file cannot be opened or read.
  */
-std::optional<std::unordered_map<int, Image>> ReadImagesBinary(const std::filesystem::path &path);
+std::optional<std::unordered_map<int, Image>>
+ReadImagesBinary(const std::filesystem::path &path, const std::string img_root_dir, const int downsample_factor);
 
 /**
  * @brief Reads 3D point data from a COLMAP points3D.bin file.

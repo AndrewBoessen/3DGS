@@ -18,6 +18,10 @@ find_package(CUDAToolkit REQUIRED)
 find_package(sphericart REQUIRED)
 # Find OpenMP for sphericart parallelization
 find_package(OpenMP REQUIRED)
+# Find nanoflann for nearest neighbor
+find_package(nanoflann)
+# Find OpenCV for image procesing
+find_package(OpenCV REQUIRED)
 
 # ===================================================================
 # DATALODER LIBRARY DEFINITION
@@ -33,18 +37,18 @@ target_link_libraries(dataloader PUBLIC Eigen3::Eigen)
 # ===================================================================
 # GSPLAT LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat src/utils.cpp src/gaussian.cpp src/raster.cpp src/optimize.cpp src/trainer.cpp)
+add_library(gsplat src/utils.cpp src/data.cpp src/gaussian.cpp src/raster.cpp src/trainer.cpp)
 
 target_include_directories(gsplat
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat PUBLIC yaml-cpp Eigen3::Eigen)
+target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp Eigen3::Eigen nanoflann::nanoflann ${OpenCV_LIBS})
 
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu cuda/spherical_harmonics.cu cuda/render.cu cuda/projection_backward.cu cuda/gaussian_backward.cu cuda/spherical_harmonics_backward.cu cuda/render_backward.cu)
+add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu cuda/spherical_harmonics.cu cuda/render.cu cuda/loss.cu cuda/projection_backward.cu cuda/gaussian_backward.cu cuda/spherical_harmonics_backward.cu cuda/render_backward.cu)
 
 target_include_directories(gsplat_cuda
   PUBLIC
@@ -95,9 +99,3 @@ add_gtest_executable(cuda_forward_tests tests/cuda_forward_test.cpp gsplat_cuda)
 
 # --- CUDA Backward Tests ---
 add_gtest_executable(cuda_backward_tests tests/cuda_backward_test.cpp gsplat_cuda)
-
-# --- Optimizer Tests ---
-add_gtest_executable(optimizer_tests tests/optimize_test.cpp gsplat)
-
-# --- Trainer Tests ---
-add_gtest_executable(trainer_tests tests/trainer_test.cpp gsplat)

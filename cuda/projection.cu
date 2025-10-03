@@ -54,7 +54,7 @@ __global__ void cam_intr_proj_kernel(const float *__restrict__ xyz, const float 
 
   // load and broadcast K to all threads in warp
   float k_val = 0.0f;
-  if (lane_id < 10) {
+  if (lane_id < 9) {
     k_val = K[lane_id];
   }
   // K = [fx, 0, cx, 0, fy, cy, 0, 0, 1]

@@ -115,7 +115,7 @@ void filter_gaussians_by_mask(int N, const bool *d_mask, const float *d_xyz, con
  * @param[out] sorted_gaussian_bytes            Pointer to store bytes to allocate for sorted_gaussians
  * @param[out] sorted_gaussians                 A device array to ouput gaussians sorted by z depth
  * @param[out] splat_start_end_idx_by_tile_idx  A device array to index into sorted_gaussian by tile id
- * @param[in]  stream The CUDA stream to execute kernel on
+ * @param[in]  stream                           The CUDA stream to execute kernel on
  */
 void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *conic, const int n_tiles_x,
                               const int n_tiles_y, const float mh_dist, const int N, size_t &sorted_gaussian_bytes,
@@ -128,14 +128,13 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
  * @param[in]  l_max            The max degree of SH
  * @param[in]  N                The total number of points
  * @param[out] rgb              A device pointer to output rgb values
- * @param[in]  stream The CUDA stream to execute kernel on
+ * @param[in]  stream           The CUDA stream to execute kernel on
  */
 void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficients, const int N, const int max_l,
                                     float *rgb, cudaStream_t stream = 0);
 
 /**
  * @brief Launch CUDA kernels to render image pixel values from Gaussians
- *
  * @param[in]  uv                   A device pointer to centers of splats
  * @param[in]  opacity              A device pointer to splat opacity values
  * @param[in]  conic                A device pointer to store splat conic parameters
@@ -145,12 +144,28 @@ void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficien
  * @param[in]  splat_range_by_tile  A device pointer to start and end ids into sorted_splats
  * @param[in]  image_width          The width of image in pixels
  * @param[in]  image_height         The height of image in pixels
- * @param[in]  stream The CUDA stream to execute kernel on
+ * @param[in]  stream               The CUDA stream to execute kernel on
+ * @param[in]  splats_per_pixel     A device array to output total splats contributing to each pixel
  * @param[out] weight_per_pixel     A device pointer to output final alpha weights per pixel
  * @param[out] image                A device pointer to output image rgb values
- * @param[in]  stream The CUDA stream to execute kernel on
+ * @param[in]  stream               The CUDA stream to execute kernel on
  */
 void render_image(const float *uv, const float *opacity, const float *conic, const float *rgb,
                   const float background_opacity, const int *sorted_splats, const int *splat_range_by_tile,
-                  const int image_width, const int image_height, float *weight_per_pixel, float *image,
-                  cudaStream_t stream = 0);
+                  const int image_width, const int image_height, int *splats_per_pixel, float *weight_per_pixel,
+                  float *image, cudaStream_t stream = 0);
+
+/**
+ * @brief Launch CUDA kernel to compute L1 and SSIM loss with gradient output
+ * @param[in]  predicted_data  A device pointer to predicited image
+ * @param[in]  gt_data         A device pointer to ground truth image
+ * @param[in]  rows            Height of the image
+ * @param[in]  cols            Width of the image
+ * @param[in]  channels        Number of channels (3 for RGB)
+ * @param[in]  ssim_weight     Alpha value in loss function
+ * @param[out] image_grad      Gradient per pixel channel
+ * @param[in]  stream          The CUDA stream to execute kernel on
+ * @return Loss from combined L1 and SSIM
+ */
+float fused_loss(const float *predicted_data, const float *gt_data, int rows, int cols, int channels,
+                 const float ssim_weight, float *image_grad, cudaStream_t stream = 0);

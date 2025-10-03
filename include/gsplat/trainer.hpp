@@ -3,8 +3,8 @@
 #pragma once
 
 #include "dataloader/colmap.hpp"
+#include "gsplat/cuda_data.hpp"
 #include "gsplat/gaussian.hpp"
-#include "gsplat/optimize.hpp"
 #include "gsplat/utils.hpp"
 #include <Eigen/Dense>
 #include <unordered_map>
@@ -34,7 +34,7 @@ public:
   Trainer(ConfigParameters config, Gaussians gaussians, std::unordered_map<int, Image> images,
           std::unordered_map<int, Camera> cameras)
       : config(std::move(config)), gaussians(std::move(gaussians)), images(std::move(images)),
-        cameras(std::move(cameras)), optimizer(config.base_lr) {}
+        cameras(std::move(cameras)) {}
 
   /**
    * @breif Resets the gradient accumulation for xyz and uv.
@@ -99,9 +99,6 @@ private:
   /// @brief A vector of images designated for the training set.
   std::vector<Image> train_images;
 
-  /// @brief The Adam optimizer used to update Gaussian parameters.
-  AdamOptimizer optimizer;
-
   /// @brief A vector to hold sum of gradients of image view.
   std::vector<Eigen::Vector2f> uv_grad_accum;
 
@@ -134,4 +131,23 @@ private:
    * influence in regions that require more geometric detail.
    */
   void clone_gaussians(const std::vector<bool> &clone_mask, const std::vector<Eigen::Vector3f> &xyz_grad_avg);
+
+  /**
+   * @brief Free temporary memory buffers for training iteration
+   * @param[in] pass_data Temporary buffer data
+   */
+  void cleanup_iteration_buffers(ForwardPassData &pass_data);
+
+  /**
+   * @brief Compute gradients from forward pass
+   *
+   * @param[in] curr_image Rendered image data
+   * @param[in] curr_camera Current camera parameters
+   * @param[in] cuda Device data to store gradients in
+   * @param[in] pass_data Forward pass temporary buffers
+   * @param[in] streams CUDA streams to use
+   * @return Loss value
+   */
+  float backward_pass(const Image &curr_image, const Camera &curr_camera, CudaDataManager &cuda,
+                      ForwardPassData &pass_data, const std::vector<cudaStream_t> &streams);
 };
