@@ -37,7 +37,7 @@ target_link_libraries(dataloader PUBLIC Eigen3::Eigen)
 # ===================================================================
 # GSPLAT LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat src/utils.cpp src/gaussian.cpp src/raster.cpp src/trainer.cpp)
+add_library(gsplat src/utils.cpp src/data.cpp src/gaussian.cpp src/raster.cpp src/trainer.cpp)
 
 target_include_directories(gsplat
   PUBLIC

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "dataloader/colmap.hpp"
+#include "gsplat/cuda_data.hpp"
 #include "gsplat/gaussian.hpp"
 #include "gsplat/utils.hpp"
 #include <Eigen/Dense>
@@ -130,4 +131,23 @@ private:
    * influence in regions that require more geometric detail.
    */
   void clone_gaussians(const std::vector<bool> &clone_mask, const std::vector<Eigen::Vector3f> &xyz_grad_avg);
+
+  /**
+   * @brief Free temporary memory buffers for training iteration
+   * @param[in] pass_data Temporary buffer data
+   */
+  void cleanup_iteration_buffers(ForwardPassData &pass_data);
+
+  /**
+   * @brief Compute gradients from forward pass
+   *
+   * @param[in] curr_image Rendered image data
+   * @param[in] curr_camera Current camera parameters
+   * @param[in] cuda Device data to store gradients in
+   * @param[in] pass_data Forward pass temporary buffers
+   * @param[in] streams CUDA streams to use
+   * @return Loss value
+   */
+  float backward_pass(const Image &curr_image, const Camera &curr_camera, CudaDataManager &cuda,
+                      ForwardPassData &pass_data, const std::vector<cudaStream_t> &streams);
 };

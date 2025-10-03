@@ -569,22 +569,24 @@ TEST_F(CudaBackwardKernelTest, SphericalHarmonicsBackward) {
 // Test for render_image_backward
 TEST_F(CudaBackwardKernelTest, RenderBackward) {
   const int image_width = 16, image_height = 16;
-  const int N = 1; // Number of Gaussians
+  const int N = 2; // Number of Gaussians
   const float h = 1e-4f;
 
   // Host data
-  std::vector<float> h_uvs = {8.0f, 8.0f};
-  std::vector<float> h_opacity = {0.5f};
-  std::vector<float> h_conic = {1.0f, 0.0f, 1.0f}; // Gaussian 1
-  std::vector<float> h_rgb = {0.5f, 0.5f, 0.5f};   // Gaussian 1
-  std::vector<float> h_background_rgb = {0.1f, 0.1f, 0.1f};
+  std::vector<float> h_uvs = {8.0f, 8.0f, 2.0f, 2.0f};
+  std::vector<float> h_opacity = {0.2f, 0.8f};
+  std::vector<float> h_conic = {
+      1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f,
+  }; // Gaussian 1
+  std::vector<float> h_rgb = {0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f}; // Gaussian 1
+  std::vector<float> h_background_rgb = {0.5f, 0.5f, 0.5f};
   std::vector<float> h_grad_image(image_width * image_height * 3);
   for (size_t i = 0; i < h_grad_image.size(); ++i)
     h_grad_image[i] = (i % 7) * 0.1f - 0.3f;
 
   // Data that is computed during the forward pass
-  std::vector<int> h_sorted_splats = {0};
-  std::vector<int> h_splat_range_by_tile = {0, 1};
+  std::vector<int> h_sorted_splats = {0, 1};
+  std::vector<int> h_splat_range_by_tile = {0, 2};
   std::vector<int> h_num_splats_per_pixel(image_width * image_height);
   std::vector<float> h_final_weight_per_pixel(image_width * image_height);
 
