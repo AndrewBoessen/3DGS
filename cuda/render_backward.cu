@@ -142,6 +142,29 @@ __global__ void render_tiles_backward_kernel(
           // opacity grad
           grad_opa = grad_alpha * g;
 
+          // gradient of gaussian probability
+          const float grad_g = grad_alpha * _opacity[i];
+          const float grad_mh = grad_g * (-0.5f * g);
+
+          const float grad_u_mean_component = (2.0f * b * v_diff - 2.0f * c * u_diff) * reciprocal_det;
+          const float grad_v_mean_component = (2.0f * b * u_diff - 2.0f * a * v_diff) * reciprocal_det;
+
+          // UV gradients
+          grad_u = grad_mh * grad_u_mean_component;
+          grad_v = grad_mh * grad_v_mean_component;
+
+          // Partial derivative of m^2 w.r.t. 'a'
+          const float d_mh_sq_d_a = ((v_diff * v_diff) - mh_sq * c) * reciprocal_det;
+          grad_conic_splat[0] = grad_mh * d_mh_sq_d_a;
+
+          // Partial derivative of m^2 w.r.t. 'b'
+          const float d_mh_sq_d_b = (-2.0f * u_diff * v_diff + mh_sq * 2.0f * b) * reciprocal_det;
+          grad_conic_splat[1] = grad_mh * d_mh_sq_d_b;
+
+          // Partial derivative of m^2 w.r.t. 'c'
+          const float d_mh_sq_d_c = ((u_diff * u_diff) - mh_sq * a) * reciprocal_det;
+          grad_conic_splat[2] = grad_mh * d_mh_sq_d_c;
+
           // Update color accum
 #pragma unroll
           for (int j = 0; j < 3; j++)
