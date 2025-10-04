@@ -6,6 +6,14 @@
 // This class handles the setup and teardown of memory for each test.
 class AdamOptimizerTest : public ::testing::Test {
 protected:
+  // Per-test-suite set-up.
+  // Called before the first test in this test suite.
+  static void SetUpTestSuite() {
+    // Ensure a CUDA device is available
+    int deviceCount = 0;
+    cudaGetDeviceCount(&deviceCount);
+    ASSERT_GT(deviceCount, 0);
+  }
   // This function is called before each test is run.
   void SetUp() override {
     // Allocate host memory
