@@ -3,6 +3,7 @@
 #include "gsplat/trainer.hpp"
 #include "gsplat/cuda_backward.hpp"
 #include "gsplat/cuda_forward.hpp"
+#include "gsplat/optimizer.hpp"
 #include "gsplat/raster.hpp"
 #include <iostream>
 #include <opencv2/opencv.hpp>
@@ -579,8 +580,7 @@ void Trainer::train() {
     cudaEventElapsedTime(&milliseconds, start, stop);
     std::cout << "Elapsed time for kernels: " << milliseconds << "ms" << std::endl;
 
-    // Gradients gradients = {xyz_grad, rgb_grad, opacity_grad, scale_grad, quaternion_grad};
-    // optimizer.step(gaussians, gradients, mask);
+    // --- OPTIMIZER STEP ---
 
     // Free temporary buffers for this iteration
     cleanup_iteration_buffers(pass_data);
