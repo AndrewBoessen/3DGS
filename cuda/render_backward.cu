@@ -68,7 +68,6 @@ __global__ void render_tiles_backward_kernel(
     // Load chunk to SMEM
     for (int i = thread_id; i < CHUNK_SIZE; i += block_size) {
       const int tile_splat_idx = chunk_idx * CHUNK_SIZE + i;
-      // if (tile_splat_idx < num_splats_this_tile) {
       if (tile_splat_idx >= num_splats_this_tile)
         break;
       const int global_splat_idx = splat_idx_start + tile_splat_idx;
@@ -85,7 +84,6 @@ __global__ void render_tiles_backward_kernel(
 #pragma unroll
       for (int j = 0; j < 3; j++)
         _conic[i * 3 + j] = conic[gaussian_idx * 3 + j];
-      //}
     }
 
     tile_thread_group.sync();
