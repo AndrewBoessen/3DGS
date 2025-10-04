@@ -29,9 +29,9 @@ __global__ void render_tiles_backward_kernel(
   int num_splats_this_tile = splat_idx_end - splat_idx_start;
 
   // Per-pixel variables stored in registers
-  bool background_initialized = false;
   int num_splats_this_pixel;
   float T;
+  float T_final;
   float grad_image_local[3];
   float color_accum[3] = {0.0f, 0.0f, 0.0f};
 
@@ -39,10 +39,12 @@ __global__ void render_tiles_backward_kernel(
 
   if (valid_pixel) {
     num_splats_this_pixel = num_splats_per_pixel[pixel_id];
-    T = final_weight_per_pixel[u_splat + v_splat * image_width];
+    T_final = final_weight_per_pixel[u_splat + v_splat * image_width];
+    T = T_final;
 #pragma unroll
     for (int channel = 0; channel < 3; channel++) {
       grad_image_local[channel] = grad_image[pixel_id * 3 + channel];
+      color_accum[channel] = background_rgb[channel] * T_final;
     }
   }
 
@@ -66,6 +68,7 @@ __global__ void render_tiles_backward_kernel(
     // Load chunk to SMEM
     for (int i = thread_id; i < CHUNK_SIZE; i += block_size) {
       const int tile_splat_idx = chunk_idx * CHUNK_SIZE + i;
+      // if (tile_splat_idx < num_splats_this_tile) {
       if (tile_splat_idx >= num_splats_this_tile)
         break;
       const int global_splat_idx = splat_idx_start + tile_splat_idx;
@@ -82,7 +85,9 @@ __global__ void render_tiles_backward_kernel(
 #pragma unroll
       for (int j = 0; j < 3; j++)
         _conic[i * 3 + j] = conic[gaussian_idx * 3 + j];
+      //}
     }
+
     tile_thread_group.sync();
 
     int chunk_start = chunk_idx * CHUNK_SIZE;
@@ -108,30 +113,59 @@ __global__ void render_tiles_backward_kernel(
         const float reciprocal_det = __frcp_rn(det);
         const float mh_sq = (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff) * reciprocal_det;
 
-        float norm_prob = 0.0f;
+        float g = 0.0f;
         if (mh_sq > 0.0f) {
-          norm_prob = __expf(-0.5f * mh_sq);
+          g = __expf(-0.5f * mh_sq);
         }
 
-        float alpha = fminf(0.999f, _opacity[i] * norm_prob);
+        // effective opacity
+        float alpha = fminf(0.999f, _opacity[i] * g);
+
+        // Gaussian does not contribute to image
+        if (alpha >= 0.004) {
+
+          // alpha reciprical
+          float ra = __frcp_rn(1.0f - alpha);
+          T *= ra;
+
+          const float fac = alpha * T;
+
+#pragma unroll
+          for (int j = 0; j < 3; j++)
+            grad_rgb_local[j] = fac * grad_image_local[j];
+
+          float grad_alpha = 0.0f;
+#pragma unroll
+          for (int j = 0; j < 3; j++)
+            grad_alpha += (_rgb[i * 3 + j] * T - color_accum[j] * ra) * grad_image_local[j];
+
+          // opacity grad
+          grad_opa = grad_alpha * g;
+
+          // Update color accum
+#pragma unroll
+          for (int j = 0; j < 3; j++)
+            color_accum[j] += _rgb[i * 3 + j] * fac;
+        }
       }
 
+      tile_thread_group.sync();
+
       // --- Block-Level Reduction ---
-      auto block_tile = cg::tiled_partition<TILE_SIZE * TILE_SIZE>(tile_thread_group);
-      grad_opa = cg::reduce(block_tile, grad_opa, cg::plus<float>());
-      grad_u = cg::reduce(block_tile, grad_u, cg::plus<float>());
-      grad_v = cg::reduce(block_tile, grad_v, cg::plus<float>());
+      auto warp = cg::tiled_partition<32>(tile_thread_group);
+      grad_opa = cg::reduce(warp, grad_opa, cg::plus<float>());
+      grad_u = cg::reduce(warp, grad_u, cg::plus<float>());
+      grad_v = cg::reduce(warp, grad_v, cg::plus<float>());
 #pragma unroll
       for (int j = 0; j < 3; j++)
-        grad_conic_splat[j] = cg::reduce(block_tile, grad_conic_splat[j], cg::plus<float>());
-
+        grad_conic_splat[j] = cg::reduce(warp, grad_conic_splat[j], cg::plus<float>());
 #pragma unroll
       for (int j = 0; j < 3; j++)
-        grad_rgb_local[j] = cg::reduce(block_tile, grad_rgb_local[j], cg::plus<float>());
+        grad_rgb_local[j] = cg::reduce(warp, grad_rgb_local[j], cg::plus<float>());
 
-      // Lane 0 of the warp performs the atomic write
-      const int gaussian_idx = _gaussian_idx_by_splat_idx[i];
-      if (thread_id == 0) {
+      // First thread in block performs the atomic write
+      if (thread_id % 32 == 0) {
+        const int gaussian_idx = _gaussian_idx_by_splat_idx[i];
         atomicAdd(grad_opacity + gaussian_idx, grad_opa);
         atomicAdd(grad_uv + gaussian_idx * 2 + 0, grad_u);
         atomicAdd(grad_uv + gaussian_idx * 2 + 1, grad_v);
