@@ -41,6 +41,10 @@ struct CudaDataManager {
   float *d_xyz_culled, *d_rgb_culled, *d_opacity_culled, *d_scale_culled, *d_quaternion_culled, *d_uv_culled,
       *d_xyz_c_culled;
 
+  // Optimizer moment vectors
+  float *m_grad_xyz, *m_grad_rgb, *m_grad_opacity, *m_grad_scale, *m_grad_quaternion;
+  float *v_grad_xyz, *v_grad_rgb, *v_grad_opacity, *v_grad_scale, *v_grad_quaternion;
+
   CudaDataManager(size_t max_gaussians_in);
   ~CudaDataManager();
 };
