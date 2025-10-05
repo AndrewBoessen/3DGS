@@ -33,5 +33,5 @@ void adam_step(float *params, float *const param_grads, float *exp_avg, float *e
   dim3 threads(256);
   dim3 blocks((N + threads.x - 1) / threads.x);
 
-  adam_kernel<<<threads, blocks, 0, stream>>>(N, params, param_grads, exp_avg, exp_avg_sq, lr, b1, b2, eps);
+  adam_kernel<<<blocks, threads, 0, stream>>>(N, params, param_grads, exp_avg, exp_avg_sq, lr, b1, b2, eps);
 }

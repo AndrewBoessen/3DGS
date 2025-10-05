@@ -370,6 +370,32 @@ __global__ void getTotalSum(const int *mask_sum, const bool *d_mask, int *d_num_
   }
 }
 
+void filter_moment_vectors(const int N, const int S, const bool *d_mask, const float *d_m, const float *d_v,
+                           float *d_m_culled, float *d_v_culled, cudaStream_t stream) {
+  int *mask_sum;
+  CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
+  void *d_temp_storage = nullptr;
+  size_t temp_storage_bytes = 0;
+
+  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
+  // Allocate temporary storage
+  cudaMalloc(&d_temp_storage, temp_storage_bytes);
+
+  // Run exclusive prefix sum
+  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
+
+  const int threads_per_block = 256;
+  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
+
+  // Apply mask
+  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_m, d_mask, mask_sum, N, d_m_culled, S);
+  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_v, d_mask, mask_sum, N, d_v_culled, S);
+
+  // Free the temporary storage.
+  CHECK_CUDA(cudaFree(d_temp_storage));
+  CHECK_CUDA(cudaFree(mask_sum));
+}
+
 void filter_gaussians_by_mask(const int N, const bool *d_mask, const float *d_xyz, const float *d_rgb,
                               const float *d_opacity, const float *d_scale, const float *d_quaternion,
                               const float *d_uv, const float *d_xyz_c, float *d_xyz_culled, float *d_rgb_culled,

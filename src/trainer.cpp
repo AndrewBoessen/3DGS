@@ -574,17 +574,41 @@ void Trainer::train() {
     std::cout << "LOSS TOTAL " << loss << std::endl;
 
     CHECK_CUDA(cudaDeviceSynchronize());
+
+    // --- OPTIMIZER STEP ---
+
+    // Select moment vectors
+    filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_xyz_culled,
+                          cuda.v_grad_xyz_culled);
+    filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_rgb, cuda.v_grad_rgb, cuda.m_grad_rgb_culled,
+                          cuda.v_grad_rgb_culled);
+    filter_moment_vectors(num_gaussians, 1, cuda.d_mask, cuda.m_grad_opacity, cuda.v_grad_opacity,
+                          cuda.m_grad_opacity_culled, cuda.v_grad_opacity_culled);
+    filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_scale, cuda.v_grad_scale, cuda.m_grad_scale_culled,
+                          cuda.v_grad_scale_culled);
+    filter_moment_vectors(num_gaussians, 4, cuda.d_mask, cuda.m_grad_quaternion, cuda.v_grad_quaternion,
+                          cuda.m_grad_quaternion_culled, cuda.v_grad_quaternion_culled);
+
+    // Update parameters
+    adam_step(cuda.d_xyz_culled, cuda.d_grad_xyz, cuda.m_grad_xyz_culled, cuda.v_grad_xyz_culled, config.base_lr, 0.9f,
+              0.999f, 1e-8f, pass_data.num_culled * 3);
+    adam_step(cuda.d_rgb_culled, cuda.d_grad_rgb, cuda.m_grad_rgb_culled, cuda.v_grad_rgb_culled, config.base_lr, 0.9f,
+              0.999f, 1e-8f, pass_data.num_culled * 3);
+    adam_step(cuda.d_opacity_culled, cuda.d_grad_opacity, cuda.m_grad_opacity_culled, cuda.v_grad_opacity_culled,
+              config.base_lr, 0.9f, 0.999f, 1e-8f, pass_data.num_culled);
+    adam_step(cuda.d_scale_culled, cuda.d_grad_scale, cuda.m_grad_scale_culled, cuda.v_grad_scale_culled,
+              config.base_lr, 0.9f, 0.999f, 1e-8f, pass_data.num_culled * 3);
+    adam_step(cuda.d_quaternion_culled, cuda.d_grad_quaternion, cuda.m_grad_quaternion_culled,
+              cuda.v_grad_quaternion_culled, config.base_lr, 0.9f, 0.999f, 1e-8f, pass_data.num_culled * 4);
+
+    CHECK_CUDA(cudaDeviceSynchronize());
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
     float milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, start, stop);
     std::cout << "Elapsed time for kernels: " << milliseconds << "ms" << std::endl;
 
-    // --- OPTIMIZER STEP ---
-
     // Free temporary buffers for this iteration
     cleanup_iteration_buffers(pass_data);
   }
-
-  // adaptive_density();
 }
