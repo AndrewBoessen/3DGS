@@ -348,6 +348,20 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
                                                              height, mask);
 }
 
+__global__ void scatter_groups_kernel(const float *input, const bool *mask, const int *scan_out, const int N,
+                                      float *output, int S) {
+  int gid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (gid >= N) {
+    return;
+  }
+  if (mask[gid]) {
+    int in_group = scan_out[gid];
+    for (int j = 0; j < S; ++j) {
+      output[gid * S + j] = input[in_group * S + j];
+    }
+  }
+}
+
 __global__ void select_groups_kernel(const float *input, const bool *mask, const int *scan_out, const int N,
                                      float *output, int S) {
   int gid = blockIdx.x * blockDim.x + threadIdx.x; // group id
@@ -390,6 +404,31 @@ void filter_moment_vectors(const int N, const int S, const bool *d_mask, const f
   // Apply mask
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_m, d_mask, mask_sum, N, d_m_culled, S);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_v, d_mask, mask_sum, N, d_v_culled, S);
+
+  // Free the temporary storage.
+  CHECK_CUDA(cudaFree(d_temp_storage));
+  CHECK_CUDA(cudaFree(mask_sum));
+}
+
+void scatter_params(const int N, const int S, const bool *d_mask, const float *selected_params, float *scattered_params,
+                    cudaStream_t stream) {
+  int *mask_sum;
+  CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
+  void *d_temp_storage = nullptr;
+  size_t temp_storage_bytes = 0;
+
+  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
+  // Allocate temporary storage
+  cudaMalloc(&d_temp_storage, temp_storage_bytes);
+
+  // Run exclusive prefix sum
+  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
+
+  const int threads_per_block = 256;
+  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
+
+  scatter_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(selected_params, d_mask, mask_sum, N,
+                                                                      scattered_params, S);
 
   // Free the temporary storage.
   CHECK_CUDA(cudaFree(d_temp_storage));

@@ -169,3 +169,16 @@ void render_image(const float *uv, const float *opacity, const float *conic, con
  */
 float fused_loss(const float *predicted_data, const float *gt_data, int rows, int cols, int channels,
                  const float ssim_weight, float *image_grad, cudaStream_t stream = 0);
+
+/**
+ * @brief Launch CUDA kernel to scatter params from filtered list to original list
+ *
+ * @param[in]      N                 Total number of param groups
+ * @param[in]      S                 Stride of param groups
+ * @param[in]      d_mask            Mask on output of size N
+ * @param[in]      selected_params   A device array of selected param groups
+ * @param[in,out]  scattered_params  A device array to output param groups
+ * @param[in]      stream            The CUDA stream to execute on
+ */
+void scatter_params(const int N, const int S, const bool *d_mask, const float *selected_params, float *scattered_params,
+                    cudaStream_t stream = 0);

@@ -39,8 +39,11 @@ void filter_moment_vectors(const int N, const int S, const bool *d_mask, const f
  * @param[in]      b1           Beta 1
  * @param[in]      b2           Beta 2
  * @param[in]      eps          Epsilon value
+ * @param[in]      b1_t_corr    Beta 1 bias correction term
+ * @param[in]      b2_t_corr    Beta 2 bias correction term
  * @param[in]      N            Total number of parameters
  * @param[in]      stream       The CUDA stream to execute on
  */
 void adam_step(float *params, float *const param_grads, float *exp_avg, float *exp_avg_sq, const float lr,
-               const float b1, const float b2, const float eps, const int N, cudaStream_t stream = 0);
+               const float b1, const float b2, const float eps, const float b1_t_corr, const float b2_t_corr,
+               const int N, cudaStream_t stream = 0);

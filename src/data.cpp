@@ -54,7 +54,7 @@ CudaDataManager::CudaDataManager(size_t max_gaussians_in) : max_gaussians(max_ga
   CHECK_CUDA(cudaMalloc(&v_grad_scale, max_gaussians * 3 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&v_grad_quaternion, max_gaussians * 4 * sizeof(float)));
 
-  // Optimizer moment vectors
+  // Optimizer culled moment vectors
   CHECK_CUDA(cudaMalloc(&m_grad_xyz_culled, max_gaussians * 3 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&m_grad_rgb_culled, max_gaussians * 3 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&m_grad_opacity_culled, max_gaussians * sizeof(float)));
