@@ -574,7 +574,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
 
   // Host data
   std::vector<float> h_uvs = {8.0f, 8.0f, 2.0f, 2.0f, 4.0f, 4.0f};
-  std::vector<float> h_opacity = {0.7f, 0.7f, 0.7f};
+  std::vector<float> h_opacity = {2.0f, 2.0f, 2.0f};
   std::vector<float> h_conic = {5.0f, 0.0f, 5.0f, 5.0f, 0.0f, 5.0f, 5.0f, 0.0f, 5.0f}; // Gaussian 1
   std::vector<float> h_rgb = {0.5f, 0.2f, 0.2f, 0.2f, 0.2f, 0.5f, 0.2f, 0.5f, 0.2f};   // Gaussian 1
   std::vector<float> h_background_rgb = {0.1f, 0.1f, 0.1f};
@@ -621,7 +621,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
           }
 
           splat_count++;
-          float alpha = std::min(0.9999f, opacity[i] * norm_prob);
+          float alpha = std::min(0.9999f, (1.0f / (1.0f + expf(-opacity[i]))) * norm_prob);
 
           pixel_rgb[0] += rgb[i * 3 + 0] * alpha * T;
           pixel_rgb[1] += rgb[i * 3 + 1] * alpha * T;
