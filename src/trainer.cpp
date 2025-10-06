@@ -502,6 +502,18 @@ void Trainer::train() {
   test_train_split();
   reset_grad_accum();
 
+  // Set optimizer moment vectors
+  CHECK_CUDA(cudaMemset(cuda.m_grad_xyz, 0.0f, config.max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.m_grad_rgb, 0.0f, config.max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.m_grad_opacity, 0.0f, config.max_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.m_grad_scale, 0.0f, config.max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.m_grad_quaternion, 0.0f, config.max_gaussians * 4 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.v_grad_xyz, 0.0f, config.max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.v_grad_rgb, 0.0f, config.max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.v_grad_opacity, 0.0f, config.max_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.v_grad_scale, 0.0f, config.max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.v_grad_quaternion, 0.0f, config.max_gaussians * 4 * sizeof(float)));
+
   // TRAINING LOOP
   for (int iter = 0; iter < config.num_iters; ++iter) {
     std::cout << "ITER " << iter << std::endl;
@@ -574,17 +586,77 @@ void Trainer::train() {
     std::cout << "LOSS TOTAL " << loss << std::endl;
 
     CHECK_CUDA(cudaDeviceSynchronize());
+
+    // --- OPTIMIZER STEP ---
+
+    // Select moment vectors
+    filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_xyz_culled,
+                          cuda.v_grad_xyz_culled);
+    filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_rgb, cuda.v_grad_rgb, cuda.m_grad_rgb_culled,
+                          cuda.v_grad_rgb_culled);
+    filter_moment_vectors(num_gaussians, 1, cuda.d_mask, cuda.m_grad_opacity, cuda.v_grad_opacity,
+                          cuda.m_grad_opacity_culled, cuda.v_grad_opacity_culled);
+    filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_scale, cuda.v_grad_scale, cuda.m_grad_scale_culled,
+                          cuda.v_grad_scale_culled);
+    filter_moment_vectors(num_gaussians, 4, cuda.d_mask, cuda.m_grad_quaternion, cuda.v_grad_quaternion,
+                          cuda.m_grad_quaternion_culled, cuda.v_grad_quaternion_culled);
+
+    // Update parameters
+    float b1_t_corr = 1.0f - powf(0.9f, iter + 1);
+    float b2_t_corr = 1.0f - powf(0.999f, iter + 1);
+    adam_step(cuda.d_xyz_culled, cuda.d_grad_xyz, cuda.m_grad_xyz_culled, cuda.v_grad_xyz_culled,
+              config.base_lr * config.xyz_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
+              pass_data.num_culled * 3);
+    adam_step(cuda.d_rgb_culled, cuda.d_grad_rgb, cuda.m_grad_rgb_culled, cuda.v_grad_rgb_culled,
+              config.base_lr * config.rgb_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
+              pass_data.num_culled * 3);
+    adam_step(cuda.d_opacity_culled, cuda.d_grad_opacity, cuda.m_grad_opacity_culled, cuda.v_grad_opacity_culled,
+              config.base_lr * config.opacity_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
+              pass_data.num_culled);
+    adam_step(cuda.d_scale_culled, cuda.d_grad_scale, cuda.m_grad_scale_culled, cuda.v_grad_scale_culled,
+              config.base_lr * config.scale_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
+              pass_data.num_culled * 3);
+    adam_step(cuda.d_quaternion_culled, cuda.d_grad_quaternion, cuda.m_grad_quaternion_culled,
+              cuda.v_grad_quaternion_culled, config.base_lr * config.quat_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr,
+              b2_t_corr, pass_data.num_culled * 4);
+
+    // Scatter moment vectors
+    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.m_grad_xyz_culled, cuda.m_grad_xyz);
+    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.v_grad_xyz_culled, cuda.v_grad_xyz);
+    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.m_grad_rgb_culled, cuda.m_grad_rgb);
+    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.v_grad_rgb_culled, cuda.v_grad_rgb);
+    scatter_params(num_gaussians, 1, cuda.d_mask, cuda.m_grad_opacity_culled, cuda.m_grad_opacity);
+    scatter_params(num_gaussians, 1, cuda.d_mask, cuda.v_grad_opacity_culled, cuda.v_grad_opacity);
+    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.m_grad_scale_culled, cuda.m_grad_scale);
+    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.v_grad_scale_culled, cuda.v_grad_scale);
+    scatter_params(num_gaussians, 4, cuda.d_mask, cuda.m_grad_quaternion_culled, cuda.m_grad_quaternion);
+    scatter_params(num_gaussians, 4, cuda.d_mask, cuda.v_grad_quaternion_culled, cuda.v_grad_quaternion);
+
+    // Scatter params to update Guassians
+    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.d_xyz_culled, cuda.d_xyz);
+    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.d_rgb_culled, cuda.d_rgb);
+    scatter_params(num_gaussians, 1, cuda.d_mask, cuda.d_opacity_culled, cuda.d_opacity);
+    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.d_scale_culled, cuda.d_scale);
+    scatter_params(num_gaussians, 4, cuda.d_mask, cuda.d_quaternion_culled, cuda.d_quaternion);
+
+    CHECK_CUDA(cudaDeviceSynchronize());
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
     float milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, start, stop);
     std::cout << "Elapsed time for kernels: " << milliseconds << "ms" << std::endl;
 
-    // --- OPTIMIZER STEP ---
+    // Copy updated gaussians back to host
+    CHECK_CUDA(cudaMemcpy(gaussians.xyz.data(), cuda.d_xyz, num_gaussians * 3 * sizeof(float), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(gaussians.rgb.data(), cuda.d_rgb, num_gaussians * 3 * sizeof(float), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(gaussians.opacity.data(), cuda.d_opacity, num_gaussians * 1 * sizeof(float),
+                          cudaMemcpyDeviceToHost));
+    CHECK_CUDA(
+        cudaMemcpy(gaussians.scale.data(), cuda.d_scale, num_gaussians * 3 * sizeof(float), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(gaussians.quaternion.data(), cuda.d_quaternion, num_gaussians * 4 * sizeof(float),
+                          cudaMemcpyDeviceToHost));
 
     // Free temporary buffers for this iteration
     cleanup_iteration_buffers(pass_data);
   }
-
-  // adaptive_density();
 }

@@ -76,7 +76,8 @@ __global__ void render_tiles_backward_kernel(
       _gaussian_idx_by_splat_idx[i] = gaussian_idx;
       _uvs[i * 2 + 0] = uvs[gaussian_idx * 2 + 0];
       _uvs[i * 2 + 1] = uvs[gaussian_idx * 2 + 1];
-      _opacity[i] = opacity[gaussian_idx];
+      // apply sigmoid to match forward pass
+      _opacity[i] = __frcp_rn(1.0f + __expf(-opacity[gaussian_idx]));
 
 #pragma unroll
       for (int j = 0; j < 3; j++)
@@ -130,7 +131,8 @@ __global__ void render_tiles_backward_kernel(
 
 #pragma unroll
           for (int j = 0; j < 3; j++)
-            grad_rgb_local[j] = fac * grad_image_local[j];
+            // multiply rgb gradient by sigmoid gradient
+            grad_rgb_local[j] = (_rgb[i * 3 + j] * (1.0f - _rgb[i * 3 + j])) * fac * grad_image_local[j];
 
           float grad_alpha = 0.0f;
 #pragma unroll
@@ -139,6 +141,8 @@ __global__ void render_tiles_backward_kernel(
 
           // opacity grad
           grad_opa = grad_alpha * g;
+          // sigmoid gradient
+          grad_opa *= _opacity[i] * (1.0f - _opacity[i]);
 
           // gradient of gaussian probability
           const float grad_g = grad_alpha * _opacity[i];

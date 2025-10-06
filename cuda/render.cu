@@ -55,12 +55,12 @@ __global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *
       _uvs[i * 2 + 1] = uvs[gaussian_idx * 2 + 1];
       _opacity[i] = opacity[gaussian_idx];
 
-      #pragma unroll
+#pragma unroll
       for (int channel = 0; channel < 3; channel++) {
         _rgb[i * 3 + channel] = rgb[gaussian_idx * 3 + channel];
       }
 
-      #pragma unroll
+#pragma unroll
       for (int j = 0; j < 3; j++) {
         _conic[i * 3 + j] = conic[gaussian_idx * 3 + j];
       }
@@ -101,8 +101,10 @@ __global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *
           continue; // Gaussian has no influence
         }
 
+        // Apply sigmoid to opacity
+        float opa = __frcp_rn(1.0f + __expf(-_opacity[i]));
         // Calculate alpha based on opacity and Gaussian falloff
-        const float alpha = _opacity[i] * __expf(-0.5f * mh_sq);
+        const float alpha = opa * __expf(-0.5f * mh_sq);
 
         // Alpha blending: C_out = α * C_in + (1 - α) * C_bg
         const float weight = alpha * (1.0f - alpha_accum);

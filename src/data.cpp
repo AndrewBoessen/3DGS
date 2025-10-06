@@ -41,6 +41,30 @@ CudaDataManager::CudaDataManager(size_t max_gaussians_in) : max_gaussians(max_ga
   CHECK_CUDA(cudaMalloc(&d_quaternion_culled, max_gaussians * 4 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&d_uv_culled, max_gaussians * 2 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&d_xyz_c_culled, max_gaussians * 3 * sizeof(float)));
+
+  // Optimizer moment vectors
+  CHECK_CUDA(cudaMalloc(&m_grad_xyz, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&m_grad_rgb, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&m_grad_opacity, max_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&m_grad_scale, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&m_grad_quaternion, max_gaussians * 4 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&v_grad_xyz, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&v_grad_rgb, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&v_grad_opacity, max_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&v_grad_scale, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&v_grad_quaternion, max_gaussians * 4 * sizeof(float)));
+
+  // Optimizer culled moment vectors
+  CHECK_CUDA(cudaMalloc(&m_grad_xyz_culled, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&m_grad_rgb_culled, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&m_grad_opacity_culled, max_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&m_grad_scale_culled, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&m_grad_quaternion_culled, max_gaussians * 4 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&v_grad_xyz_culled, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&v_grad_rgb_culled, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&v_grad_opacity_culled, max_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&v_grad_scale_culled, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&v_grad_quaternion_culled, max_gaussians * 4 * sizeof(float)));
 }
 
 CudaDataManager::~CudaDataManager() {
@@ -72,4 +96,24 @@ CudaDataManager::~CudaDataManager() {
   CHECK_CUDA(cudaFree(d_quaternion_culled));
   CHECK_CUDA(cudaFree(d_uv_culled));
   CHECK_CUDA(cudaFree(d_xyz_c_culled));
+  CHECK_CUDA(cudaFree(m_grad_xyz));
+  CHECK_CUDA(cudaFree(m_grad_rgb));
+  CHECK_CUDA(cudaFree(m_grad_opacity));
+  CHECK_CUDA(cudaFree(m_grad_scale));
+  CHECK_CUDA(cudaFree(m_grad_quaternion));
+  CHECK_CUDA(cudaFree(v_grad_xyz));
+  CHECK_CUDA(cudaFree(v_grad_rgb));
+  CHECK_CUDA(cudaFree(v_grad_opacity));
+  CHECK_CUDA(cudaFree(v_grad_scale));
+  CHECK_CUDA(cudaFree(v_grad_quaternion));
+  CHECK_CUDA(cudaFree(m_grad_xyz_culled));
+  CHECK_CUDA(cudaFree(m_grad_rgb_culled));
+  CHECK_CUDA(cudaFree(m_grad_opacity_culled));
+  CHECK_CUDA(cudaFree(m_grad_scale_culled));
+  CHECK_CUDA(cudaFree(m_grad_quaternion_culled));
+  CHECK_CUDA(cudaFree(v_grad_xyz_culled));
+  CHECK_CUDA(cudaFree(v_grad_rgb_culled));
+  CHECK_CUDA(cudaFree(v_grad_opacity_culled));
+  CHECK_CUDA(cudaFree(v_grad_scale_culled));
+  CHECK_CUDA(cudaFree(v_grad_quaternion_culled));
 }
