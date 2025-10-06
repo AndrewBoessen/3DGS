@@ -660,7 +660,8 @@ TEST_F(CudaKernelTest, RenderImageMultipleGaussians) {
 
       float alpha = 0.0f;
       if (mh_sq > 0.0f) {
-        alpha = h_opacity[gaussian_idx] * expf(-0.5f * mh_sq);
+        float opa = (1.0f / (1.0f + expf(-h_opacity[gaussian_idx])));
+        alpha = opa * expf(-0.5f * mh_sq);
       }
 
       // Kernel's blending logic
