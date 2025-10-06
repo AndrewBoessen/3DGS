@@ -48,8 +48,8 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
       continue;
 
     cudaStream_t stream = streams[i];
-    precompute_spherical_harmonics(cuda.d_xyz_c_culled, cuda.d_sh_culled, cuda.d_rgb_culled, pass_data.l_max,
-                                   pass_data.num_culled, pass_data.d_precomputed_rgb + offset * 3, stream);
+    precompute_spherical_harmonics(cuda.d_xyz_c_culled, cuda.d_sh_culled, cuda.d_rgb_culled, pass_data.l_max, size,
+                                   pass_data.d_precomputed_rgb + offset * 3, stream);
     offset += size;
   }
 

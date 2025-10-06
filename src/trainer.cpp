@@ -624,9 +624,6 @@ void Trainer::train() {
     adam_step(cuda.d_rgb_culled, cuda.d_grad_rgb, cuda.m_grad_rgb_culled, cuda.v_grad_rgb_culled,
               config.base_lr * config.rgb_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
               pass_data.num_culled * 3);
-    adam_step(cuda.d_sh_culled, cuda.d_grad_sh, cuda.m_grad_sh_culled, cuda.v_grad_sh_culled,
-              config.base_lr * config.sh_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
-              pass_data.num_culled * num_sh_coef);
     adam_step(cuda.d_opacity_culled, cuda.d_grad_opacity, cuda.m_grad_opacity_culled, cuda.v_grad_opacity_culled,
               config.base_lr * config.opacity_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
               pass_data.num_culled);
@@ -642,8 +639,6 @@ void Trainer::train() {
     scatter_params(num_gaussians, 3, cuda.d_mask, cuda.v_grad_xyz_culled, cuda.v_grad_xyz);
     scatter_params(num_gaussians, 3, cuda.d_mask, cuda.m_grad_rgb_culled, cuda.m_grad_rgb);
     scatter_params(num_gaussians, 3, cuda.d_mask, cuda.v_grad_rgb_culled, cuda.v_grad_rgb);
-    scatter_params(num_gaussians, num_sh_coef, cuda.d_mask, cuda.m_grad_sh_culled, cuda.m_grad_sh);
-    scatter_params(num_gaussians, num_sh_coef, cuda.d_mask, cuda.v_grad_sh_culled, cuda.v_grad_sh);
     scatter_params(num_gaussians, 1, cuda.d_mask, cuda.m_grad_opacity_culled, cuda.m_grad_opacity);
     scatter_params(num_gaussians, 1, cuda.d_mask, cuda.v_grad_opacity_culled, cuda.v_grad_opacity);
     scatter_params(num_gaussians, 3, cuda.d_mask, cuda.m_grad_scale_culled, cuda.m_grad_scale);
@@ -654,10 +649,20 @@ void Trainer::train() {
     // Scatter params to update Guassians
     scatter_params(num_gaussians, 3, cuda.d_mask, cuda.d_xyz_culled, cuda.d_xyz);
     scatter_params(num_gaussians, 3, cuda.d_mask, cuda.d_rgb_culled, cuda.d_rgb);
-    scatter_params(num_gaussians, num_sh_coef, cuda.d_mask, cuda.d_sh_culled, cuda.d_sh);
     scatter_params(num_gaussians, 1, cuda.d_mask, cuda.d_opacity_culled, cuda.d_opacity);
     scatter_params(num_gaussians, 3, cuda.d_mask, cuda.d_scale_culled, cuda.d_scale);
     scatter_params(num_gaussians, 4, cuda.d_mask, cuda.d_quaternion_culled, cuda.d_quaternion);
+
+    // Update SH params if used
+    if (num_sh_coef > 0) {
+      adam_step(cuda.d_sh_culled, cuda.d_grad_sh, cuda.m_grad_sh_culled, cuda.v_grad_sh_culled,
+                config.base_lr * config.sh_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
+                pass_data.num_culled * num_sh_coef);
+      scatter_params(num_gaussians, num_sh_coef, cuda.d_mask, cuda.m_grad_sh_culled, cuda.m_grad_sh);
+      scatter_params(num_gaussians, num_sh_coef, cuda.d_mask, cuda.v_grad_sh_culled, cuda.v_grad_sh);
+
+      scatter_params(num_gaussians, num_sh_coef, cuda.d_mask, cuda.d_sh_culled, cuda.d_sh);
+    }
 
     CHECK_CUDA(cudaDeviceSynchronize());
     cudaEventRecord(stop, 0);
