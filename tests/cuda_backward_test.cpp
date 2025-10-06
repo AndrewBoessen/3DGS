@@ -486,16 +486,19 @@ TEST_F(CudaBackwardKernelTest, SphericalHarmonicsBackward) {
   // Device data
   auto d_xyz_c = device_alloc<float>(N * 3);
   auto d_rgb_grad_out = device_alloc<float>(N * 3);
-  auto d_sh_grad_in = device_alloc<float>(N * n_coeffs * 3);
+  auto d_sh_grad_in = device_alloc<float>(N * (n_coeffs - 1) * 3);
+  auto d_band_0_grad = device_alloc<float>(N * 3);
 
   CUDA_CHECK(cudaMemcpy(d_xyz_c, h_xyz_c.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_rgb_grad_out, h_rgb_grad_out.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
 
   // Run kernel
-  precompute_spherical_harmonics_backward(d_xyz_c, d_rgb_grad_out, l_max, N, d_sh_grad_in);
+  precompute_spherical_harmonics_backward(d_xyz_c, d_rgb_grad_out, l_max, N, d_sh_grad_in, d_band_0_grad);
   CUDA_CHECK(cudaDeviceSynchronize());
 
-  CUDA_CHECK(cudaMemcpy(h_sh_grad_in.data(), d_sh_grad_in, N * n_coeffs * 3 * sizeof(float), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_sh_grad_in.data() + N * 3, d_sh_grad_in, N * (n_coeffs - 1) * 3 * sizeof(float),
+                        cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_sh_grad_in.data(), d_band_0_grad, N * 3 * sizeof(float), cudaMemcpyDeviceToHost));
 
   // Numerical gradient check
   auto forward_sh_rgb = [&](const std::vector<float> &sh_coeffs, const std::vector<float> &xyz_c) {
@@ -564,6 +567,7 @@ TEST_F(CudaBackwardKernelTest, SphericalHarmonicsBackward) {
   CUDA_CHECK(cudaFree(d_xyz_c));
   CUDA_CHECK(cudaFree(d_rgb_grad_out));
   CUDA_CHECK(cudaFree(d_sh_grad_in));
+  CUDA_CHECK(cudaFree(d_band_0_grad));
 }
 
 // Test for render_image_backward

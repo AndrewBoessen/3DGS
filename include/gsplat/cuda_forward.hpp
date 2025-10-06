@@ -123,15 +123,16 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
 /**
  * @brief Launches CUDA kernels to precompute spherical harmonic values and calculate rgb values
- * @param[in]  xyz              A device pointer to 3D corrdinates of gaussians in camera perspective
- * @param[in]  sh_coefficients  A device pointer to SH params for each Gaussian
- * @param[in]  l_max            The max degree of SH
- * @param[in]  N                The total number of points
- * @param[out] rgb              A device pointer to output rgb values
- * @param[in]  stream           The CUDA stream to execute kernel on
+ * @param[in]  xyz                     A device pointer to 3D corrdinates of gaussians in camera perspective
+ * @param[in]  sh_coefficients         A device pointer to SH params for each Gaussian
+ * @param[in]  sh_coefficients_band_0  A device pointer to RGB values i.e. band 0
+ * @param[in]  l_max                   The max degree of SH
+ * @param[in]  N                       The total number of points
+ * @param[out] rgb                     A device pointer to output rgb values
+ * @param[in]  stream                  The CUDA stream to execute kernel on
  */
-void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficients, const int N, const int max_l,
-                                    float *rgb, cudaStream_t stream = 0);
+void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficients, const float *sh_coeffs_band_0,
+                                    const int l_max, const int N, float *rgb, cudaStream_t stream = 0);
 
 /**
  * @brief Launch CUDA kernels to render image pixel values from Gaussians

@@ -501,15 +501,18 @@ TEST_F(CudaKernelTest, PrecomputeSphericalHarmonics) {
       1.0f, 0.0f, 0.0f  // Point 1: View direction along X-axis
   };
 
+  const std::vector<float> h_band_0 = {
+      0.5f, -0.2f, 0.8f, // l=0, m=0
+      0.1f, 0.5f,  0.9f, // l=0, m=0
+  };
+
   // Input SH coefficients. Layout is (N, n_coeffs, 3).
   const std::vector<float> h_sh_coefficients = {
       // Point 0 coeffs (R, G, B for each of the 4 basis functions)
-      0.5f, -0.2f, 0.8f, // l=0, m=0
-      0.1f, 0.1f, 0.1f,  // l=1, m=-1
-      0.2f, 0.2f, 0.2f,  // l=1, m=0
-      0.3f, 0.3f, 0.3f,  // l=1, m=1
+      0.1f, 0.1f, 0.1f, // l=1, m=-1
+      0.2f, 0.2f, 0.2f, // l=1, m=0
+      0.3f, 0.3f, 0.3f, // l=1, m=1
       // Point 1 coeffs
-      0.1f, 0.5f, 0.9f, // l=0, m=0
       0.2f, 0.6f, 0.0f, // l=1, m=-1
       0.3f, 0.7f, 0.1f, // l=1, m=0
       0.4f, 0.8f, 0.2f  // l=1, m=1
@@ -517,17 +520,19 @@ TEST_F(CudaKernelTest, PrecomputeSphericalHarmonics) {
   std::vector<float> h_rgb(N * 3);
 
   // 3. Device-side data setup
-  float *d_xyz, *d_sh_coefficients, *d_rgb;
+  float *d_xyz, *d_sh_coefficients, *d_band_0, *d_rgb;
   CUDA_CHECK(cudaMalloc(&d_xyz, h_xyz.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_sh_coefficients, h_sh_coefficients.size() * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_band_0, h_band_0.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_rgb, h_rgb.size() * sizeof(float)));
 
   CUDA_CHECK(cudaMemcpy(d_xyz, h_xyz.data(), h_xyz.size() * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_sh_coefficients, h_sh_coefficients.data(), h_sh_coefficients.size() * sizeof(float),
                         cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_band_0, h_band_0.data(), h_band_0.size() * sizeof(float), cudaMemcpyHostToDevice));
 
   // 4. Call the function to be tested
-  precompute_spherical_harmonics(d_xyz, d_sh_coefficients, l_max, N, d_rgb);
+  precompute_spherical_harmonics(d_xyz, d_sh_coefficients, d_band_0, l_max, N, d_rgb);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // 5. Copy results back to host
@@ -565,6 +570,7 @@ TEST_F(CudaKernelTest, PrecomputeSphericalHarmonics) {
   CUDA_CHECK(cudaFree(d_xyz));
   CUDA_CHECK(cudaFree(d_sh_coefficients));
   CUDA_CHECK(cudaFree(d_rgb));
+  CUDA_CHECK(cudaFree(d_band_0));
 }
 
 // Test case for the render_image function with multiple Gaussians.
