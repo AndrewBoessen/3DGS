@@ -31,10 +31,9 @@ __global__ void compute_rgb_from_sh_kernel(const float *sh_coefficients, const f
   }
 
   // Apply sigmoid activation to map the output to the [0, 1] range
-  const float one = 1.0f;
-  rgb[idx * 3 + 0] = one / (one + expf(-r));
-  rgb[idx * 3 + 1] = one / (one + expf(-g));
-  rgb[idx * 3 + 2] = one / (one + expf(-b));
+  rgb[idx * 3 + 0] = __frcp_rn(1.0f + expf(-r));
+  rgb[idx * 3 + 1] = __frcp_rn(1.0f + expf(-g));
+  rgb[idx * 3 + 2] = __frcp_rn(1.0f + expf(-b));
 }
 
 void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficients, const float *sh_coeffs_band_0,
@@ -61,9 +60,8 @@ void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficien
   const int gridSize = (N + blockSize - 1) / blockSize;
 
   // Launch the kernel to compute the final RGB values
-  compute_rgb_from_sh_kernel<<<gridSize, blockSize, 0, stream>>>(sh_coefficients,
-                                                                 // Pass the new parameter to the kernel
-                                                                 sh_coeffs_band_0, d_sph, n_coeffs, N, rgb);
+  compute_rgb_from_sh_kernel<<<gridSize, blockSize, 0, stream>>>(sh_coefficients, sh_coeffs_band_0, d_sph, n_coeffs, N,
+                                                                 rgb);
 
   // Free the temporary device memory used for SH basis functions
   CHECK_CUDA(cudaFree(d_sph));

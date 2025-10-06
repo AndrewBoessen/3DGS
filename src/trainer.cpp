@@ -2,6 +2,7 @@
 
 #include "gsplat/trainer.hpp"
 #include "gsplat/cuda_backward.hpp"
+#include "gsplat/cuda_data.hpp"
 #include "gsplat/cuda_forward.hpp"
 #include "gsplat/optimizer.hpp"
 #include "gsplat/raster.hpp"
@@ -445,7 +446,7 @@ float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera,
   float loss = fused_loss(pass_data.d_image_buffer, d_gt_image, height, width, 3, config.ssim_frac, d_grad_image);
 
   // Backpropagate gradients from image to Gaussian parameters
-  render_image_backward(cuda.d_uv_culled, cuda.d_opacity_culled, pass_data.d_conic, pass_data.d_procomputed_rgb, 1.0f,
+  render_image_backward(cuda.d_uv_culled, cuda.d_opacity_culled, pass_data.d_conic, pass_data.d_precomputed_rgb, 1.0f,
                         pass_data.d_sorted_gaussians, pass_data.d_splat_start_end_idx_by_tile_idx,
                         pass_data.d_splats_per_pixel, pass_data.d_weight_per_pixel, d_grad_image, width, height,
                         cuda.d_grad_precompute_rgb, cuda.d_grad_opacity, cuda.d_grad_uv, cuda.d_grad_conic);
@@ -493,7 +494,7 @@ void Trainer::cleanup_iteration_buffers(ForwardPassData &pass_data) {
   CHECK_CUDA(cudaFree(pass_data.d_J));
   CHECK_CUDA(cudaFree(pass_data.d_splat_start_end_idx_by_tile_idx));
   CHECK_CUDA(cudaFree(pass_data.d_sorted_gaussians));
-  CHECK_CUDA(cudaFree(pass_data.d_procomputed_rgb));
+  CHECK_CUDA(cudaFree(pass_data.d_precomputed_rgb));
 }
 
 void Trainer::train() {

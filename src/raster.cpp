@@ -38,7 +38,7 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
   }
 
   // Step 3; Compute final RGB values from spherical harmonics
-  CHECK_CUDA(cudaMalloc(&pass_data.d_procomputed_rgb, pass_data.num_culled * 3 * num_sh_coef * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&pass_data.d_precomputed_rgb, pass_data.num_culled * 3 * sizeof(float)));
 
   offset = 0;
   for (int i = 0; i < NUM_STREAMS; ++i) {
@@ -49,7 +49,7 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
 
     cudaStream_t stream = streams[i];
     precompute_spherical_harmonics(cuda.d_xyz_c_culled, cuda.d_sh_culled, cuda.d_rgb_culled, pass_data.l_max,
-                                   pass_data.num_culled, pass_data.d_procomputed_rgb, stream);
+                                   pass_data.num_culled, pass_data.d_precomputed_rgb + offset * 3, stream);
     offset += size;
   }
 
@@ -95,7 +95,7 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
   CHECK_CUDA(cudaMalloc(&pass_data.d_splats_per_pixel, width * height * sizeof(int)));
   CHECK_CUDA(cudaMemset(pass_data.d_image_buffer, 0.0f, width * height * 3 * sizeof(float)));
 
-  render_image(cuda.d_uv_culled, cuda.d_opacity_culled, pass_data.d_conic, pass_data.d_procomputed_rgb, 1.0f,
+  render_image(cuda.d_uv_culled, cuda.d_opacity_culled, pass_data.d_conic, pass_data.d_precomputed_rgb, 1.0f,
                pass_data.d_sorted_gaussians, pass_data.d_splat_start_end_idx_by_tile_idx, width, height,
                pass_data.d_splats_per_pixel, pass_data.d_weight_per_pixel, pass_data.d_image_buffer);
 }

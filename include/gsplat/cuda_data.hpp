@@ -60,7 +60,7 @@ struct ForwardPassData {
   int l_max = 0;
   int num_culled = 0;
   // Buffers dependent on num_culled
-  float *d_sigma = nullptr, *d_conic = nullptr, *d_J = nullptr, *d_procomputed_rgb = nullptr;
+  float *d_sigma = nullptr, *d_conic = nullptr, *d_J = nullptr, *d_precomputed_rgb = nullptr;
   // Buffers for sorting
   int *d_sorted_gaussians = nullptr, *d_splat_start_end_idx_by_tile_idx = nullptr;
   // Buffers for rendering
