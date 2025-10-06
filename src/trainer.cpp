@@ -526,12 +526,14 @@ void Trainer::train() {
   // TRAINING LOOP
   for (int iter = 0; iter < config.num_iters; ++iter) {
     std::cout << "ITER " << iter << std::endl;
+    ForwardPassData pass_data;
     const int num_gaussians = gaussians.size();
+    const int num_sh_coef = (pass_data.l_max + 1) * (pass_data.l_max + 1) - 1;
 
     // Zero out gradients
     CHECK_CUDA(cudaMemset(cuda.d_grad_xyz, 0.0f, 3 * num_gaussians * sizeof(float)));
     CHECK_CUDA(cudaMemset(cuda.d_grad_rgb, 0.0f, 3 * num_gaussians * sizeof(float)));
-    CHECK_CUDA(cudaMemset(cuda.d_grad_sh, 0.0f, 3 * num_gaussians * sizeof(float)));
+    CHECK_CUDA(cudaMemset(cuda.d_grad_sh, 0.0f, num_sh_coef * 3 * num_gaussians * sizeof(float)));
     CHECK_CUDA(cudaMemset(cuda.d_grad_opacity, 0.0f, num_gaussians * sizeof(float)));
     CHECK_CUDA(cudaMemset(cuda.d_grad_scale, 0.0f, 3 * num_gaussians * sizeof(float)));
     CHECK_CUDA(cudaMemset(cuda.d_grad_quaternion, 0.0f, 4 * num_gaussians * sizeof(float)));
@@ -582,7 +584,6 @@ void Trainer::train() {
     cudaEventRecord(start, 0);
 
     // --- FORWARD PASS via RASTERIZE MODULE ---
-    ForwardPassData pass_data;
     rasterize_image(num_gaussians, curr_camera, config, cuda, pass_data, streams);
 
     if (pass_data.num_culled == 0) {
@@ -598,8 +599,6 @@ void Trainer::train() {
     CHECK_CUDA(cudaDeviceSynchronize());
 
     // --- OPTIMIZER STEP ---
-
-    const int num_sh_coef = (pass_data.l_max + 1) * (pass_data.l_max + 1) - 1;
 
     // Select moment vectors
     filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_xyz_culled,
@@ -657,11 +656,11 @@ void Trainer::train() {
     if (num_sh_coef > 0) {
       adam_step(cuda.d_sh_culled, cuda.d_grad_sh, cuda.m_grad_sh_culled, cuda.v_grad_sh_culled,
                 config.base_lr * config.sh_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
-                pass_data.num_culled * num_sh_coef);
-      scatter_params(num_gaussians, num_sh_coef, cuda.d_mask, cuda.m_grad_sh_culled, cuda.m_grad_sh);
-      scatter_params(num_gaussians, num_sh_coef, cuda.d_mask, cuda.v_grad_sh_culled, cuda.v_grad_sh);
+                pass_data.num_culled * num_sh_coef * 3);
+      scatter_params(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.m_grad_sh_culled, cuda.m_grad_sh);
+      scatter_params(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.v_grad_sh_culled, cuda.v_grad_sh);
 
-      scatter_params(num_gaussians, num_sh_coef, cuda.d_mask, cuda.d_sh_culled, cuda.d_sh);
+      scatter_params(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.d_sh_culled, cuda.d_sh);
     }
 
     CHECK_CUDA(cudaDeviceSynchronize());
