@@ -131,7 +131,8 @@ __global__ void render_tiles_backward_kernel(
 
 #pragma unroll
           for (int j = 0; j < 3; j++)
-            grad_rgb_local[j] = fac * grad_image_local[j];
+            // multiply rgb gradient by sigmoid gradient
+            grad_rgb_local[j] = (_rgb[i * 3 + j] * (1.0f - _rgb[i * 3 + j])) * fac * grad_image_local[j];
 
           float grad_alpha = 0.0f;
 #pragma unroll
