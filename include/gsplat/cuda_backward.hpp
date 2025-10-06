@@ -101,7 +101,7 @@ void precompute_spherical_harmonics_backward(const float *const xyz_c, const flo
  * @param[in]  opacity                 Device pointer to opacities.
  * @param[in]  conic                   Device pointer to 2D conic matrices.
  * @param[in]  rgb                     Device pointer to SH coefficients.
- * @param[in]  background_rgb          Device pointer to background color.
+ * @param[in]  background_opacity      Background opacity used in formward pass.
  * @param[in]  sorted_splats           Device pointer to sorted splat indices.
  * @param[in]  splat_range_by_tile     Device pointer to the start/end splat index for each tile.
  * @param[in]  num_splats_per_pixel    Device pointer to the number of splats affecting each pixel.
@@ -116,7 +116,7 @@ void precompute_spherical_harmonics_backward(const float *const xyz_c, const flo
  * @param[in]  stream                  The CUDA stream for execution.
  */
 void render_image_backward(const float *const uvs, const float *const opacity, const float *const conic,
-                           const float *const rgb, const float *const background_rgb, const int *const sorted_splats,
+                           const float *const rgb, const float background_opacity, const int *const sorted_splats,
                            const int *const splat_range_by_tile, const int *const num_splats_per_pixel,
                            const float *const final_weight_per_pixel, const float *const grad_image,
                            const int image_width, const int image_height, float *grad_rgb, float *grad_opacity,

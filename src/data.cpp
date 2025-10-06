@@ -25,6 +25,7 @@ CudaDataManager::CudaDataManager(size_t max_gaussians_in) : max_gaussians(max_ga
   CHECK_CUDA(cudaMalloc(&d_grad_J, max_gaussians * 6 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&d_grad_sigma, max_gaussians * 9 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&d_grad_xyz_c, max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_grad_precompute_rgb, max_gaussians * 3 * sizeof(float)));
 
   // Camera parameters
   CHECK_CUDA(cudaMalloc(&d_K, 9 * sizeof(float)));
@@ -93,6 +94,7 @@ CudaDataManager::~CudaDataManager() {
   CHECK_CUDA(cudaFree(d_grad_J));
   CHECK_CUDA(cudaFree(d_grad_sigma));
   CHECK_CUDA(cudaFree(d_grad_xyz_c));
+  CHECK_CUDA(cudaFree(d_grad_precompute_rgb));
   CHECK_CUDA(cudaFree(d_K));
   CHECK_CUDA(cudaFree(d_T));
   CHECK_CUDA(cudaFree(d_uv));

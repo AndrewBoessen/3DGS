@@ -584,7 +584,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
   std::vector<float> h_rgb_orig = h_rgb;
   for (int i = 0; i < h_rgb_orig.size(); i++)
     h_rgb_orig[i] = -logf((1.0f / h_rgb_orig[i]) - 1.0f);
-  std::vector<float> h_background_rgb = {0.1f, 0.1f, 0.1f};
+  const float background_opacity = 0.1f;
   std::vector<float> h_grad_image(image_width * image_height * 3);
   for (size_t i = 0; i < h_grad_image.size(); ++i)
     h_grad_image[i] = 0.01f;
@@ -638,9 +638,9 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
         }
 
         int pixel_idx = v_splat * image_width + u_splat;
-        image[pixel_idx * 3 + 0] = pixel_rgb[0] + T * h_background_rgb[0];
-        image[pixel_idx * 3 + 1] = pixel_rgb[1] + T * h_background_rgb[1];
-        image[pixel_idx * 3 + 2] = pixel_rgb[2] + T * h_background_rgb[2];
+        image[pixel_idx * 3 + 0] = pixel_rgb[0] + T * background_opacity;
+        image[pixel_idx * 3 + 1] = pixel_rgb[1] + T * background_opacity;
+        image[pixel_idx * 3 + 2] = pixel_rgb[2] + T * background_opacity;
 
         num_splats_per_pixel[pixel_idx] = splat_count;
         final_weight_per_pixel[pixel_idx] = T;
@@ -656,7 +656,6 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
   auto d_opacity = device_alloc<float>(N);
   auto d_conic = device_alloc<float>(N * 3);
   auto d_rgb = device_alloc<float>(N * 3);
-  auto d_background_rgb = device_alloc<float>(3);
   auto d_sorted_splats = device_alloc<int>(N);
   auto d_splat_range_by_tile = device_alloc<int>(2);
   auto d_num_splats_per_pixel = device_alloc<int>(image_width * image_height);
@@ -673,8 +672,6 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
   CUDA_CHECK(cudaMemcpy(d_opacity, h_opacity.data(), h_opacity.size() * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_conic, h_conic.data(), h_conic.size() * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_rgb, h_rgb.data(), h_rgb.size() * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_background_rgb, h_background_rgb.data(), h_background_rgb.size() * sizeof(float),
-                        cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_sorted_splats, h_sorted_splats.data(), h_sorted_splats.size() * sizeof(int),
                         cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_splat_range_by_tile, h_splat_range_by_tile.data(), h_splat_range_by_tile.size() * sizeof(int),
@@ -693,7 +690,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
   CUDA_CHECK(cudaMemset(d_grad_rgb, 0, N * 3 * sizeof(float)));
 
   // Run kernel
-  render_image_backward(d_uvs, d_opacity, d_conic, d_rgb, d_background_rgb, d_sorted_splats, d_splat_range_by_tile,
+  render_image_backward(d_uvs, d_opacity, d_conic, d_rgb, background_opacity, d_sorted_splats, d_splat_range_by_tile,
                         d_num_splats_per_pixel, d_final_weight_per_pixel, d_grad_image, image_width, image_height,
                         d_grad_rgb, d_grad_opacity, d_grad_uv, d_grad_conic, 0);
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -779,7 +776,6 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
   CUDA_CHECK(cudaFree(d_opacity));
   CUDA_CHECK(cudaFree(d_conic));
   CUDA_CHECK(cudaFree(d_rgb));
-  CUDA_CHECK(cudaFree(d_background_rgb));
   CUDA_CHECK(cudaFree(d_sorted_splats));
   CUDA_CHECK(cudaFree(d_splat_range_by_tile));
   CUDA_CHECK(cudaFree(d_num_splats_per_pixel));

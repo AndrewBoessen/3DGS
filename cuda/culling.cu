@@ -435,11 +435,12 @@ void scatter_params(const int N, const int S, const bool *d_mask, const float *s
   CHECK_CUDA(cudaFree(mask_sum));
 }
 
-void filter_gaussians_by_mask(const int N, const bool *d_mask, const float *d_xyz, const float *d_rgb,
-                              const float *d_opacity, const float *d_scale, const float *d_quaternion,
-                              const float *d_uv, const float *d_xyz_c, float *d_xyz_culled, float *d_rgb_culled,
-                              float *d_opacity_culled, float *d_scale_culled, float *d_quaternion_culled,
-                              float *d_uv_culled, float *d_xyz_c_culled, int *h_num_culled, cudaStream_t stream) {
+void filter_gaussians_by_mask(const int N, const int num_sh_coef, const bool *d_mask, const float *d_xyz,
+                              const float *d_rgb, const float *d_sh, const float *d_opacity, const float *d_scale,
+                              const float *d_quaternion, const float *d_uv, const float *d_xyz_c, float *d_xyz_culled,
+                              float *d_rgb_culled, float *d_sh_culled, float *d_opacity_culled, float *d_scale_culled,
+                              float *d_quaternion_culled, float *d_uv_culled, float *d_xyz_c_culled, int *h_num_culled,
+                              cudaStream_t stream) {
   int *mask_sum;
   CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
 
@@ -466,6 +467,8 @@ void filter_gaussians_by_mask(const int N, const bool *d_mask, const float *d_xy
   // Apply mask to all arrays
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_xyz, d_mask, mask_sum, N, d_xyz_culled, 3);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_rgb, d_mask, mask_sum, N, d_rgb_culled, 2);
+  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_sh, d_mask, mask_sum, N, d_sh_culled,
+                                                                     num_sh_coef * 3);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_opacity, d_mask, mask_sum, N, d_opacity_culled,
                                                                      1);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_scale, d_mask, mask_sum, N, d_scale_culled, 3);

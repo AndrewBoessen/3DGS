@@ -28,7 +28,7 @@ struct CudaDataManager {
   float *d_grad_xyz, *d_grad_rgb, *d_grad_sh, *d_grad_opacity, *d_grad_scale, *d_grad_quaternion;
 
   // Intermediate gradient buffers
-  float *d_grad_conic, *d_grad_uv, *d_grad_J, *d_grad_sigma, *d_grad_xyz_c;
+  float *d_grad_conic, *d_grad_uv, *d_grad_J, *d_grad_sigma, *d_grad_xyz_c, *d_grad_precompute_rgb;
 
   // Camera parameters
   float *d_K, *d_T;
@@ -57,9 +57,10 @@ struct CudaDataManager {
 
 // Data structure to hold pointers for buffers allocated per-iteration.
 struct ForwardPassData {
+  int l_max = 0;
   int num_culled = 0;
   // Buffers dependent on num_culled
-  float *d_sigma = nullptr, *d_conic = nullptr, *d_J = nullptr;
+  float *d_sigma = nullptr, *d_conic = nullptr, *d_J = nullptr, *d_procomputed_rgb = nullptr;
   // Buffers for sorting
   int *d_sorted_gaussians = nullptr, *d_splat_start_end_idx_by_tile_idx = nullptr;
   // Buffers for rendering
