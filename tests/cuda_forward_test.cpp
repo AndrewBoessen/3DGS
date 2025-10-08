@@ -427,7 +427,7 @@ TEST_F(CudaKernelTest, GetSortedGaussianList) {
   // Total Pairs = 3 gaussians * 16 tiles to search.
   const int num_splats = 4;
   const int num_splats_bytes = 3 * 4 * 4;
-  ASSERT_EQ(sorted_gaussian_bytes, num_splats_bytes * sizeof(int2));
+  ASSERT_EQ(sorted_gaussian_bytes, num_splats_bytes * sizeof(int));
 
   // --- PASS 2: Execute with allocated buffers ---
   CUDA_CHECK(cudaMalloc(&d_sorted_gaussians, sorted_gaussian_bytes));

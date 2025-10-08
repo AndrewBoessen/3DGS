@@ -190,13 +190,17 @@ __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float
   const int start_tile_y = max(0, projected_tile_y - radius_tiles);
   const int end_tile_y = min(n_tiles_y, projected_tile_y + radius_tiles + 1);
 
-  const int num_pairs_for_thread = (end_tile_x - start_tile_x) * (end_tile_y - start_tile_y);
+  // clamp negative values
+  const int num_x_tiles = max(0, end_tile_x - start_tile_x);
+  const int num_y_tiles = max(0, end_tile_y - start_tile_y);
+  const int num_pairs_for_thread = num_x_tiles * num_y_tiles;
+
   // Get required bytes for buffer
   if (pairs == nullptr) {
     const int lane_id = gaussian_idx & 0x1f;
     const int warp_sum = warpSum(active_mask, num_pairs_for_thread);
     if (lane_id == 0) {
-      atomicAdd(buffer_bytes, warp_sum * sizeof(int2));
+      atomicAdd(buffer_bytes, warp_sum * sizeof(int));
     }
   } else {
     // Write pairs to buffer
@@ -479,7 +483,7 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   }
   // store pairs of guassians and tiles
   int2 *d_pairs;
-  CHECK_CUDA(cudaMalloc(&d_pairs, sorted_gaussian_bytes));
+  CHECK_CUDA(cudaMalloc(&d_pairs, sorted_gaussian_bytes * 2));
 
   coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N, d_buffer_bytes,
                                                            d_pairs, d_buffer_index);
@@ -502,6 +506,7 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   CHECK_CUDA(cudaMalloc(&max_reduce_buffer, max_reduce_buffer_bytes));
   cub::DeviceReduce::Max(max_reduce_buffer, max_reduce_buffer_bytes, z_vals, d_max_z, N);
 
+  CHECK_CUDA(cudaFree(z_vals));
   CHECK_CUDA(cudaFree(max_reduce_buffer));
 
   int num_pairs;
