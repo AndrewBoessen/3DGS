@@ -605,8 +605,6 @@ void Trainer::train() {
                           cuda.v_grad_xyz_culled);
     filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_rgb, cuda.v_grad_rgb, cuda.m_grad_rgb_culled,
                           cuda.v_grad_rgb_culled);
-    filter_moment_vectors(num_gaussians, num_sh_coef, cuda.d_mask, cuda.m_grad_sh, cuda.v_grad_sh,
-                          cuda.m_grad_sh_culled, cuda.v_grad_sh_culled);
     filter_moment_vectors(num_gaussians, 1, cuda.d_mask, cuda.m_grad_opacity, cuda.v_grad_opacity,
                           cuda.m_grad_opacity_culled, cuda.v_grad_opacity_culled);
     filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_scale, cuda.v_grad_scale, cuda.m_grad_scale_culled,
@@ -654,6 +652,8 @@ void Trainer::train() {
 
     // Update SH params if used
     if (num_sh_coef > 0) {
+      filter_moment_vectors(num_gaussians, num_sh_coef, cuda.d_mask, cuda.m_grad_sh, cuda.v_grad_sh,
+                            cuda.m_grad_sh_culled, cuda.v_grad_sh_culled);
       adam_step(cuda.d_sh_culled, cuda.d_grad_sh, cuda.m_grad_sh_culled, cuda.v_grad_sh_culled,
                 config.base_lr * config.sh_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
                 pass_data.num_culled * num_sh_coef * 3);

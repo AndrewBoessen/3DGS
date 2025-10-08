@@ -40,8 +40,10 @@ __global__ void compute_sh_gradients_kernel(const float *d_sph, const float *rgb
 void precompute_spherical_harmonics_backward(const float *const xyz_c, const float *const rgb_grad_out, const int l_max,
                                              const int N, float *sh_grad_in, float *sh_grad_band_0_in,
                                              cudaStream_t stream) {
-  // Assert that the new output parameter is a valid device pointer
+  ASSERT_DEVICE_POINTER(xyz_c);
+  ASSERT_DEVICE_POINTER(rgb_grad_out);
   ASSERT_DEVICE_POINTER(sh_grad_band_0_in);
+  ASSERT_DEVICE_POINTER(sh_grad_in);
 
   // Initialize the sphericart calculator for the given maximum degree.
   sphericart::cuda::SphericalHarmonics<float> calculator_cuda(l_max);

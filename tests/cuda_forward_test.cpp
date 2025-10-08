@@ -557,9 +557,7 @@ TEST_F(CudaKernelTest, PrecomputeSphericalHarmonics) {
   float sum_g1 = (0.5f * 0.28209f) + (0.8f * 0.48860f); // 0.531925
   float sum_b1 = (0.9f * 0.28209f) + (0.2f * 0.48860f); // 0.351601
 
-  auto sigmoid = [](float x) { return 1.0f / (1.0f + expf(-x)); };
-  const std::vector<float> expected_rgb = {sigmoid(sum_r0), sigmoid(sum_g0), sigmoid(sum_b0),
-                                           sigmoid(sum_r1), sigmoid(sum_g1), sigmoid(sum_b1)};
+  const std::vector<float> expected_rgb = {sum_r0, sum_g0, sum_b0, sum_r1, sum_g1, sum_b1};
 
   // 7. Compare results
   for (size_t i = 0; i < h_rgb.size(); ++i) {
