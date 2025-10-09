@@ -486,16 +486,19 @@ TEST_F(CudaBackwardKernelTest, SphericalHarmonicsBackward) {
   // Device data
   auto d_xyz_c = device_alloc<float>(N * 3);
   auto d_rgb_grad_out = device_alloc<float>(N * 3);
-  auto d_sh_grad_in = device_alloc<float>(N * n_coeffs * 3);
+  auto d_sh_grad_in = device_alloc<float>(N * (n_coeffs - 1) * 3);
+  auto d_band_0_grad = device_alloc<float>(N * 3);
 
   CUDA_CHECK(cudaMemcpy(d_xyz_c, h_xyz_c.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_rgb_grad_out, h_rgb_grad_out.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
 
   // Run kernel
-  precompute_spherical_harmonics_backward(d_xyz_c, d_rgb_grad_out, l_max, N, d_sh_grad_in);
+  precompute_spherical_harmonics_backward(d_xyz_c, d_rgb_grad_out, l_max, N, d_sh_grad_in, d_band_0_grad);
   CUDA_CHECK(cudaDeviceSynchronize());
 
-  CUDA_CHECK(cudaMemcpy(h_sh_grad_in.data(), d_sh_grad_in, N * n_coeffs * 3 * sizeof(float), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_sh_grad_in.data() + N * 3, d_sh_grad_in, N * (n_coeffs - 1) * 3 * sizeof(float),
+                        cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_sh_grad_in.data(), d_band_0_grad, N * 3 * sizeof(float), cudaMemcpyDeviceToHost));
 
   // Numerical gradient check
   auto forward_sh_rgb = [&](const std::vector<float> &sh_coeffs, const std::vector<float> &xyz_c) {
@@ -564,6 +567,7 @@ TEST_F(CudaBackwardKernelTest, SphericalHarmonicsBackward) {
   CUDA_CHECK(cudaFree(d_xyz_c));
   CUDA_CHECK(cudaFree(d_rgb_grad_out));
   CUDA_CHECK(cudaFree(d_sh_grad_in));
+  CUDA_CHECK(cudaFree(d_band_0_grad));
 }
 
 // Test for render_image_backward
@@ -577,10 +581,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
   std::vector<float> h_opacity = {2.0f, 2.0f, 2.0f};
   std::vector<float> h_conic = {5.0f, 0.0f, 5.0f, 5.0f, 0.0f, 5.0f, 5.0f, 0.0f, 5.0f}; // Gaussian 1
   std::vector<float> h_rgb = {0.5f, 0.2f, 0.2f, 0.2f, 0.2f, 0.5f, 0.2f, 0.5f, 0.2f};   // Gaussian 1
-  std::vector<float> h_rgb_orig = h_rgb;
-  for (int i = 0; i < h_rgb_orig.size(); i++)
-    h_rgb_orig[i] = -logf((1.0f / h_rgb_orig[i]) - 1.0f);
-  std::vector<float> h_background_rgb = {0.1f, 0.1f, 0.1f};
+  const float background_opacity = 0.1f;
   std::vector<float> h_grad_image(image_width * image_height * 3);
   for (size_t i = 0; i < h_grad_image.size(); ++i)
     h_grad_image[i] = 0.01f;
@@ -626,17 +627,17 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
           splat_count++;
           float alpha = std::min(0.9999f, (1.0f / (1.0f + expf(-opacity[i]))) * norm_prob);
 
-          pixel_rgb[0] += (1.0f / (1.0f + expf(-rgb[i * 3 + 0]))) * alpha * T;
-          pixel_rgb[1] += (1.0f / (1.0f + expf(-rgb[i * 3 + 1]))) * alpha * T;
-          pixel_rgb[2] += (1.0f / (1.0f + expf(-rgb[i * 3 + 2]))) * alpha * T;
+          pixel_rgb[0] += rgb[i * 3 + 0] * alpha * T;
+          pixel_rgb[1] += rgb[i * 3 + 1] * alpha * T;
+          pixel_rgb[2] += rgb[i * 3 + 2] * alpha * T;
 
           T *= (1.0f - alpha);
         }
 
         int pixel_idx = v_splat * image_width + u_splat;
-        image[pixel_idx * 3 + 0] = pixel_rgb[0] + T * h_background_rgb[0];
-        image[pixel_idx * 3 + 1] = pixel_rgb[1] + T * h_background_rgb[1];
-        image[pixel_idx * 3 + 2] = pixel_rgb[2] + T * h_background_rgb[2];
+        image[pixel_idx * 3 + 0] = pixel_rgb[0] + T * background_opacity;
+        image[pixel_idx * 3 + 1] = pixel_rgb[1] + T * background_opacity;
+        image[pixel_idx * 3 + 2] = pixel_rgb[2] + T * background_opacity;
 
         num_splats_per_pixel[pixel_idx] = splat_count;
         final_weight_per_pixel[pixel_idx] = T;
@@ -645,14 +646,13 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     return image;
   };
 
-  forward_render(h_uvs, h_opacity, h_conic, h_rgb_orig, h_num_splats_per_pixel, h_final_weight_per_pixel);
+  forward_render(h_uvs, h_opacity, h_conic, h_rgb, h_num_splats_per_pixel, h_final_weight_per_pixel);
 
   // Device data
   auto d_uvs = device_alloc<float>(N * 2);
   auto d_opacity = device_alloc<float>(N);
   auto d_conic = device_alloc<float>(N * 3);
   auto d_rgb = device_alloc<float>(N * 3);
-  auto d_background_rgb = device_alloc<float>(3);
   auto d_sorted_splats = device_alloc<int>(N);
   auto d_splat_range_by_tile = device_alloc<int>(2);
   auto d_num_splats_per_pixel = device_alloc<int>(image_width * image_height);
@@ -669,8 +669,6 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
   CUDA_CHECK(cudaMemcpy(d_opacity, h_opacity.data(), h_opacity.size() * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_conic, h_conic.data(), h_conic.size() * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_rgb, h_rgb.data(), h_rgb.size() * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_background_rgb, h_background_rgb.data(), h_background_rgb.size() * sizeof(float),
-                        cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_sorted_splats, h_sorted_splats.data(), h_sorted_splats.size() * sizeof(int),
                         cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_splat_range_by_tile, h_splat_range_by_tile.data(), h_splat_range_by_tile.size() * sizeof(int),
@@ -689,7 +687,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
   CUDA_CHECK(cudaMemset(d_grad_rgb, 0, N * 3 * sizeof(float)));
 
   // Run kernel
-  render_image_backward(d_uvs, d_opacity, d_conic, d_rgb, d_background_rgb, d_sorted_splats, d_splat_range_by_tile,
+  render_image_backward(d_uvs, d_opacity, d_conic, d_rgb, background_opacity, d_sorted_splats, d_splat_range_by_tile,
                         d_num_splats_per_pixel, d_final_weight_per_pixel, d_grad_image, image_width, image_height,
                         d_grad_rgb, d_grad_opacity, d_grad_uv, d_grad_conic, 0);
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -717,10 +715,8 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     std::vector<float> uvs_p = h_uvs, uvs_m = h_uvs;
     uvs_p[i] += h;
     uvs_m[i] -= h;
-    auto image_p =
-        forward_render(uvs_p, h_opacity, h_conic, h_rgb_orig, h_num_splats_per_pixel, h_final_weight_per_pixel);
-    auto image_m =
-        forward_render(uvs_m, h_opacity, h_conic, h_rgb_orig, h_num_splats_per_pixel, h_final_weight_per_pixel);
+    auto image_p = forward_render(uvs_p, h_opacity, h_conic, h_rgb, h_num_splats_per_pixel, h_final_weight_per_pixel);
+    auto image_m = forward_render(uvs_m, h_opacity, h_conic, h_rgb, h_num_splats_per_pixel, h_final_weight_per_pixel);
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
@@ -732,10 +728,8 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     std::vector<float> opacity_p = h_opacity, opacity_m = h_opacity;
     opacity_p[i] += h;
     opacity_m[i] -= h;
-    auto image_p =
-        forward_render(h_uvs, opacity_p, h_conic, h_rgb_orig, h_num_splats_per_pixel, h_final_weight_per_pixel);
-    auto image_m =
-        forward_render(h_uvs, opacity_m, h_conic, h_rgb_orig, h_num_splats_per_pixel, h_final_weight_per_pixel);
+    auto image_p = forward_render(h_uvs, opacity_p, h_conic, h_rgb, h_num_splats_per_pixel, h_final_weight_per_pixel);
+    auto image_m = forward_render(h_uvs, opacity_m, h_conic, h_rgb, h_num_splats_per_pixel, h_final_weight_per_pixel);
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
@@ -747,10 +741,8 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     std::vector<float> conic_p = h_conic, conic_m = h_conic;
     conic_p[i] += h;
     conic_m[i] -= h;
-    auto image_p =
-        forward_render(h_uvs, h_opacity, conic_p, h_rgb_orig, h_num_splats_per_pixel, h_final_weight_per_pixel);
-    auto image_m =
-        forward_render(h_uvs, h_opacity, conic_m, h_rgb_orig, h_num_splats_per_pixel, h_final_weight_per_pixel);
+    auto image_p = forward_render(h_uvs, h_opacity, conic_p, h_rgb, h_num_splats_per_pixel, h_final_weight_per_pixel);
+    auto image_m = forward_render(h_uvs, h_opacity, conic_m, h_rgb, h_num_splats_per_pixel, h_final_weight_per_pixel);
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
@@ -759,7 +751,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
 
   // Gradients for rgb
   for (int i = 0; i < N * 3; ++i) {
-    std::vector<float> rgb_p = h_rgb_orig, rgb_m = h_rgb_orig;
+    std::vector<float> rgb_p = h_rgb, rgb_m = h_rgb;
     rgb_p[i] += h;
     rgb_m[i] -= h;
     auto image_p = forward_render(h_uvs, h_opacity, h_conic, rgb_p, h_num_splats_per_pixel, h_final_weight_per_pixel);
@@ -775,7 +767,6 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
   CUDA_CHECK(cudaFree(d_opacity));
   CUDA_CHECK(cudaFree(d_conic));
   CUDA_CHECK(cudaFree(d_rgb));
-  CUDA_CHECK(cudaFree(d_background_rgb));
   CUDA_CHECK(cudaFree(d_sorted_splats));
   CUDA_CHECK(cudaFree(d_splat_range_by_tile));
   CUDA_CHECK(cudaFree(d_num_splats_per_pixel));

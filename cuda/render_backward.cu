@@ -14,7 +14,7 @@ template <unsigned int CHUNK_SIZE>
 __global__ void render_tiles_backward_kernel(
     const float *__restrict__ uvs, const float *__restrict__ opacity, const float *__restrict__ rgb,
     const float *__restrict__ conic, const int *__restrict__ splat_start_end_idx_by_tile_idx,
-    const int *__restrict__ gaussian_idx_by_splat_idx, const float *__restrict__ background_rgb,
+    const int *__restrict__ gaussian_idx_by_splat_idx, const float background_opacity,
     const int *__restrict__ num_splats_per_pixel, const float *__restrict__ final_weight_per_pixel,
     const float *__restrict__ grad_image, const int image_width, const int image_height, float *__restrict__ grad_rgb,
     float *__restrict__ grad_opacity, float *__restrict__ grad_uv, float *__restrict__ grad_conic) {
@@ -44,7 +44,7 @@ __global__ void render_tiles_backward_kernel(
 #pragma unroll
     for (int channel = 0; channel < 3; channel++) {
       grad_image_local[channel] = grad_image[pixel_id * 3 + channel];
-      color_accum[channel] = background_rgb[channel] * T_final;
+      color_accum[channel] = background_opacity * T_final;
     }
   }
 
@@ -109,7 +109,7 @@ __global__ void render_tiles_backward_kernel(
         const float c = _conic[i * 3 + 2] + 0.25f;
 
         const float det = a * c - b * b;
-        const float reciprocal_det = __frcp_rn(det);
+        const float reciprocal_det = __frcp_rn(det + 1e-6);
         const float mh_sq = (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff) * reciprocal_det;
 
         float g = 0.0f;
@@ -124,15 +124,14 @@ __global__ void render_tiles_backward_kernel(
         if (alpha >= 0.004) {
 
           // alpha reciprical
-          float ra = __frcp_rn(1.0f - alpha);
+          float ra = __frcp_rn(1.0f - alpha + 1e-6f);
           T *= ra;
 
           const float fac = alpha * T;
 
 #pragma unroll
           for (int j = 0; j < 3; j++)
-            // multiply rgb gradient by sigmoid gradient
-            grad_rgb_local[j] = (_rgb[i * 3 + j] * (1.0f - _rgb[i * 3 + j])) * fac * grad_image_local[j];
+            grad_rgb_local[j] = fac * grad_image_local[j];
 
           float grad_alpha = 0.0f;
 #pragma unroll
@@ -206,7 +205,7 @@ __global__ void render_tiles_backward_kernel(
 }
 
 void render_image_backward(const float *const uvs, const float *const opacity, const float *const conic,
-                           const float *const rgb, const float *const background_rgb, const int *const sorted_splats,
+                           const float *const rgb, const float background_opacity, const int *const sorted_splats,
                            const int *const splat_range_by_tile, const int *const num_splats_per_pixel,
                            const float *const final_weight_per_pixel, const float *const grad_image,
                            const int image_width, const int image_height, float *grad_rgb, float *grad_opacity,
@@ -215,7 +214,6 @@ void render_image_backward(const float *const uvs, const float *const opacity, c
   ASSERT_DEVICE_POINTER(opacity);
   ASSERT_DEVICE_POINTER(conic);
   ASSERT_DEVICE_POINTER(rgb);
-  ASSERT_DEVICE_POINTER(background_rgb);
   ASSERT_DEVICE_POINTER(sorted_splats);
   ASSERT_DEVICE_POINTER(splat_range_by_tile);
   ASSERT_DEVICE_POINTER(num_splats_per_pixel);
@@ -234,6 +232,6 @@ void render_image_backward(const float *const uvs, const float *const opacity, c
 
   // Launch the single, non-templated kernel
   render_tiles_backward_kernel<BATCH_SIZE><<<grid_size, block_size, 0, stream>>>(
-      uvs, opacity, rgb, conic, splat_range_by_tile, sorted_splats, background_rgb, num_splats_per_pixel,
+      uvs, opacity, rgb, conic, splat_range_by_tile, sorted_splats, background_opacity, num_splats_per_pixel,
       final_weight_per_pixel, grad_image, image_width, image_height, grad_rgb, grad_opacity, grad_uv, grad_conic);
 }

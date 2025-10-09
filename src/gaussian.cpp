@@ -89,6 +89,9 @@ Gaussians Gaussians::Initialize(const std::unordered_map<uint64_t, Point3D> &poi
     // Initialize the Gaussian properties directly into the pre-sized vectors
     xyz_vec[i] = current_point.xyz.cast<float>();
     rgb_vec[i] = Eigen::Vector3f(current_point.rgb[0], current_point.rgb[1], current_point.rgb[2]) / 255.0f;
+    // Convert RGB to SH band 0
+    const float C0 = 0.28209479177387814;
+    rgb_vec[i] /= C0;
     opacity_vec[i] = 0.1f;
     scale_vec[i] = Eigen::Vector3f(logf(avg_dist), logf(avg_dist), logf(avg_dist));
     quaternion_vec[i] = Eigen::Quaternionf::Identity();

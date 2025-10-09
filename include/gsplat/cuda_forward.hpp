@@ -79,6 +79,7 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
 /**
  * @brief Filter the Guassian parameters by the provided mask and return filtered arrays
  * @param[in]  N
+ * @param[in]  num_sh_coef
  * @param[in]  d_mask
  * @param[in]  d_xyz
  * @param[in]  d_rgb
@@ -89,6 +90,8 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
  * @param[in]  d_xyz_c
  * @param[out] d_xyz_culled
  * @param[out] d_rgb_culled
+ * @param[out] d_sh_culled
+ * @param[out] d_sh_culled
  * @param[out] d_opacity_culled
  * @param[out] d_scale_culled
  * @param[out] d_quaternion_culled
@@ -97,9 +100,10 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
  * @param[out] h_num_culled
  * @param[in]  stream The CUDA stream to execute kernel on
  */
-void filter_gaussians_by_mask(int N, const bool *d_mask, const float *d_xyz, const float *d_rgb, const float *d_opacity,
-                              const float *d_scale, const float *d_quaternion, const float *d_uv, const float *d_xyz_c,
-                              float *d_xyz_culled, float *d_rgb_culled, float *d_opacity_culled, float *d_scale_culled,
+void filter_gaussians_by_mask(int N, const int num_sh_coef, const bool *d_mask, const float *d_xyz, const float *d_rgb,
+                              const float *d_sh, const float *d_opacity, const float *d_scale,
+                              const float *d_quaternion, const float *d_uv, const float *d_xyz_c, float *d_xyz_culled,
+                              float *d_rgb_culled, float *d_sh_culled, float *d_opacity_culled, float *d_scale_culled,
                               float *d_quaternion_culled, float *d_uv_culled, float *d_xyz_c_culled, int *h_num_culled,
                               cudaStream_t stream = 0);
 
@@ -123,15 +127,16 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
 /**
  * @brief Launches CUDA kernels to precompute spherical harmonic values and calculate rgb values
- * @param[in]  xyz              A device pointer to 3D corrdinates of gaussians in camera perspective
- * @param[in]  sh_coefficients  A device pointer to SH params for each Gaussian
- * @param[in]  l_max            The max degree of SH
- * @param[in]  N                The total number of points
- * @param[out] rgb              A device pointer to output rgb values
- * @param[in]  stream           The CUDA stream to execute kernel on
+ * @param[in]  xyz                     A device pointer to 3D corrdinates of gaussians in camera perspective
+ * @param[in]  sh_coefficients         A device pointer to SH params for each Gaussian
+ * @param[in]  sh_coefficients_band_0  A device pointer to RGB values i.e. band 0
+ * @param[in]  l_max                   The max degree of SH
+ * @param[in]  N                       The total number of points
+ * @param[out] rgb                     A device pointer to output rgb values
+ * @param[in]  stream                  The CUDA stream to execute kernel on
  */
-void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficients, const int N, const int max_l,
-                                    float *rgb, cudaStream_t stream = 0);
+void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficients, const float *sh_coeffs_band_0,
+                                    const int l_max, const int N, float *rgb, cudaStream_t stream = 0);
 
 /**
  * @brief Launch CUDA kernels to render image pixel values from Gaussians

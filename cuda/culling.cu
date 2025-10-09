@@ -156,14 +156,6 @@ __device__ __forceinline__ int get_write_index(const bool write, const int lane,
   return write ? (base_slot + prefix) : -1;
 }
 
-__device__ __forceinline__ int warp_reduce_max(unsigned mask, int val) {
-  for (int offset = 16; offset > 0; offset /= 2) {
-    val = fmaxf(val, __shfl_down_sync(mask, val, offset));
-  }
-  // Broadcast the final result from lane 0 to all threads
-  return __shfl_sync(mask, val, 0);
-}
-
 __device__ __forceinline__ int warpSum(unsigned mask, int val) {
   for (int offset = 16; offset > 0; offset /= 2)
     val += __shfl_down_sync(mask, val, offset);
@@ -190,20 +182,25 @@ __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float
   float obb[8];
   const int radius_tiles = compute_obb(u, v, a, b, c, mh_dist, obb);
 
+  // BUG Check the bounds on this
   const int projected_tile_x = floorf(u / 16.0f);
-  const int start_tile_x = fmaxf(0, projected_tile_x - radius_tiles);
-  const int end_tile_x = fminf(n_tiles_x, projected_tile_x + radius_tiles + 1);
+  const int start_tile_x = max(0, projected_tile_x - radius_tiles);
+  const int end_tile_x = min(n_tiles_x, projected_tile_x + radius_tiles + 1);
   const int projected_tile_y = floorf(v / 16.0f);
-  const int start_tile_y = fmaxf(0, projected_tile_y - radius_tiles);
-  const int end_tile_y = fminf(n_tiles_y, projected_tile_y + radius_tiles + 1);
+  const int start_tile_y = max(0, projected_tile_y - radius_tiles);
+  const int end_tile_y = min(n_tiles_y, projected_tile_y + radius_tiles + 1);
 
-  const int num_pairs_for_thread = (end_tile_x - start_tile_x) * (end_tile_y - start_tile_y);
+  // clamp negative values
+  const int num_x_tiles = max(0, end_tile_x - start_tile_x);
+  const int num_y_tiles = max(0, end_tile_y - start_tile_y);
+  const int num_pairs_for_thread = num_x_tiles * num_y_tiles;
+
   // Get required bytes for buffer
   if (pairs == nullptr) {
     const int lane_id = gaussian_idx & 0x1f;
     const int warp_sum = warpSum(active_mask, num_pairs_for_thread);
     if (lane_id == 0) {
-      atomicAdd(buffer_bytes, warp_sum * sizeof(int2));
+      atomicAdd(buffer_bytes, warp_sum * sizeof(int));
     }
   } else {
     // Write pairs to buffer
@@ -217,7 +214,7 @@ __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float
       }
     }
   }
-};
+}
 
 __global__ void generate_splats_kernel(const float *__restrict__ uvs, const float *__restrict__ xyz_camera_frame,
                                        const float *__restrict__ conic, const int2 *__restrict__ pairs,
@@ -294,40 +291,6 @@ __global__ void find_tile_boundaries_kernel(const double *__restrict__ sorted_ke
 
   if (splat_idx == num_splats - 1) {
     splat_start_end_idx_by_tile_idx[current_tile_id + 1] = num_splats;
-  }
-}
-
-__global__ void max_reduce_strided_kernel(const float *input, float *output, int n, int stride) {
-  // Shared memory to store the max value from each warp in the block.
-  extern __shared__ float sdata[];
-
-  unsigned int tid = threadIdx.x;
-  unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-  // 1. Each thread loads its value from global memory.
-  float my_val = (i < n) ? input[i * stride] : -CUDART_INF_F;
-
-  // 2. Perform reduction at the warp level.
-  float warp_max = warp_reduce_max(0xFFFFFFFF, my_val);
-
-  // 3. Lane 0 of each warp writes its warp's max to shared memory.
-  if ((tid % 32) == 0) {
-    sdata[tid / 32] = warp_max;
-  }
-  __syncthreads();
-
-  // 4. The first warp reduces the results from shared memory.
-  // Only threads that will participate in the final reduction load a value.
-  float final_val = (tid < blockDim.x / 32) ? sdata[tid] : -CUDART_INF_F;
-
-  float block_max;
-  if (tid < 32) {
-    // block max will now be in first thread
-    block_max = warp_reduce_max(0xFFFFFFFF, final_val);
-  }
-  // store block max to output
-  if (tid == 0) {
-    output[blockIdx.x] = block_max;
   }
 }
 
@@ -435,11 +398,12 @@ void scatter_params(const int N, const int S, const bool *d_mask, const float *s
   CHECK_CUDA(cudaFree(mask_sum));
 }
 
-void filter_gaussians_by_mask(const int N, const bool *d_mask, const float *d_xyz, const float *d_rgb,
-                              const float *d_opacity, const float *d_scale, const float *d_quaternion,
-                              const float *d_uv, const float *d_xyz_c, float *d_xyz_culled, float *d_rgb_culled,
-                              float *d_opacity_culled, float *d_scale_culled, float *d_quaternion_culled,
-                              float *d_uv_culled, float *d_xyz_c_culled, int *h_num_culled, cudaStream_t stream) {
+void filter_gaussians_by_mask(const int N, const int num_sh_coef, const bool *d_mask, const float *d_xyz,
+                              const float *d_rgb, const float *d_sh, const float *d_opacity, const float *d_scale,
+                              const float *d_quaternion, const float *d_uv, const float *d_xyz_c, float *d_xyz_culled,
+                              float *d_rgb_culled, float *d_sh_culled, float *d_opacity_culled, float *d_scale_culled,
+                              float *d_quaternion_culled, float *d_uv_culled, float *d_xyz_c_culled, int *h_num_culled,
+                              cudaStream_t stream) {
   int *mask_sum;
   CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
 
@@ -465,7 +429,9 @@ void filter_gaussians_by_mask(const int N, const bool *d_mask, const float *d_xy
 
   // Apply mask to all arrays
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_xyz, d_mask, mask_sum, N, d_xyz_culled, 3);
-  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_rgb, d_mask, mask_sum, N, d_rgb_culled, 2);
+  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_rgb, d_mask, mask_sum, N, d_rgb_culled, 3);
+  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_sh, d_mask, mask_sum, N, d_sh_culled,
+                                                                     num_sh_coef * 3);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_opacity, d_mask, mask_sum, N, d_opacity_culled,
                                                                      1);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_scale, d_mask, mask_sum, N, d_scale_culled, 3);
@@ -517,7 +483,7 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   }
   // store pairs of guassians and tiles
   int2 *d_pairs;
-  CHECK_CUDA(cudaMalloc(&d_pairs, sorted_gaussian_bytes));
+  CHECK_CUDA(cudaMalloc(&d_pairs, sorted_gaussian_bytes * 2));
 
   coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N, d_buffer_bytes,
                                                            d_pairs, d_buffer_index);
@@ -526,33 +492,30 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   // get max z depth for key multiplier
   float *d_max_z;
   CHECK_CUDA(cudaMalloc(&d_max_z, sizeof(float)));
-  {
-    const int threads_per_block_reduce = 256;
-    // Shared memory needed is one float per warp.
-    const int shared_mem_size = (threads_per_block_reduce / 32) * sizeof(float);
 
-    int num_blocks_pass1 = (N + threads_per_block_reduce - 1) / threads_per_block_reduce;
-    float *d_partial_max;
-    CHECK_CUDA(cudaMalloc(&d_partial_max, num_blocks_pass1 * sizeof(float)));
+  // Copy z values to new array
+  float *z_vals;
+  CHECK_CUDA(cudaMalloc(&z_vals, N * sizeof(float)));
+  CHECK_CUDA(cudaMemcpy2D(z_vals, 1 * sizeof(float), xyz + 2, 3 * sizeof(float), 1 * sizeof(float), N,
+                          cudaMemcpyDeviceToDevice));
 
-    max_reduce_strided_kernel<<<num_blocks_pass1, threads_per_block_reduce, shared_mem_size, stream>>>(
-        xyz + 2, d_partial_max, N, 3);
-    CHECK_CUDA(cudaGetLastError());
-    // Pass 2: Reduce partial results to a single value
-    max_reduce_strided_kernel<<<1, threads_per_block_reduce, shared_mem_size, stream>>>(d_partial_max, d_max_z,
-                                                                                        num_blocks_pass1, 1);
-    CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaFree(d_partial_max));
-  }
+  void *max_reduce_buffer = nullptr;
+  size_t max_reduce_buffer_bytes = 0;
 
+  cub::DeviceReduce::Max(max_reduce_buffer, max_reduce_buffer_bytes, z_vals, d_max_z, N);
+  CHECK_CUDA(cudaMalloc(&max_reduce_buffer, max_reduce_buffer_bytes));
+  cub::DeviceReduce::Max(max_reduce_buffer, max_reduce_buffer_bytes, z_vals, d_max_z, N);
+
+  CHECK_CUDA(cudaFree(z_vals));
+  CHECK_CUDA(cudaFree(max_reduce_buffer));
+
+  int num_pairs;
+  CHECK_CUDA(cudaMemcpy(&num_pairs, d_buffer_index, sizeof(int), cudaMemcpyDeviceToHost));
   double *d_sort_keys;
-  CHECK_CUDA(cudaMalloc(&d_sort_keys, sorted_gaussian_bytes));
+  CHECK_CUDA(cudaMalloc(&d_sort_keys, num_pairs * sizeof(double)));
   int *d_global_splat_counter;
   CHECK_CUDA(cudaMalloc(&d_global_splat_counter, sizeof(int)));
   CHECK_CUDA(cudaMemset(d_global_splat_counter, 0, sizeof(int)));
-
-  int num_pairs;
-  cudaMemcpy(&num_pairs, d_buffer_index, sizeof(int), cudaMemcpyDeviceToHost);
 
   const int num_blocks_pairs = (num_pairs + threads_per_block - 1) / threads_per_block;
   generate_splats_kernel<<<num_blocks_pairs, threads_per_block, 0, stream>>>(

@@ -22,13 +22,13 @@ struct CudaDataManager {
   const size_t max_gaussians;
 
   // Gaussian parameters
-  float *d_xyz, *d_rgb, *d_opacity, *d_scale, *d_quaternion;
+  float *d_xyz, *d_rgb, *d_sh, *d_opacity, *d_scale, *d_quaternion;
 
   // Gradients
-  float *d_grad_xyz, *d_grad_rgb, *d_grad_opacity, *d_grad_scale, *d_grad_quaternion;
+  float *d_grad_xyz, *d_grad_rgb, *d_grad_sh, *d_grad_opacity, *d_grad_scale, *d_grad_quaternion;
 
   // Intermediate gradient buffers
-  float *d_grad_conic, *d_grad_uv, *d_grad_J, *d_grad_sigma, *d_grad_xyz_c;
+  float *d_grad_conic, *d_grad_uv, *d_grad_J, *d_grad_sigma, *d_grad_xyz_c, *d_grad_precompute_rgb;
 
   // Camera parameters
   float *d_K, *d_T;
@@ -38,16 +38,18 @@ struct CudaDataManager {
   bool *d_mask;
 
   // Arrays for culled values
-  float *d_xyz_culled, *d_rgb_culled, *d_opacity_culled, *d_scale_culled, *d_quaternion_culled, *d_uv_culled,
-      *d_xyz_c_culled;
+  float *d_xyz_culled, *d_rgb_culled, *d_sh_culled, *d_opacity_culled, *d_scale_culled, *d_quaternion_culled,
+      *d_uv_culled, *d_xyz_c_culled;
 
   // Optimizer moment vectors
-  float *m_grad_xyz, *m_grad_rgb, *m_grad_opacity, *m_grad_scale, *m_grad_quaternion;
-  float *v_grad_xyz, *v_grad_rgb, *v_grad_opacity, *v_grad_scale, *v_grad_quaternion;
+  float *m_grad_xyz, *m_grad_rgb, *m_grad_sh, *m_grad_opacity, *m_grad_scale, *m_grad_quaternion;
+  float *v_grad_xyz, *v_grad_rgb, *v_grad_sh, *v_grad_opacity, *v_grad_scale, *v_grad_quaternion;
 
   // Filtered moment vectors
-  float *m_grad_xyz_culled, *m_grad_rgb_culled, *m_grad_opacity_culled, *m_grad_scale_culled, *m_grad_quaternion_culled;
-  float *v_grad_xyz_culled, *v_grad_rgb_culled, *v_grad_opacity_culled, *v_grad_scale_culled, *v_grad_quaternion_culled;
+  float *m_grad_xyz_culled, *m_grad_rgb_culled, *m_grad_sh_culled, *m_grad_opacity_culled, *m_grad_scale_culled,
+      *m_grad_quaternion_culled;
+  float *v_grad_xyz_culled, *v_grad_rgb_culled, *v_grad_sh_culled, *v_grad_opacity_culled, *v_grad_scale_culled,
+      *v_grad_quaternion_culled;
 
   CudaDataManager(size_t max_gaussians_in);
   ~CudaDataManager();
@@ -55,9 +57,10 @@ struct CudaDataManager {
 
 // Data structure to hold pointers for buffers allocated per-iteration.
 struct ForwardPassData {
+  int l_max = 0;
   int num_culled = 0;
   // Buffers dependent on num_culled
-  float *d_sigma = nullptr, *d_conic = nullptr, *d_J = nullptr;
+  float *d_sigma = nullptr, *d_conic = nullptr, *d_J = nullptr, *d_precomputed_rgb = nullptr;
   // Buffers for sorting
   int *d_sorted_gaussians = nullptr, *d_splat_start_end_idx_by_tile_idx = nullptr;
   // Buffers for rendering
