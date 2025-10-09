@@ -9,6 +9,28 @@
 #include <iostream>
 #include <opencv2/opencv.hpp>
 
+// Helper function to save an image from a device buffer
+void save_image(const std::string &filename, const float *d_image_buffer, int width, int height) {
+  // Create a host vector to hold the image data
+  std::vector<float> h_image_data(width * height * 3);
+
+  // Copy the image data from the GPU device to the host
+  CHECK_CUDA(
+      cudaMemcpy(h_image_data.data(), d_image_buffer, width * height * 3 * sizeof(float), cudaMemcpyDeviceToHost));
+
+  // Create an OpenCV Mat from the host data. The data is already in RGB float format [0, 1].
+  cv::Mat float_image(height, width, CV_32FC3, h_image_data.data());
+
+  // Convert the float image to an 8-bit BGR image for saving
+  cv::Mat bgr_image;
+  float_image.convertTo(bgr_image, CV_8UC3, 255.0);
+  cv::cvtColor(bgr_image, bgr_image, cv::COLOR_RGB2BGR);
+
+  // Save the image to the specified file
+  cv::imwrite(filename, bgr_image);
+  std::cout << "Saved image to " << filename << std::endl;
+}
+
 // Helper function to filter a vector based on a boolean mask.
 template <typename T> void filter_vector(std::vector<T> &vec, const std::vector<bool> &keep_mask) {
   if (vec.empty())
@@ -542,6 +564,7 @@ void Trainer::train() {
     CHECK_CUDA(cudaMemset(cuda.d_grad_J, 0.0f, 6 * num_gaussians * sizeof(float)));
     CHECK_CUDA(cudaMemset(cuda.d_grad_sigma, 0.0f, 9 * num_gaussians * sizeof(float)));
     CHECK_CUDA(cudaMemset(cuda.d_grad_xyz_c, 0.0f, 3 * num_gaussians * sizeof(float)));
+    CHECK_CUDA(cudaMemset(cuda.d_grad_precompute_rgb, 0.0f, 3 * num_gaussians * sizeof(float)));
 
     // Copy Gaussian data from host to device
     CHECK_CUDA(cudaMemcpy(cuda.d_xyz, gaussians.xyz.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
@@ -591,6 +614,10 @@ void Trainer::train() {
       cleanup_iteration_buffers(pass_data);
       continue;
     }
+
+    if (iter % 500 == 0)
+      save_image(std::format("rendered_image_{}.png", iter), pass_data.d_image_buffer, curr_camera.width,
+                 curr_camera.height);
 
     // --- BACKWARD PASS ---
     float loss = backward_pass(curr_image, curr_camera, cuda, pass_data, streams);
