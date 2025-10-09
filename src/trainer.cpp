@@ -6,6 +6,7 @@
 #include "gsplat/cuda_forward.hpp"
 #include "gsplat/optimizer.hpp"
 #include "gsplat/raster.hpp"
+#include <format>
 #include <iostream>
 #include <opencv2/opencv.hpp>
 
