@@ -33,9 +33,9 @@ __global__ void cam_intr_proj_backward_kernel(const float *__restrict__ xyz_c, c
 
   // Avoid division by zero or negative depth
   if (z <= 1e-6f) {
-    xyz_c_grad_in[i * XYZ_STRIDE + 0] = 0.0f;
-    xyz_c_grad_in[i * XYZ_STRIDE + 1] = 0.0f;
-    xyz_c_grad_in[i * XYZ_STRIDE + 2] = 0.0f;
+    xyz_c_grad_in[i * XYZ_STRIDE + 0] += 0.0f;
+    xyz_c_grad_in[i * XYZ_STRIDE + 1] += 0.0f;
+    xyz_c_grad_in[i * XYZ_STRIDE + 2] += 0.0f;
     return;
   }
 
@@ -48,9 +48,9 @@ __global__ void cam_intr_proj_backward_kernel(const float *__restrict__ xyz_c, c
   // --- Gradient w.r.t. xyz_c ---
   // du/dx = fx/z, dv/dy = fy/z
   // du/dz = -fx*x/z^2, dv/dz = -fy*y/z^2
-  xyz_c_grad_in[i * XYZ_STRIDE + 0] = grad_u * fx * z_inv;
-  xyz_c_grad_in[i * XYZ_STRIDE + 1] = grad_v * fy * z_inv;
-  xyz_c_grad_in[i * XYZ_STRIDE + 2] = -(grad_u * fx * x * z_inv2 + grad_v * fy * y * z_inv2);
+  xyz_c_grad_in[i * XYZ_STRIDE + 0] += grad_u * fx * z_inv;
+  xyz_c_grad_in[i * XYZ_STRIDE + 1] += grad_v * fy * z_inv;
+  xyz_c_grad_in[i * XYZ_STRIDE + 2] += -(grad_u * fx * x * z_inv2 + grad_v * fy * y * z_inv2);
 }
 
 void camera_intrinsic_projection_backward(const float *const xyz_c, const float *const K,

@@ -114,12 +114,28 @@ __global__ void conic_backward_kernel(const float *__restrict__ J, const float *
 
   // A. Gradient w.r.t. sigma_world = JW.T @ V (3x2 @ 2x3 -> 3x3)
   float *out_sigma_grad = sigma_world_grad_in + i * 9;
-  out_sigma_grad[0] = JW00 * V00 + JW10 * V10;
-  out_sigma_grad[1] = JW00 * V01 + JW10 * V11;
-  out_sigma_grad[2] = JW00 * V02 + JW10 * V12;
-  out_sigma_grad[3] = JW01 * V01 + JW11 * V11;
-  out_sigma_grad[4] = JW01 * V02 + JW11 * V12;
-  out_sigma_grad[5] = JW02 * V02 + JW12 * V12;
+  // Since d(sigma_world) is symmetric, we compute the full matrix product
+  // and then can optionally just store the upper/lower triangular part if
+  // the next kernel expects that. Here we compute the full 3x3 matrix.
+  float grad_S00 = JW00 * V00 + JW10 * V10;
+  float grad_S01 = JW00 * V01 + JW10 * V11;
+  float grad_S02 = JW00 * V02 + JW10 * V12;
+  float grad_S10 = JW01 * V00 + JW11 * V10;
+  float grad_S11 = JW01 * V01 + JW11 * V11;
+  float grad_S12 = JW01 * V02 + JW11 * V12;
+  float grad_S20 = JW02 * V00 + JW12 * V10;
+  float grad_S21 = JW02 * V01 + JW12 * V11;
+  float grad_S22 = JW02 * V02 + JW12 * V12;
+  // Store the full symmetric gradient
+  out_sigma_grad[0] = grad_S00;
+  out_sigma_grad[1] = (grad_S01 + grad_S10) * 0.5f;
+  out_sigma_grad[2] = (grad_S02 + grad_S20) * 0.5f;
+  out_sigma_grad[3] = out_sigma_grad[1]; // yx = xy
+  out_sigma_grad[4] = grad_S11;
+  out_sigma_grad[5] = (grad_S12 + grad_S21) * 0.5f;
+  out_sigma_grad[6] = out_sigma_grad[2]; // zx = xz
+  out_sigma_grad[7] = out_sigma_grad[5]; // zy = yz
+  out_sigma_grad[8] = grad_S22;
 
   // B. Gradient w.r.t. J = 2 * (V @ sigma_world @ W.T)
   // Step B1: V_sigma = V @ sigma_world (2x3 @ 3x3 -> 2x3)
