@@ -104,9 +104,9 @@ __global__ void render_tiles_backward_kernel(
         const float u_diff = float(u_splat) - u_mean;
         const float v_diff = float(v_splat) - v_mean;
 
-        const float a = _conic[i * 3 + 0] + 0.25f;
-        const float b = _conic[i * 3 + 1] + 0.5f;
-        const float c = _conic[i * 3 + 2] + 0.25f;
+        const float a = _conic[i * 3 + 0];
+        const float b = _conic[i * 3 + 1];
+        const float c = _conic[i * 3 + 2];
 
         const float det = a * c - b * b;
         const float reciprocal_det = __frcp_rn(det + 1e-6);

@@ -84,10 +84,9 @@ __global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *
         const float v_diff = float(v_splat) - v_mean;
 
         // Load conic values
-        // add 0.25 for numeric stability with fast_exp
-        const float a = _conic[i * 3 + 0] + 0.25;
-        const float b = _conic[i * 3 + 1] + 0.5;
-        const float c = _conic[i * 3 + 2] + 0.25;
+        const float a = _conic[i * 3 + 0];
+        const float b = _conic[i * 3 + 1];
+        const float c = _conic[i * 3 + 2];
 
         const float det = a * c - b * b;
         if (det <= 0.0f)
