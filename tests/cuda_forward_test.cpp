@@ -655,9 +655,9 @@ TEST_F(CudaKernelTest, RenderImageMultipleGaussians) {
       const float u_diff = u_pixel - u_mean;
       const float v_diff = v_pixel - v_mean;
 
-      const float a = h_conic[gaussian_idx * 3 + 0] + 0.25f;
-      const float b_c = h_conic[gaussian_idx * 3 + 1] + 0.5f;
-      const float c = h_conic[gaussian_idx * 3 + 2] + 0.25f;
+      const float a = h_conic[gaussian_idx * 3 + 0];
+      const float b_c = h_conic[gaussian_idx * 3 + 1];
+      const float c = h_conic[gaussian_idx * 3 + 2];
 
       const float det = a * c - b_c * b_c;
       const float mh_sq = (c * u_diff * u_diff - (b_c + b_c) * u_diff * v_diff + a * v_diff * v_diff) / det;

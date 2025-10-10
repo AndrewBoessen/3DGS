@@ -612,9 +612,9 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
           const float u_diff = (float)u_splat - u_mean;
           const float v_diff = (float)v_splat - v_mean;
 
-          const float a = conic[i * 3 + 0] + 0.25f;
-          const float b = conic[i * 3 + 1] + 0.5f;
-          const float c = conic[i * 3 + 2] + 0.25f;
+          const float a = conic[i * 3 + 0];
+          const float b = conic[i * 3 + 1];
+          const float c = conic[i * 3 + 2];
 
           const float det = a * c - b * b;
           const float reciprocal_det = 1.0f / det;
