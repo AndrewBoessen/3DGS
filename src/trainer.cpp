@@ -502,6 +502,8 @@ float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera,
     offset += size;
   }
 
+  CHECK_CUDA(cudaDeviceSynchronize());
+
   CHECK_CUDA(cudaFree(d_gt_image));
   CHECK_CUDA(cudaFree(d_grad_image));
 

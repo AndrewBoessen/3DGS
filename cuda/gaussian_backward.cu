@@ -192,10 +192,11 @@ __global__ void sigma_backward_kernel(const float *__restrict__ q, const float *
 
   // Normalize quaternion
   const float norm = sqrtf(qw * qw + qx * qx + qy * qy + qz * qz) + 1e-8f;
-  const float w = qw / norm;
-  const float x = qx / norm;
-  const float y = qy / norm;
-  const float z = qz / norm;
+  const float inv_norm = __frcp_rn(norm);
+  const float w = qw * inv_norm;
+  const float x = qx * inv_norm;
+  const float y = qy * inv_norm;
+  const float z = qz * inv_norm;
 
   // Exponentiate scales
   const float S_x = expf(sx);
@@ -230,15 +231,15 @@ __global__ void sigma_backward_kernel(const float *__restrict__ q, const float *
 
   // Load dSigma and reconstruct the full symmetric matrix
   float dSigma[9];
-  dSigma[0] = dSigma_in[idx * 6 + 0]; // xx
-  dSigma[1] = dSigma_in[idx * 6 + 1]; // xy
-  dSigma[2] = dSigma_in[idx * 6 + 2]; // xz
-  dSigma[3] = dSigma[1];              // yx
-  dSigma[4] = dSigma_in[idx * 6 + 3]; // yy
-  dSigma[5] = dSigma_in[idx * 6 + 4]; // yz
-  dSigma[6] = dSigma[2];              // zx
-  dSigma[7] = dSigma[5];              // zy
-  dSigma[8] = dSigma_in[idx * 6 + 5]; // zz
+  dSigma[0] = dSigma_in[idx * 9 + 0]; // xx
+  dSigma[1] = dSigma_in[idx * 9 + 1]; // xy
+  dSigma[2] = dSigma_in[idx * 9 + 2]; // xz
+  dSigma[3] = dSigma_in[idx * 9 + 3]; // yx
+  dSigma[4] = dSigma_in[idx * 9 + 4]; // yy
+  dSigma[5] = dSigma_in[idx * 9 + 5]; // yz
+  dSigma[6] = dSigma_in[idx * 9 + 6]; // zx
+  dSigma[7] = dSigma_in[idx * 9 + 7]; // zy
+  dSigma[8] = dSigma_in[idx * 9 + 8]; // zz
 
   // dM = 2 * dSigma * M
   float dM[9];
@@ -308,7 +309,7 @@ __global__ void sigma_backward_kernel(const float *__restrict__ q, const float *
 
   // The gradient of the norm is zero for directions orthogonal to the vector.
   // We subtract the parallel component (the projection) and scale by the inverse norm.
-  const float inv_norm = 1.0f / norm;
+
   dQ_in[idx * 4 + 0] = inv_norm * (d_norm_q[0] - dot * w);
   dQ_in[idx * 4 + 1] = inv_norm * (d_norm_q[1] - dot * x);
   dQ_in[idx * 4 + 2] = inv_norm * (d_norm_q[2] - dot * y);
