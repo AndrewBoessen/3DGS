@@ -17,7 +17,7 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libeigen3-dev libyaml-cpp-dev libopencv-dev
+          sudo apt-get install -y cmake build-essential g++-15 libeigen3-dev libyaml-cpp-dev libopencv-dev
           git clone https://github.com/lab-cosmo/sphericart
           cd sphericart/
           mkdir build
