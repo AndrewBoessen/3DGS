@@ -152,7 +152,7 @@ __global__ void compute_conic_kernel(const float *__restrict__ sigma, const floa
   // 4. Store the 3 unique components of the conic matrix into global memory.
   const int conic_base_idx = i * CONIC_STRIDE;
   conic[conic_base_idx + 0] = c00;
-  conic[conic_base_idx + 1] = c01 + c01;
+  conic[conic_base_idx + 1] = c01;
   conic[conic_base_idx + 2] = c11;
 }
 

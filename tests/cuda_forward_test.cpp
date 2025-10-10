@@ -347,7 +347,7 @@ TEST_F(CudaKernelTest, ComputeConic) {
   const float c01 = j00 * 0.0f + 0.0f * j11 + j02 * j12 * 2;
   const float c11 = 0.0f * 0.0f + j11 * j11 + j12 * j12;
 
-  const std::vector<float> expected_conic = {c00, c01, c11};
+  const std::vector<float> expected_conic = {c00, c01 / 2.0f, c11};
 
   // Compare results
   for (size_t i = 0; i < h_conic.size(); ++i) {
