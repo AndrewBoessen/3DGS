@@ -310,12 +310,12 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
   h_sigma_grad_analytic_full[0] = h_sigma_world_grad_in[0]; // (0,0)
   h_sigma_grad_analytic_full[1] = h_sigma_world_grad_in[1]; // (0,1)
   h_sigma_grad_analytic_full[2] = h_sigma_world_grad_in[2]; // (0,2)
-  h_sigma_grad_analytic_full[3] = h_sigma_world_grad_in[1]; // (1,0) = (0,1)
-  h_sigma_grad_analytic_full[4] = h_sigma_world_grad_in[3]; // (1,1)
-  h_sigma_grad_analytic_full[5] = h_sigma_world_grad_in[4]; // (1,2)
-  h_sigma_grad_analytic_full[6] = h_sigma_world_grad_in[2]; // (2,0) = (0,2)
-  h_sigma_grad_analytic_full[7] = h_sigma_world_grad_in[4]; // (2,1) = (1,2)
-  h_sigma_grad_analytic_full[8] = h_sigma_world_grad_in[5]; // (2,2)
+  h_sigma_grad_analytic_full[3] = h_sigma_world_grad_in[3]; // (1,0) = (0,1)
+  h_sigma_grad_analytic_full[4] = h_sigma_world_grad_in[4]; // (1,1)
+  h_sigma_grad_analytic_full[5] = h_sigma_world_grad_in[5]; // (1,2)
+  h_sigma_grad_analytic_full[6] = h_sigma_world_grad_in[6]; // (2,0) = (0,2)
+  h_sigma_grad_analytic_full[7] = h_sigma_world_grad_in[7]; // (2,1) = (1,2)
+  h_sigma_grad_analytic_full[8] = h_sigma_world_grad_in[8]; // (2,2)
 
   // Check grad w.r.t. sigma_world
   for (int i = 0; i < N * 9; ++i) {
@@ -344,20 +344,20 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
   // Host data
   std::vector<float> h_q = {0.70710678, 0.70710678, 0.0, 0.0}; // Gaussian 1: 90 deg rot around X
   std::vector<float> h_s = {-0.1, -0.2, -0.3};
-  std::vector<float> h_dSigma_in = {-0.1, -0.2, -0.3, -0.4, -0.5, -0.6};
+  std::vector<float> h_dSigma_in = {-0.1, -0.2, -0.3, -0.2, -0.4, -0.5, -0.3, -0.5, -0.6};
   std::vector<float> h_dQ_in(N * 4);
   std::vector<float> h_dS_in(N * 3);
 
   // Device data
   auto d_q = device_alloc<float>(N * 4);
   auto d_s = device_alloc<float>(N * 3);
-  auto d_dSigma_in = device_alloc<float>(N * 6);
+  auto d_dSigma_in = device_alloc<float>(N * 9);
   auto d_dQ_in = device_alloc<float>(N * 4);
   auto d_dS_in = device_alloc<float>(N * 3);
 
   CUDA_CHECK(cudaMemcpy(d_q, h_q.data(), N * 4 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_s, h_s.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_dSigma_in, h_dSigma_in.data(), N * 6 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_dSigma_in, h_dSigma_in.data(), N * 9 * sizeof(float), cudaMemcpyHostToDevice));
 
   // Run kernel
   compute_sigma_backward(d_q, d_s, d_dSigma_in, N, d_dQ_in, d_dS_in);
@@ -368,7 +368,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
 
   // Numerical gradient check
   auto forward_sigma = [&](const std::vector<float> &q_in, const std::vector<float> &s_in) {
-    std::vector<float> sigma(N * 6);
+    std::vector<float> sigma(N * 9);
     for (int i = 0; i < N; ++i) {
       float qw = q_in[i * 4 + 0];
       float qx = q_in[i * 4 + 1];
@@ -408,12 +408,15 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
       M[8] = R[8] * S_z;
 
       // Sigma = M * M^T
-      sigma[i * 6 + 0] = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
-      sigma[i * 6 + 1] = M[0] * M[3] + M[1] * M[4] + M[2] * M[5];
-      sigma[i * 6 + 2] = M[0] * M[6] + M[1] * M[7] + M[2] * M[8];
-      sigma[i * 6 + 3] = M[3] * M[3] + M[4] * M[4] + M[5] * M[5];
-      sigma[i * 6 + 4] = M[3] * M[6] + M[4] * M[7] + M[5] * M[8];
-      sigma[i * 6 + 5] = M[6] * M[6] + M[7] * M[7] + M[8] * M[8];
+      sigma[i * 9 + 0] = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
+      sigma[i * 9 + 1] = M[0] * M[3] + M[1] * M[4] + M[2] * M[5];
+      sigma[i * 9 + 2] = M[0] * M[6] + M[1] * M[7] + M[2] * M[8];
+      sigma[i * 9 + 3] = sigma[i * 9 + 1];
+      sigma[i * 9 + 4] = M[3] * M[3] + M[4] * M[4] + M[5] * M[5];
+      sigma[i * 9 + 5] = M[3] * M[6] + M[4] * M[7] + M[5] * M[8];
+      sigma[i * 9 + 6] = sigma[i * 9 + 2];
+      sigma[i * 9 + 7] = sigma[i * 9 + 5];
+      sigma[i * 9 + 8] = M[6] * M[6] + M[7] * M[7] + M[8] * M[8];
     }
     return sigma;
   };
@@ -439,7 +442,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float loss_p = compute_loss(sigma_p);
     float loss_m = compute_loss(sigma_m);
 
-    float numerical_grad = (loss_p - loss_m) / h;
+    float numerical_grad = (loss_p - loss_m) / (2 * h);
     EXPECT_NEAR(h_dQ_in[i], numerical_grad, 1e-1);
   }
 

@@ -496,11 +496,13 @@ float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera,
                            cuda.d_grad_sigma + offset * 9, size, cuda.d_grad_quaternion + offset * 4,
                            cuda.d_grad_scale + offset * 3, stream);
     camera_intrinsic_projection_backward(cuda.d_xyz_c_culled + offset * 3, cuda.d_K, cuda.d_grad_uv + offset * 2, size,
-                                         cuda.d_grad_xyz + offset * 3, stream);
+                                         cuda.d_grad_xyz_c + offset * 3, stream);
     camera_extrinsic_projection_backward(cuda.d_xyz_culled + offset * 3, cuda.d_T, cuda.d_grad_xyz_c + offset * 3, size,
                                          cuda.d_grad_xyz + offset * 3, stream);
     offset += size;
   }
+
+  CHECK_CUDA(cudaDeviceSynchronize());
 
   CHECK_CUDA(cudaFree(d_gt_image));
   CHECK_CUDA(cudaFree(d_grad_image));
