@@ -1,0 +1,12 @@
+[submodule "submodules/yaml-cpp"]
+	path = submodules/yaml-cpp
+	url = https://github.com/jbeder/yaml-cpp.git
+[submodule "submodules/sphericart"]
+	path = submodules/sphericart
+	url = https://github.com/lab-cosmo/sphericart.git
+[submodule "submodules/nanoflann"]
+	path = submodules/nanoflann
+	url = https://github.com/jlblancoc/nanoflann.git
+[submodule "submodules/eigen"]
+	path = submodules/eigen
+	url = https://gitlab.com/libeigen/eigen.git

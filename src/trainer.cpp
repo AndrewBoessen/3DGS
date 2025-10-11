@@ -8,7 +8,6 @@
 #include "gsplat/raster.hpp"
 #include <format>
 #include <iostream>
-#include <opencv2/opencv.hpp>
 
 // Helper function to save an image from a device buffer
 void save_image(const std::string &filename, const float *d_image_buffer, int width, int height) {

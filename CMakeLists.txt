@@ -9,20 +9,28 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_ARCHITECTURES native)
 
-# Find the Eigen3 library
-find_package(Eigen3 REQUIRED NO_MODULE)
-# Find YAML library
-find_package(yaml-cpp REQUIRED)
+# ===================================================================
+# DEPENDENCIES
+# ===================================================================
 # Find CUDA Toolkit and its libraries (cuBLAS, etc.)
 find_package(CUDAToolkit REQUIRED)
-# Find sphericart library
-find_package(sphericart REQUIRED)
 # Find OpenMP for sphericart parallelization
 find_package(OpenMP REQUIRED)
-# Find nanoflann for nearest neighbor
-find_package(nanoflann)
 # Find OpenCV for image procesing
 find_package(OpenCV REQUIRED)
+
+# Eigen (header-only)
+add_subdirectory(submodules/eigen)
+
+# yaml-cpp
+set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(submodules/yaml-cpp)
+
+# sphericart
+add_subdirectory(submodules/sphericart)
+
+# nanoflann (header-only)
+add_subdirectory(submodules/nanoflann)
 
 # ===================================================================
 # DATALODER LIBRARY DEFINITION
