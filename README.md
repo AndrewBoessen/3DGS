@@ -21,36 +21,12 @@ You will need a standard C++ development toolchain. Please install the following
 
 - **CMake** (version 3.20 or later)
 
-- **Eigen** (version 3.3 or later)
-
-- **yaml-cpp**
-
-- **sphericart**
-
-- **nanoflann**
-
 - **OpenCV**
 
 For example, on Ubuntu 22.04, you can install these with:
 
 ```bash
-git clone https://github.com/lab-cosmo/sphericart
-cd sphericart/
-mkdir build && cd build/
-cmake ..
-make install
-```
-
-```bash
-git https://github.com/jlblancoc/nanoflann.git
-cd nanoflann/
-mkdir build && cd build/
-cmake ..
-make install
-```
-
-```bash
-sudo apt install cmake build-essential g++-12 libeigen3-dev libyaml-cpp-dev libopencv-dev
+sudo apt install cmake build-essential g++-12 libopencv-dev
 ```
 
 ### 2. NVIDIA CUDA Toolkit
@@ -66,7 +42,7 @@ Please download and install the appropriate version for your system from the [**
 ### 1. **Clone the repository:**
 
 ```bash
-git clone https://github.com/AndrewBoessen/3DGS.git
+git clone --recursive https://github.com/AndrewBoessen/3DGS.git
 cd 3DGS
 ```
 
@@ -78,7 +54,7 @@ cmake -S . -B build
 
 _Note: If you have multiple compilers, you can specify one, e.g., `-DCMAKE_CXX_COMPILER=g++-12`._
 
-### 3. **Compile the code:** Build the project using the number of available processor cores for faster compilation
+### 3. **Compile the code:** Build the project using CMake
 
 ```bash
 cmake --build build --parallel $(nproc)
