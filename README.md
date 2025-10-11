@@ -42,7 +42,7 @@ Please download and install the appropriate version for your system from the [**
 ### 1. **Clone the repository:**
 
 ```bash
-git clone https://github.com/AndrewBoessen/3DGS.git
+git clone --recursive https://github.com/AndrewBoessen/3DGS.git
 cd 3DGS
 ```
 
