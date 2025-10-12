@@ -7,7 +7,6 @@
 
 namespace cg = cooperative_groups;
 
-constexpr int TILE_SIZE = 16;
 constexpr int BATCH_SIZE = 256;
 
 template <unsigned int CHUNK_SIZE>
@@ -224,10 +223,10 @@ void render_image_backward(const float *const uvs, const float *const opacity, c
   ASSERT_DEVICE_POINTER(grad_uv);
   ASSERT_DEVICE_POINTER(grad_conic);
 
-  const int num_tiles_x = (image_width + TILE_SIZE - 1) / TILE_SIZE;
-  const int num_tiles_y = (image_height + TILE_SIZE - 1) / TILE_SIZE;
+  const int num_tiles_x = (image_width + TILE_SIZE_BWD - 1) / TILE_SIZE_BWD;
+  const int num_tiles_y = (image_height + TILE_SIZE_BWD - 1) / TILE_SIZE_BWD;
 
-  dim3 block_size(TILE_SIZE, TILE_SIZE, 1);
+  dim3 block_size(TILE_SIZE_BWD, TILE_SIZE_BWD, 1);
   dim3 grid_size(num_tiles_x, num_tiles_y, 1);
 
   // Launch the single, non-templated kernel

@@ -144,11 +144,22 @@ private:
    *
    * @param[in] curr_image Rendered image data
    * @param[in] curr_camera Current camera parameters
-   * @param[in] cuda Device data to store gradients in
-   * @param[in] pass_data Forward pass temporary buffers
+   * @param[in,out] cuda Device data to store gradients in
+   * @param[in,out] pass_data Forward pass temporary buffers
    * @param[in] streams CUDA streams to use
    * @return Loss value
    */
   float backward_pass(const Image &curr_image, const Camera &curr_camera, CudaDataManager &cuda,
                       ForwardPassData &pass_data, const std::vector<cudaStream_t> &streams);
+
+  /**
+   * @brief Perform optimizer step to update Gaussian parameters
+   * @param[in,out] cuda Device data to store gradients and parameters
+   * @param[in,out] pass_data Current pass data
+   * @param[in] iter The iteration number
+   * @param[in] num_gaussians Total number of trainable Gaussians
+   * @param[in] num_sh_coef The number of spherical harmonics coefficients
+   */
+  void optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data, int iter, int num_gaussians,
+                      int num_sh_coef);
 };

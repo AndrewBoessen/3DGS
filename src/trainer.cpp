@@ -509,6 +509,70 @@ float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera,
   return loss;
 }
 
+void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data, int iter, int num_gaussians,
+                             int num_sh_coef) {
+  // Select moment vectors by filtering based on the culled mask
+  filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_xyz_culled,
+                        cuda.v_grad_xyz_culled);
+  filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_rgb, cuda.v_grad_rgb, cuda.m_grad_rgb_culled,
+                        cuda.v_grad_rgb_culled);
+  filter_moment_vectors(num_gaussians, 1, cuda.d_mask, cuda.m_grad_opacity, cuda.v_grad_opacity,
+                        cuda.m_grad_opacity_culled, cuda.v_grad_opacity_culled);
+  filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_scale, cuda.v_grad_scale, cuda.m_grad_scale_culled,
+                        cuda.v_grad_scale_culled);
+  filter_moment_vectors(num_gaussians, 4, cuda.d_mask, cuda.m_grad_quaternion, cuda.v_grad_quaternion,
+                        cuda.m_grad_quaternion_culled, cuda.v_grad_quaternion_culled);
+
+  // Calculate bias correction terms for Adam optimizer
+  float b1_t_corr = 1.0f - powf(B1, iter + 1);
+  float b2_t_corr = 1.0f - powf(B2, iter + 1);
+
+  // Update parameters using the Adam optimizer step
+  adam_step(cuda.d_xyz_culled, cuda.d_grad_xyz, cuda.m_grad_xyz_culled, cuda.v_grad_xyz_culled,
+            config.base_lr * config.xyz_lr_multiplier, B1, B2, EPS, b1_t_corr, b2_t_corr, pass_data.num_culled * 3);
+  adam_step(cuda.d_rgb_culled, cuda.d_grad_rgb, cuda.m_grad_rgb_culled, cuda.v_grad_rgb_culled,
+            config.base_lr * config.rgb_lr_multiplier, B1, B2, EPS, b1_t_corr, b2_t_corr, pass_data.num_culled * 3);
+  adam_step(cuda.d_opacity_culled, cuda.d_grad_opacity, cuda.m_grad_opacity_culled, cuda.v_grad_opacity_culled,
+            config.base_lr * config.opacity_lr_multiplier, B1, B2, EPS, b1_t_corr, b2_t_corr, pass_data.num_culled);
+  adam_step(cuda.d_scale_culled, cuda.d_grad_scale, cuda.m_grad_scale_culled, cuda.v_grad_scale_culled,
+            config.base_lr * config.scale_lr_multiplier, B1, B2, EPS, b1_t_corr, b2_t_corr, pass_data.num_culled * 3);
+  adam_step(cuda.d_quaternion_culled, cuda.d_grad_quaternion, cuda.m_grad_quaternion_culled,
+            cuda.v_grad_quaternion_culled, config.base_lr * config.quat_lr_multiplier, B1, B2, EPS, b1_t_corr,
+            b2_t_corr, pass_data.num_culled * 4);
+
+  // Scatter the updated moment vectors back to the full tensors
+  scatter_params(num_gaussians, 3, cuda.d_mask, cuda.m_grad_xyz_culled, cuda.m_grad_xyz);
+  scatter_params(num_gaussians, 3, cuda.d_mask, cuda.v_grad_xyz_culled, cuda.v_grad_xyz);
+  scatter_params(num_gaussians, 3, cuda.d_mask, cuda.m_grad_rgb_culled, cuda.m_grad_rgb);
+  scatter_params(num_gaussians, 3, cuda.d_mask, cuda.v_grad_rgb_culled, cuda.v_grad_rgb);
+  scatter_params(num_gaussians, 1, cuda.d_mask, cuda.m_grad_opacity_culled, cuda.m_grad_opacity);
+  scatter_params(num_gaussians, 1, cuda.d_mask, cuda.v_grad_opacity_culled, cuda.v_grad_opacity);
+  scatter_params(num_gaussians, 3, cuda.d_mask, cuda.m_grad_scale_culled, cuda.m_grad_scale);
+  scatter_params(num_gaussians, 3, cuda.d_mask, cuda.v_grad_scale_culled, cuda.v_grad_scale);
+  scatter_params(num_gaussians, 4, cuda.d_mask, cuda.m_grad_quaternion_culled, cuda.m_grad_quaternion);
+  scatter_params(num_gaussians, 4, cuda.d_mask, cuda.v_grad_quaternion_culled, cuda.v_grad_quaternion);
+
+  // Scatter the updated parameters back to the full tensors
+  scatter_params(num_gaussians, 3, cuda.d_mask, cuda.d_xyz_culled, cuda.d_xyz);
+  scatter_params(num_gaussians, 3, cuda.d_mask, cuda.d_rgb_culled, cuda.d_rgb);
+  scatter_params(num_gaussians, 1, cuda.d_mask, cuda.d_opacity_culled, cuda.d_opacity);
+  scatter_params(num_gaussians, 3, cuda.d_mask, cuda.d_scale_culled, cuda.d_scale);
+  scatter_params(num_gaussians, 4, cuda.d_mask, cuda.d_quaternion_culled, cuda.d_quaternion);
+
+  // Update Spherical Harmonics (SH) parameters if they are being used
+  if (num_sh_coef > 0) {
+    filter_moment_vectors(num_gaussians, num_sh_coef, cuda.d_mask, cuda.m_grad_sh, cuda.v_grad_sh,
+                          cuda.m_grad_sh_culled, cuda.v_grad_sh_culled);
+    adam_step(cuda.d_sh_culled, cuda.d_grad_sh, cuda.m_grad_sh_culled, cuda.v_grad_sh_culled,
+              config.base_lr * config.sh_lr_multiplier, B1, B2, EPS, b1_t_corr, b2_t_corr,
+              pass_data.num_culled * num_sh_coef * 3);
+    scatter_params(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.m_grad_sh_culled, cuda.m_grad_sh);
+    scatter_params(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.v_grad_sh_culled, cuda.v_grad_sh);
+    scatter_params(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.d_sh_culled, cuda.d_sh);
+  }
+
+  CHECK_CUDA(cudaDeviceSynchronize());
+}
 void Trainer::cleanup_iteration_buffers(ForwardPassData &pass_data) {
   CHECK_CUDA(cudaFree(pass_data.d_image_buffer));
   CHECK_CUDA(cudaFree(pass_data.d_weight_per_pixel));
@@ -603,11 +667,6 @@ void Trainer::train() {
     CHECK_CUDA(cudaMemcpy(cuda.d_K, h_K, 9 * sizeof(float), cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemcpy(cuda.d_T, h_T, 12 * sizeof(float), cudaMemcpyHostToDevice));
 
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    cudaEventRecord(start, 0);
-
     // --- FORWARD PASS via RASTERIZE MODULE ---
     rasterize_image(num_gaussians, curr_camera, config, cuda, pass_data, streams);
 
@@ -625,79 +684,8 @@ void Trainer::train() {
     float loss = backward_pass(curr_image, curr_camera, cuda, pass_data, streams);
     std::cout << "LOSS TOTAL " << loss << std::endl;
 
-    CHECK_CUDA(cudaDeviceSynchronize());
-
     // --- OPTIMIZER STEP ---
-
-    // Select moment vectors
-    filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_xyz_culled,
-                          cuda.v_grad_xyz_culled);
-    filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_rgb, cuda.v_grad_rgb, cuda.m_grad_rgb_culled,
-                          cuda.v_grad_rgb_culled);
-    filter_moment_vectors(num_gaussians, 1, cuda.d_mask, cuda.m_grad_opacity, cuda.v_grad_opacity,
-                          cuda.m_grad_opacity_culled, cuda.v_grad_opacity_culled);
-    filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_scale, cuda.v_grad_scale, cuda.m_grad_scale_culled,
-                          cuda.v_grad_scale_culled);
-    filter_moment_vectors(num_gaussians, 4, cuda.d_mask, cuda.m_grad_quaternion, cuda.v_grad_quaternion,
-                          cuda.m_grad_quaternion_culled, cuda.v_grad_quaternion_culled);
-
-    // Update parameters
-    float b1_t_corr = 1.0f - powf(0.9f, iter + 1);
-    float b2_t_corr = 1.0f - powf(0.999f, iter + 1);
-    adam_step(cuda.d_xyz_culled, cuda.d_grad_xyz, cuda.m_grad_xyz_culled, cuda.v_grad_xyz_culled,
-              config.base_lr * config.xyz_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
-              pass_data.num_culled * 3);
-    adam_step(cuda.d_rgb_culled, cuda.d_grad_rgb, cuda.m_grad_rgb_culled, cuda.v_grad_rgb_culled,
-              config.base_lr * config.rgb_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
-              pass_data.num_culled * 3);
-    adam_step(cuda.d_opacity_culled, cuda.d_grad_opacity, cuda.m_grad_opacity_culled, cuda.v_grad_opacity_culled,
-              config.base_lr * config.opacity_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
-              pass_data.num_culled);
-    adam_step(cuda.d_scale_culled, cuda.d_grad_scale, cuda.m_grad_scale_culled, cuda.v_grad_scale_culled,
-              config.base_lr * config.scale_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
-              pass_data.num_culled * 3);
-    adam_step(cuda.d_quaternion_culled, cuda.d_grad_quaternion, cuda.m_grad_quaternion_culled,
-              cuda.v_grad_quaternion_culled, config.base_lr * config.quat_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr,
-              b2_t_corr, pass_data.num_culled * 4);
-
-    // Scatter moment vectors
-    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.m_grad_xyz_culled, cuda.m_grad_xyz);
-    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.v_grad_xyz_culled, cuda.v_grad_xyz);
-    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.m_grad_rgb_culled, cuda.m_grad_rgb);
-    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.v_grad_rgb_culled, cuda.v_grad_rgb);
-    scatter_params(num_gaussians, 1, cuda.d_mask, cuda.m_grad_opacity_culled, cuda.m_grad_opacity);
-    scatter_params(num_gaussians, 1, cuda.d_mask, cuda.v_grad_opacity_culled, cuda.v_grad_opacity);
-    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.m_grad_scale_culled, cuda.m_grad_scale);
-    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.v_grad_scale_culled, cuda.v_grad_scale);
-    scatter_params(num_gaussians, 4, cuda.d_mask, cuda.m_grad_quaternion_culled, cuda.m_grad_quaternion);
-    scatter_params(num_gaussians, 4, cuda.d_mask, cuda.v_grad_quaternion_culled, cuda.v_grad_quaternion);
-
-    // Scatter params to update Guassians
-    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.d_xyz_culled, cuda.d_xyz);
-    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.d_rgb_culled, cuda.d_rgb);
-    scatter_params(num_gaussians, 1, cuda.d_mask, cuda.d_opacity_culled, cuda.d_opacity);
-    scatter_params(num_gaussians, 3, cuda.d_mask, cuda.d_scale_culled, cuda.d_scale);
-    scatter_params(num_gaussians, 4, cuda.d_mask, cuda.d_quaternion_culled, cuda.d_quaternion);
-
-    // Update SH params if used
-    if (num_sh_coef > 0) {
-      filter_moment_vectors(num_gaussians, num_sh_coef, cuda.d_mask, cuda.m_grad_sh, cuda.v_grad_sh,
-                            cuda.m_grad_sh_culled, cuda.v_grad_sh_culled);
-      adam_step(cuda.d_sh_culled, cuda.d_grad_sh, cuda.m_grad_sh_culled, cuda.v_grad_sh_culled,
-                config.base_lr * config.sh_lr_multiplier, 0.9f, 0.999f, 1e-8f, b1_t_corr, b2_t_corr,
-                pass_data.num_culled * num_sh_coef * 3);
-      scatter_params(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.m_grad_sh_culled, cuda.m_grad_sh);
-      scatter_params(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.v_grad_sh_culled, cuda.v_grad_sh);
-
-      scatter_params(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.d_sh_culled, cuda.d_sh);
-    }
-
-    CHECK_CUDA(cudaDeviceSynchronize());
-    cudaEventRecord(stop, 0);
-    cudaEventSynchronize(stop);
-    float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    std::cout << "Elapsed time for kernels: " << milliseconds << "ms" << std::endl;
+    optimizer_step(cuda, pass_data, iter, num_gaussians, num_sh_coef);
 
     // Copy updated gaussians back to host
     CHECK_CUDA(cudaMemcpy(gaussians.xyz.data(), cuda.d_xyz, num_gaussians * 3 * sizeof(float), cudaMemcpyDeviceToHost));
@@ -708,6 +696,17 @@ void Trainer::train() {
         cudaMemcpy(gaussians.scale.data(), cuda.d_scale, num_gaussians * 3 * sizeof(float), cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaMemcpy(gaussians.quaternion.data(), cuda.d_quaternion, num_gaussians * 4 * sizeof(float),
                           cudaMemcpyDeviceToHost));
+
+    // --- Adaptive Density ---
+    if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&
+        iter < config.adaptive_control_end) {
+      adaptive_density();
+    }
+
+    if (iter > config.reset_opacity_start && iter % config.reset_opacity_interval == 0 &&
+        iter < config.reset_opacity_end) {
+      reset_opacity();
+    }
 
     // Free temporary buffers for this iteration
     cleanup_iteration_buffers(pass_data);

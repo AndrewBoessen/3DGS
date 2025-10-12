@@ -3,7 +3,6 @@
 #include "checks.cuh"
 #include "gsplat/cuda_forward.hpp"
 
-constexpr int TILE_SIZE = 16;
 constexpr int BATCH_SIZE = 256;
 
 template <unsigned int splat_batch_size>
@@ -151,10 +150,10 @@ void render_image(const float *uv, const float *opacity, const float *conic, con
   ASSERT_DEVICE_POINTER(weight_per_pixel);
   ASSERT_DEVICE_POINTER(image);
 
-  int num_tiles_x = (image_width + TILE_SIZE - 1) / TILE_SIZE;
-  int num_tiles_y = (image_height + TILE_SIZE - 1) / TILE_SIZE;
+  int num_tiles_x = (image_width + TILE_SIZE_FWD - 1) / TILE_SIZE_FWD;
+  int num_tiles_y = (image_height + TILE_SIZE_FWD - 1) / TILE_SIZE_FWD;
 
-  dim3 block_size(TILE_SIZE, TILE_SIZE, 1);
+  dim3 block_size(TILE_SIZE_FWD, TILE_SIZE_FWD, 1);
   dim3 grid_size(num_tiles_x, num_tiles_y, 1);
 
   render_tiles_kernel<BATCH_SIZE><<<grid_size, block_size, 0, stream>>>(

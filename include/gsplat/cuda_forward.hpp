@@ -5,6 +5,8 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+inline constexpr int TILE_SIZE_FWD = 16;
+
 // Macro for checking CUDA API calls for errors.
 #define CHECK_CUDA(call)                                                                                               \
   do {                                                                                                                 \

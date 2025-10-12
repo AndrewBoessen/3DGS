@@ -5,6 +5,10 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+inline constexpr float B1 = 0.9f;
+inline constexpr float B2 = 0.999f;
+inline constexpr float EPS = 1e-8f;
+
 // Macro for checking CUDA API calls for errors.
 #define CHECK_CUDA(call)                                                                                               \
   do {                                                                                                                 \

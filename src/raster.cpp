@@ -76,8 +76,8 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
   CHECK_CUDA(cudaDeviceSynchronize()); // Sync streams for sorting
 
   // Step 5: Sort Gaussians by tile
-  const int n_tiles_x = (width + 15) / 16;
-  const int n_tiles_y = (height + 15) / 16;
+  const int n_tiles_x = (width + TILE_SIZE_FWD - 1) / TILE_SIZE_FWD;
+  const int n_tiles_y = (height + TILE_SIZE_FWD - 1) / TILE_SIZE_FWD;
   const int n_tiles = n_tiles_x * n_tiles_y;
   size_t sorted_gaussian_bytes = 0;
   get_sorted_gaussian_list(cuda.d_uv_culled, cuda.d_xyz_c_culled, pass_data.d_conic, n_tiles_x, n_tiles_y,
