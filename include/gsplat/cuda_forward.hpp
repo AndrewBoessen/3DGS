@@ -179,7 +179,6 @@ float fused_loss(const float *predicted_data, const float *gt_data, int rows, in
 
 /**
  * @brief Launch CUDA kernel to scatter params from filtered list to original list
- *
  * @param[in]      N                 Total number of param groups
  * @param[in]      S                 Stride of param groups
  * @param[in]      d_mask            Mask on output of size N
@@ -189,3 +188,18 @@ float fused_loss(const float *predicted_data, const float *gt_data, int rows, in
  */
 void scatter_params(const int N, const int S, const bool *d_mask, const float *selected_params, float *scattered_params,
                     cudaStream_t stream = 0);
+
+/**
+ * @brief Launch CUDA kernel to accumulate gradients
+ * @param[in] N Total number of param
+ * @param[in] d_mask Maks of on output of size N
+ * @param[in] d_grad_xyz Culled xyz gradients
+ * @param[in] d_grad_uv Culled uv gradients
+ * @param[out] d_xyz_grad_accum Accumulated xyz grad
+ * @param[out] d_uv_grad_acuum Accumulated uv grad
+ * @param[in] d_grad_accum_dur Number of accumulated gradients
+ * @param[out] stream The CUDA stream to execute on
+ */
+void accumulate_gradients(const int N, const bool *d_mask, const float *d_grad_xyz, const float *d_grad_uv,
+                          float *d_xyz_grad_accum, float *d_uv_grad_acuum, int *d_grad_accum_dur,
+                          cudaStream_t stream = 0);

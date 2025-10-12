@@ -311,6 +311,28 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
                                                              height, mask);
 }
 
+__global__ void scatter_add_gradients_kernel(const float *d_grad_uv_culled, const float *d_grad_xyz_culled,
+                                             const bool *d_mask, const int *d_culled_count_prefix_sum,
+                                             int num_gaussians, float *d_uv_grad_accum_full,
+                                             float *d_xyz_grad_accum_full, int *d_grad_accum_dur_full) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= num_gaussians)
+    return;
+
+  if (d_mask[idx]) {
+    int culled_idx = d_culled_count_prefix_sum[idx];
+
+    atomicAdd(&d_uv_grad_accum_full[idx * 2 + 0], d_grad_uv_culled[culled_idx * 2 + 0]);
+    atomicAdd(&d_uv_grad_accum_full[idx * 2 + 1], d_grad_uv_culled[culled_idx * 2 + 1]);
+
+    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 0], d_grad_xyz_culled[culled_idx * 3 + 0]);
+    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 1], d_grad_xyz_culled[culled_idx * 3 + 1]);
+    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 2], d_grad_xyz_culled[culled_idx * 3 + 2]);
+
+    atomicAdd(&d_grad_accum_dur_full[idx], 1);
+  }
+}
+
 __global__ void scatter_groups_kernel(const float *input, const bool *mask, const int *scan_out, const int N,
                                       float *output, int S) {
   int gid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -367,6 +389,31 @@ void filter_moment_vectors(const int N, const int S, const bool *d_mask, const f
   // Apply mask
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_m, d_mask, mask_sum, N, d_m_culled, S);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_v, d_mask, mask_sum, N, d_v_culled, S);
+
+  // Free the temporary storage.
+  CHECK_CUDA(cudaFree(d_temp_storage));
+  CHECK_CUDA(cudaFree(mask_sum));
+}
+
+void accumulate_gradients(const int N, const bool *d_mask, const float *d_grad_xyz, const float *d_grad_uv,
+                          float *d_xyz_grad_accum, float *d_uv_grad_acuum, int *d_grad_accum_dur, cudaStream_t stream) {
+  int *mask_sum;
+  CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
+  void *d_temp_storage = nullptr;
+  size_t temp_storage_bytes = 0;
+
+  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
+  // Allocate temporary storage
+  cudaMalloc(&d_temp_storage, temp_storage_bytes);
+
+  // Run exclusive prefix sum
+  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
+
+  const int threads_per_block = 256;
+  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
+
+  scatter_add_gradients_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
+      d_grad_uv, d_grad_xyz, d_mask, mask_sum, N, d_uv_grad_acuum, d_xyz_grad_accum, d_grad_accum_dur);
 
   // Free the temporary storage.
   CHECK_CUDA(cudaFree(d_temp_storage));

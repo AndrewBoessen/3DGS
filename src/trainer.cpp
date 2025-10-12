@@ -571,6 +571,10 @@ void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_
     scatter_params(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.d_sh_culled, cuda.d_sh);
   }
 
+  // Update gradient accumulators
+  accumulate_gradients(num_gaussians, cuda.d_mask, cuda.d_grad_xyz, cuda.d_grad_uv, cuda.d_xyz_grad_accum,
+                       cuda.d_uv_grad_accum, cuda.d_grad_accum_dur);
+
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 void Trainer::cleanup_iteration_buffers(ForwardPassData &pass_data) {
@@ -610,6 +614,11 @@ void Trainer::train() {
   CHECK_CUDA(cudaMemset(cuda.v_grad_opacity, 0.0f, config.max_gaussians * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.v_grad_scale, 0.0f, config.max_gaussians * 3 * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.v_grad_quaternion, 0.0f, config.max_gaussians * 4 * sizeof(float)));
+
+  // Reset gradient accumulators
+  CHECK_CUDA(cudaMemset(cuda.d_xyz_grad_accum, 0.0f, config.max_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.d_uv_grad_accum, 0.0f, config.max_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.d_grad_accum_dur, 0.0f, config.max_gaussians * sizeof(float)));
 
   // TRAINING LOOP
   for (int iter = 0; iter < config.num_iters; ++iter) {
