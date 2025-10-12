@@ -42,7 +42,7 @@ public:
    * @note This will set all values for Gaussians to zero. This must be run
    * only after the adaptive density in run and `gaussians` is resized.
    */
-  void reset_grad_accum();
+  void reset_grad_accum(CudaDataManager &cuda);
 
   /**
    * @brief Splits the full image dataset into training and testing sets.
@@ -58,7 +58,7 @@ public:
    * Gaussians that do not contribute significantly to the rendered images. The
    * value is transformed into logit space before being assigned.
    */
-  void reset_opacity();
+  void reset_opacity(CudaDataManager &cuda);
 
   /**
    * @brief Increases the spherical harmonics (SH) degree for all Gaussians.
@@ -67,7 +67,7 @@ public:
    * as training progresses. It upgrades the SH bands up to the maximum level
    * specified in the configuration.
    */
-  void add_sh_band();
+  void add_sh_band(CudaDataManager &cuda);
 
   /**
    * @brief Manages the adaptive densification of Gaussians during training.
@@ -75,7 +75,7 @@ public:
    * Gaussians that need to be split (to represent finer details) or cloned (to
    * fill in under-reconstructed areas) based on their gradients.
    */
-  void adaptive_density();
+  void adaptive_density(CudaDataManager &cuda);
 
   /**
    * @brief Starts and manages the main training loop.
@@ -100,38 +100,20 @@ private:
   /// @brief A vector of images designated for the training set.
   std::vector<Image> train_images;
 
-  /// @brief A vector to hold sum of gradients of image view.
-  std::vector<Eigen::Vector2f> uv_grad_accum;
-
-  /// @brief A vector to hold sum world corrdinates.
-  std::vector<Eigen::Vector3f> xyz_grad_accum;
-
-  /// @brief The duration of gradient accumulation.
-  std::vector<int> grad_accum_dur;
-
-  /// @brief The current training iteration count.
-  int iter = 0;
-
   /**
    * @brief Splits specified Gaussians into multiple, smaller Gaussians.
-   * @param split_mask A boolean vector where `true` indicates the Gaussian at
-   * the corresponding index should be split.
    * @note This method replaces large Gaussians with several smaller ones sampled
    * from their distribution. This helps to model finer details in the scene.
    * The scales of the new Gaussians are reduced by a configurable factor.
    */
-  void split_gaussians(const std::vector<bool> &split_mask);
+  void split_gaussians(CudaDataManager &cuda);
 
   /**
    * @brief Clones specified Gaussians to increase density in under-reconstructed areas.
-   * @param clone_mask A boolean vector where `true` indicates the Gaussian at
-   * the corresponding index should be cloned.
-   * @param xyz_grad_avg A vector with average xyz gradients. This is used to set the
-   * position of cloned Gaussians.
    * @note This method duplicates Gaussians in place, effectively increasing their
    * influence in regions that require more geometric detail.
    */
-  void clone_gaussians(const std::vector<bool> &clone_mask, const std::vector<Eigen::Vector3f> &xyz_grad_avg);
+  void clone_gaussians(CudaDataManager &cuda);
 
   /**
    * @brief Free temporary memory buffers for training iteration
