@@ -15,6 +15,13 @@
 // A test fixture for managing common setup and teardown for GPU resources
 class AdaptiveDensityTest : public ::testing::Test {
 protected:
+  static void SetUpTestSuite() {
+    // Ensure a CUDA device is available
+    int deviceCount = 0;
+    cudaGetDeviceCount(&deviceCount);
+    ASSERT_GT(deviceCount, 0);
+  }
+
   // Pointers to device memory
   float *d_xyz = nullptr, *d_rgb = nullptr, *d_sh = nullptr, *d_opacity = nullptr;
   float *d_scale = nullptr, *d_quaternion = nullptr;
