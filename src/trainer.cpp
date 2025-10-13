@@ -1,6 +1,7 @@
 // trainer.cpp
 
 #include "gsplat/trainer.hpp"
+#include "gsplat/adaptive_density.hpp"
 #include "gsplat/cuda_backward.hpp"
 #include "gsplat/cuda_data.hpp"
 #include "gsplat/cuda_forward.hpp"
@@ -81,9 +82,106 @@ void Trainer::reset_opacity(CudaDataManager &cuda) {
   CHECK_CUDA(cudaMemset(cuda.d_opacity, new_opc, config.max_gaussians * sizeof(float)));
 }
 
+void Trainer::zero_grad(CudaDataManager &cuda, const int num_gaussians, const int num_sh_coef) {
+  CHECK_CUDA(cudaMemset(cuda.d_grad_xyz, 0.0f, 3 * num_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.d_grad_rgb, 0.0f, 3 * num_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.d_grad_sh, 0.0f, num_sh_coef * 3 * num_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.d_grad_opacity, 0.0f, num_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.d_grad_scale, 0.0f, 3 * num_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.d_grad_quaternion, 0.0f, 4 * num_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.d_grad_conic, 0.0f, 3 * num_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.d_grad_uv, 0.0f, 2 * num_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.d_grad_J, 0.0f, 6 * num_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.d_grad_sigma, 0.0f, 9 * num_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.d_grad_xyz_c, 0.0f, 3 * num_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.d_grad_precompute_rgb, 0.0f, 3 * num_gaussians * sizeof(float)));
+}
+
 void Trainer::add_sh_band(CudaDataManager &cuda) {}
 
-void Trainer::adaptive_density(CudaDataManager &cuda, const int iter, const int num_gaussians, const int num_sh_coef) {}
+int Trainer::adaptive_density_step(CudaDataManager &cuda, const int iter, const int num_gaussians,
+                                   const int num_sh_coef) {
+  const int total_size = adaptive_density(
+      num_gaussians, iter, num_sh_coef, config.use_adaptive_fractional_densification, config.adaptive_control_end,
+      config.adaptive_control_start, config.uv_grad_threshold, config.use_fractional_densification,
+      config.uv_grad_percentile, config.scale_norm_percentile, config.max_gaussians, config.use_delete,
+      config.use_clone, config.use_split, config.delete_opacity_threshold, config.clone_scale_threshold,
+      config.num_split_samples, config.split_scale_factor, cuda.d_uv_grad_accum, cuda.d_grad_accum_dur, cuda.d_scale,
+      cuda.d_mask, cuda.d_xyz_grad_accum, cuda.d_xyz, cuda.d_rgb, cuda.d_sh, cuda.d_opacity, cuda.d_quaternion);
+
+  int new_gaussian_size = mask_sum(total_size, cuda.d_mask);
+
+  // --- FILTER PHASE ---
+
+  // filter parameters based on mask
+  filter_strided_vector(total_size, 3, cuda.d_mask, cuda.d_xyz, cuda.d_xyz_culled);
+  filter_strided_vector(total_size, 3, cuda.d_mask, cuda.d_rgb, cuda.d_rgb_culled);
+  filter_strided_vector(total_size, 1, cuda.d_mask, cuda.d_opacity, cuda.d_opacity_culled);
+  filter_strided_vector(total_size, 3, cuda.d_mask, cuda.d_scale, cuda.d_scale_culled);
+  filter_strided_vector(total_size, 4, cuda.d_mask, cuda.d_quaternion, cuda.d_quaternion_culled);
+
+  if (num_sh_coef > 0) {
+  }
+
+  // filter moment vectors for optimizer
+  filter_moment_vectors(total_size, 3, cuda.d_mask, cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_xyz_culled,
+                        cuda.v_grad_xyz_culled);
+  filter_moment_vectors(total_size, 3, cuda.d_mask, cuda.m_grad_rgb, cuda.v_grad_rgb, cuda.m_grad_rgb_culled,
+                        cuda.v_grad_rgb_culled);
+  filter_moment_vectors(total_size, 1, cuda.d_mask, cuda.m_grad_opacity, cuda.v_grad_opacity,
+                        cuda.m_grad_opacity_culled, cuda.v_grad_opacity_culled);
+  filter_moment_vectors(total_size, 3, cuda.d_mask, cuda.m_grad_scale, cuda.v_grad_scale, cuda.m_grad_scale_culled,
+                        cuda.v_grad_scale_culled);
+  filter_moment_vectors(total_size, 4, cuda.d_mask, cuda.m_grad_quaternion, cuda.v_grad_quaternion,
+                        cuda.m_grad_quaternion_culled, cuda.v_grad_quaternion_culled);
+
+  if (num_sh_coef > 0) {
+  }
+
+  // --- COPY PHASE ---
+
+  // copy culled back to parameter vectors
+  CHECK_CUDA(
+      cudaMemcpy(cuda.d_xyz, cuda.d_xyz_culled, new_gaussian_size * 3 * sizeof(float), cudaMemcpyDeviceToDevice));
+  CHECK_CUDA(
+      cudaMemcpy(cuda.d_rgb, cuda.d_rgb_culled, new_gaussian_size * 3 * sizeof(float), cudaMemcpyDeviceToDevice));
+  CHECK_CUDA(cudaMemcpy(cuda.d_opacity, cuda.d_opacity_culled, new_gaussian_size * 1 * sizeof(float),
+                        cudaMemcpyDeviceToDevice));
+  CHECK_CUDA(
+      cudaMemcpy(cuda.d_scale, cuda.d_scale_culled, new_gaussian_size * 3 * sizeof(float), cudaMemcpyDeviceToDevice));
+  CHECK_CUDA(cudaMemcpy(cuda.d_quaternion, cuda.d_quaternion_culled, new_gaussian_size * 4 * sizeof(float),
+                        cudaMemcpyDeviceToDevice));
+
+  if (num_sh_coef > 0) {
+  }
+
+  // copy moment vectors back
+  CHECK_CUDA(cudaMemcpy(cuda.m_grad_xyz, cuda.m_grad_xyz_culled, new_gaussian_size * 3 * sizeof(float),
+                        cudaMemcpyDeviceToDevice));
+  CHECK_CUDA(cudaMemcpy(cuda.v_grad_xyz, cuda.v_grad_xyz_culled, new_gaussian_size * 3 * sizeof(float),
+                        cudaMemcpyDeviceToDevice));
+  CHECK_CUDA(cudaMemcpy(cuda.m_grad_rgb, cuda.m_grad_rgb_culled, new_gaussian_size * 3 * sizeof(float),
+                        cudaMemcpyDeviceToDevice));
+  CHECK_CUDA(cudaMemcpy(cuda.v_grad_rgb, cuda.v_grad_rgb_culled, new_gaussian_size * 3 * sizeof(float),
+                        cudaMemcpyDeviceToDevice));
+  CHECK_CUDA(cudaMemcpy(cuda.m_grad_opacity, cuda.m_grad_opacity_culled, new_gaussian_size * 1 * sizeof(float),
+                        cudaMemcpyDeviceToDevice));
+  CHECK_CUDA(cudaMemcpy(cuda.v_grad_opacity, cuda.v_grad_opacity_culled, new_gaussian_size * 1 * sizeof(float),
+                        cudaMemcpyDeviceToDevice));
+  CHECK_CUDA(cudaMemcpy(cuda.m_grad_scale, cuda.m_grad_scale_culled, new_gaussian_size * 3 * sizeof(float),
+                        cudaMemcpyDeviceToDevice));
+  CHECK_CUDA(cudaMemcpy(cuda.v_grad_scale, cuda.v_grad_scale_culled, new_gaussian_size * 3 * sizeof(float),
+                        cudaMemcpyDeviceToDevice));
+  CHECK_CUDA(cudaMemcpy(cuda.m_grad_quaternion, cuda.m_grad_quaternion_culled, new_gaussian_size * 4 * sizeof(float),
+                        cudaMemcpyDeviceToDevice));
+  CHECK_CUDA(cudaMemcpy(cuda.v_grad_quaternion, cuda.v_grad_quaternion_culled, new_gaussian_size * 4 * sizeof(float),
+                        cudaMemcpyDeviceToDevice));
+
+  if (num_sh_coef > 0) {
+  }
+
+  return new_gaussian_size;
+}
 
 float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera, CudaDataManager &cuda,
                              ForwardPassData &pass_data, const std::vector<cudaStream_t> &streams) {
@@ -219,6 +317,7 @@ void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_
 
   CHECK_CUDA(cudaDeviceSynchronize());
 }
+
 void Trainer::cleanup_iteration_buffers(ForwardPassData &pass_data) {
   CHECK_CUDA(cudaFree(pass_data.d_image_buffer));
   CHECK_CUDA(cudaFree(pass_data.d_weight_per_pixel));
@@ -240,7 +339,6 @@ void Trainer::train() {
   for (int i = 0; i < NUM_STREAMS; ++i) {
     CHECK_CUDA(cudaStreamCreate(&streams[i]));
   }
-  test_train_split();
   reset_grad_accum(cuda);
 
   // Set optimizer moment vectors
@@ -263,30 +361,6 @@ void Trainer::train() {
     ForwardPassData pass_data;
     const int num_gaussians = gaussians.size();
     const int num_sh_coef = (pass_data.l_max + 1) * (pass_data.l_max + 1) - 1;
-
-    // Zero out gradients
-    CHECK_CUDA(cudaMemset(cuda.d_grad_xyz, 0.0f, 3 * num_gaussians * sizeof(float)));
-    CHECK_CUDA(cudaMemset(cuda.d_grad_rgb, 0.0f, 3 * num_gaussians * sizeof(float)));
-    CHECK_CUDA(cudaMemset(cuda.d_grad_sh, 0.0f, num_sh_coef * 3 * num_gaussians * sizeof(float)));
-    CHECK_CUDA(cudaMemset(cuda.d_grad_opacity, 0.0f, num_gaussians * sizeof(float)));
-    CHECK_CUDA(cudaMemset(cuda.d_grad_scale, 0.0f, 3 * num_gaussians * sizeof(float)));
-    CHECK_CUDA(cudaMemset(cuda.d_grad_quaternion, 0.0f, 4 * num_gaussians * sizeof(float)));
-    CHECK_CUDA(cudaMemset(cuda.d_grad_conic, 0.0f, 3 * num_gaussians * sizeof(float)));
-    CHECK_CUDA(cudaMemset(cuda.d_grad_uv, 0.0f, 2 * num_gaussians * sizeof(float)));
-    CHECK_CUDA(cudaMemset(cuda.d_grad_J, 0.0f, 6 * num_gaussians * sizeof(float)));
-    CHECK_CUDA(cudaMemset(cuda.d_grad_sigma, 0.0f, 9 * num_gaussians * sizeof(float)));
-    CHECK_CUDA(cudaMemset(cuda.d_grad_xyz_c, 0.0f, 3 * num_gaussians * sizeof(float)));
-    CHECK_CUDA(cudaMemset(cuda.d_grad_precompute_rgb, 0.0f, 3 * num_gaussians * sizeof(float)));
-
-    // Copy Gaussian data from host to device
-    CHECK_CUDA(cudaMemcpy(cuda.d_xyz, gaussians.xyz.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(cuda.d_rgb, gaussians.rgb.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(
-        cudaMemcpy(cuda.d_opacity, gaussians.opacity.data(), num_gaussians * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(
-        cudaMemcpy(cuda.d_scale, gaussians.scale.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(cuda.d_quaternion, gaussians.quaternion.data(), num_gaussians * 4 * sizeof(float),
-                          cudaMemcpyHostToDevice));
 
     // Get current training image and camera
     Image curr_image = train_images[iter % train_images.size()];
@@ -333,20 +407,10 @@ void Trainer::train() {
     // --- OPTIMIZER STEP ---
     optimizer_step(cuda, pass_data, iter, num_gaussians, num_sh_coef);
 
-    // Copy updated gaussians back to host
-    CHECK_CUDA(cudaMemcpy(gaussians.xyz.data(), cuda.d_xyz, num_gaussians * 3 * sizeof(float), cudaMemcpyDeviceToHost));
-    CHECK_CUDA(cudaMemcpy(gaussians.rgb.data(), cuda.d_rgb, num_gaussians * 3 * sizeof(float), cudaMemcpyDeviceToHost));
-    CHECK_CUDA(cudaMemcpy(gaussians.opacity.data(), cuda.d_opacity, num_gaussians * 1 * sizeof(float),
-                          cudaMemcpyDeviceToHost));
-    CHECK_CUDA(
-        cudaMemcpy(gaussians.scale.data(), cuda.d_scale, num_gaussians * 3 * sizeof(float), cudaMemcpyDeviceToHost));
-    CHECK_CUDA(cudaMemcpy(gaussians.quaternion.data(), cuda.d_quaternion, num_gaussians * 4 * sizeof(float),
-                          cudaMemcpyDeviceToHost));
-
     // --- ADAPTIVE DENSITY ---
     if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&
         iter < config.adaptive_control_end) {
-      adaptive_density(cuda, iter, num_gaussians, num_sh_coef);
+      adaptive_density_step(cuda, iter, num_gaussians, num_sh_coef);
       reset_grad_accum(cuda);
     }
 

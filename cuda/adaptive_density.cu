@@ -233,7 +233,7 @@ fused_adaptive_density_kernel(const int N, const int max_gaussians, const bool u
   }
 }
 
-int adaptive_density(const int N, const int iter, const int num_sh_coef, cudaStream_t stream,
+int adaptive_density(const int N, const int iter, const int num_sh_coef,
                      const bool use_adaptive_fractional_densification, const int adaptive_control_end,
                      const int adaptive_control_start, const float uv_grad_threshold,
                      const bool use_fractional_densification, const float uv_grad_percentile,
@@ -241,8 +241,8 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef, cudaStr
                      const bool use_clone, const bool use_split, const float delete_opacity_threshold,
                      const float clone_scale_threshold, const int num_split_samples, const float split_scale_factor,
                      const float *uv_grad_accum, const int *grad_accum_count, float *scale, bool *d_mask,
-                     const float *xyz_grad_accum, float *xyz, float *rgb, float *sh, float *opacity,
-                     float *quaternion) {
+                     const float *xyz_grad_accum, float *xyz, float *rgb, float *sh, float *opacity, float *quaternion,
+                     cudaStream_t stream) {
   const int threads_per_block = 256;
 
   // Calculate the number of blocks needed to cover all N Gaussians.
@@ -326,10 +326,13 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef, cudaStr
       grad_accum_count, xyz, rgb, sh, opacity, scale, quaternion, num_sh_coef, d_mask, global_index, curand_states);
 
   // Free memory
-  CHECK_CUDA(cudaFree(global_index));
   CHECK_CUDA(cudaFree(uv_grad_avg_norm));
   CHECK_CUDA(cudaFree(scale_max));
   CHECK_CUDA(cudaFree(curand_states));
 
-  return 0;
+  int total_size = 0;
+  CHECK_CUDA(cudaMemcpy(&total_size, global_index, sizeof(int), cudaMemcpyDeviceToHost));
+
+  CHECK_CUDA(cudaFree(global_index));
+  return total_size;
 }

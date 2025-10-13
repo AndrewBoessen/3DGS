@@ -89,6 +89,7 @@ int main(int argc, char *argv[]) {
 
   Trainer trainer = Trainer(config, gaussians, images, cameras);
 
+  trainer.test_train_split();
   trainer.train();
 
   return 0; // Success

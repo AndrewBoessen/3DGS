@@ -92,8 +92,15 @@ private:
   void reset_opacity(CudaDataManager &cuda);
 
   /**
+   * @brief Zero gradient buffers before backward pass
+   * @param[in,out] cuda Device data to store gradients and parameters
+   * @param[in] num_gaussians Total number of trainable Gaussians
+   * @param[in] num_sh_coef The number of spherical harmonics coefficients
+   */
+  void zero_grad(CudaDataManager &cuda, const int num_gaussians, const int num_sh_coef);
+
+  /**
    * @brief Compute gradients from forward pass
-   *
    * @param[in] curr_image Rendered image data
    * @param[in] curr_camera Current camera parameters
    * @param[in,out] cuda Device data to store gradients in
@@ -134,5 +141,5 @@ private:
    * @param[in] num_gaussians Total number of trainable Gaussians
    * @param[in] num_sh_coef The number of spherical harmonics coefficients
    */
-  void adaptive_density(CudaDataManager &cuda, const int iter, const int num_gaussians, const int num_sh_coef);
+  int adaptive_density_step(CudaDataManager &cuda, const int iter, const int num_gaussians, const int num_sh_coef);
 };

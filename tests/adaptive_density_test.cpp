@@ -111,7 +111,7 @@ TEST_F(AdaptiveDensityTest, NoOperation) {
                  {1, 1, 1, 1}                                                              // grad_count
   );
 
-  adaptive_density(N, 0, num_sh_coef, 0, false, 0, 0, 0.0f, false, 0.0f, 0.0f, max_gaussians, false, false, false, 0.1f,
+  adaptive_density(N, 0, num_sh_coef, false, 0, 0, 0.0f, false, 0.0f, 0.0f, max_gaussians, false, false, false, 0.1f,
                    0.001f, 2, 1.6f, d_uv_grad_accum, d_grad_accum_count, d_scale, d_mask, d_xyz_grad_accum, d_xyz,
                    d_rgb, d_sh, d_opacity, d_quaternion);
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -146,7 +146,7 @@ TEST_F(AdaptiveDensityTest, DeletionLogic) {
                  {1, 1, 1, 0} // grad_count
   );
 
-  adaptive_density(N, 0, num_sh_coef, 0, false, 0, 0, 0.0f, false, 0.0f, 0.0f, max_gaussians, true, false, false, 0.1f,
+  adaptive_density(N, 0, num_sh_coef, false, 0, 0, 0.0f, false, 0.0f, 0.0f, max_gaussians, true, false, false, 0.1f,
                    0.0f, 2, 1.6f, d_uv_grad_accum, d_grad_accum_count, d_scale, d_mask, d_xyz_grad_accum, d_xyz, d_rgb,
                    d_sh, d_opacity, d_quaternion);
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -183,7 +183,7 @@ TEST_F(AdaptiveDensityTest, CloningLogic) {
                  {1, 1}    // grad_count
   );
 
-  adaptive_density(N, 0, num_sh_coef, 0, false, 0, 0, uv_split_val, false, 0.0f, 0.0f, max_gaussians, true, true, false,
+  adaptive_density(N, 0, num_sh_coef, false, 0, 0, uv_split_val, false, 0.0f, 0.0f, max_gaussians, true, true, false,
                    0.01f, clone_scale_threshold, 2, 1.6f, d_uv_grad_accum, d_grad_accum_count, d_scale, d_mask,
                    d_xyz_grad_accum, d_xyz, d_rgb, d_sh, d_opacity, d_quaternion);
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -234,7 +234,7 @@ TEST_F(AdaptiveDensityTest, SplittingLogic) {
                  {1, 1}    // grad_count
   );
 
-  adaptive_density(N, 0, num_sh_coef, 0, false, 0, 0, uv_split_val, false, 0.0f, 0.0f, max_gaussians, true, false, true,
+  adaptive_density(N, 0, num_sh_coef, false, 0, 0, uv_split_val, false, 0.0f, 0.0f, max_gaussians, true, false, true,
                    0.01f, clone_scale_threshold, num_split_samples, split_scale_factor, d_uv_grad_accum,
                    d_grad_accum_count, d_scale, d_mask, d_xyz_grad_accum, d_xyz, d_rgb, d_sh, d_opacity, d_quaternion);
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -295,7 +295,7 @@ TEST_F(AdaptiveDensityTest, CombinedOperations) {
                  {1, 1, 1} // grad_count
   );
 
-  adaptive_density(N, 0, num_sh_coef, 0, false, 0, 0, uv_split_val, false, 0.0f, 0.0f, max_gaussians, true, true, true,
+  adaptive_density(N, 0, num_sh_coef, false, 0, 0, uv_split_val, false, 0.0f, 0.0f, max_gaussians, true, true, true,
                    delete_op_threshold, clone_scale_threshold, num_split_samples, 1.6f, d_uv_grad_accum,
                    d_grad_accum_count, d_scale, d_mask, d_xyz_grad_accum, d_xyz, d_rgb, d_sh, d_opacity, d_quaternion);
   CUDA_CHECK(cudaDeviceSynchronize());

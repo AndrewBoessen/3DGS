@@ -395,6 +395,57 @@ void filter_moment_vectors(const int N, const int S, const bool *d_mask, const f
   CHECK_CUDA(cudaFree(mask_sum));
 }
 
+void filter_strided_vector(const int N, const int S, const bool *d_mask, const float *d_v, float *d_v_culled,
+                           cudaStream_t stream) {
+  int *mask_sum;
+  CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
+  void *d_temp_storage = nullptr;
+  size_t temp_storage_bytes = 0;
+
+  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
+  // Allocate temporary storage
+  cudaMalloc(&d_temp_storage, temp_storage_bytes);
+
+  // Run exclusive prefix sum
+  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
+
+  const int threads_per_block = 256;
+  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
+
+  // Apply mask
+  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_v, d_mask, mask_sum, N, d_v_culled, S);
+
+  // Free the temporary storage.
+  CHECK_CUDA(cudaFree(d_temp_storage));
+  CHECK_CUDA(cudaFree(mask_sum));
+}
+
+int mask_sum(const int N, const bool *d_mask) {
+  int *d_out = nullptr;
+  void *d_temp_storage = nullptr;
+
+  // Allocate device memory
+  CHECK_CUDA(cudaMalloc(&d_out, sizeof(int)));
+
+  // Determine temporary storage size
+  size_t temp_storage_bytes = 0;
+  cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_mask, d_out, N);
+
+  // Allocate temporary storage
+  CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+
+  // Perform the sum reduction
+  cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_mask, d_out, N);
+
+  // Copy result back to host
+  int h_out;
+  CHECK_CUDA(cudaMemcpy(&h_out, d_out, sizeof(int), cudaMemcpyDeviceToHost));
+
+  CHECK_CUDA(cudaFree(d_temp_storage));
+  CHECK_CUDA(cudaFree(d_out));
+  return h_out;
+}
+
 void accumulate_gradients(const int N, const bool *d_mask, const float *d_grad_xyz, const float *d_grad_uv,
                           float *d_xyz_grad_accum, float *d_uv_grad_acuum, int *d_grad_accum_dur, cudaStream_t stream) {
   int *mask_sum;
