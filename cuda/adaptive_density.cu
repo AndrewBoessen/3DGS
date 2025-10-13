@@ -1,6 +1,10 @@
 // adaptive_density.cu
 
+#include "checks.cuh"
 #include "gsplat/adaptive_density.hpp"
+#include <cmath>
+#include <ctime>
+#include <thrust/device_vector.h>
 
 __device__ __forceinline__ int get_strided_write_index(const int stride, const bool write, const int lane,
                                                        const unsigned int active_mask, int *global_index) {
@@ -38,13 +42,35 @@ __global__ void setup_states(curandState *state, unsigned long seed) {
   curand_init(seed, idx, 0, &state[idx]);
 }
 
-__global__ void fused_adaptive_density_kernel(
-    const int N, const int max_gaussians, const bool use_delete, const bool use_clone, const bool use_split,
-    const float op_threshold, const float uv_grad_threshold, const float clone_scale_threshold,
-    const float split_scale_threshold, const float uv_split_val, const int num_split_samples,
-    const float split_scale_factor, const float *__restrict__ uv_grad_accum, const float *__restrict__ xyz_grad_accum,
-    const int *__restrict__ grad_accum_count, float *xyz, float *rgb, float *sh, float *opacity, float *scale,
-    float *quaternion, const int num_sh_coef, bool *d_mask, int *d_write_index, curandState *state) {
+__global__ void compute_aux_pre_densify_kernel(const int N, const float *__restrict__ uv_grad_accum,
+                                               const int *__restrict__ grad_accum_count,
+                                               const float *__restrict__ scale, float *__restrict__ uv_grad_avg_norm,
+                                               float *__restrict__ scale_max) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= N)
+    return;
+
+  const int accum_count = grad_accum_count[idx];
+  if (accum_count > 0) {
+    const float2 uv_grad = {uv_grad_accum[idx * 2 + 0], uv_grad_accum[idx * 2 + 1]};
+    const float2 uv_grad_avg = {uv_grad.x / accum_count, uv_grad.y / accum_count};
+    uv_grad_avg_norm[idx] = sqrtf(uv_grad_avg.x * uv_grad_avg.x + uv_grad_avg.y * uv_grad_avg.y);
+  } else {
+    uv_grad_avg_norm[idx] = 0.0f;
+  }
+
+  const float3 exp_scale = {expf(scale[idx * 3 + 0]), expf(scale[idx * 3 + 1]), expf(scale[idx * 3 + 2])};
+  scale_max[idx] = fmaxf(exp_scale.x, fmaxf(exp_scale.y, exp_scale.z));
+}
+
+__global__ void
+fused_adaptive_density_kernel(const int N, const int max_gaussians, const bool use_delete, const bool use_clone,
+                              const bool use_split, const float op_threshold, const float clone_scale_threshold,
+                              const float split_scale_threshold, const float uv_split_val, const int num_split_samples,
+                              const float split_scale_factor, const float *__restrict__ uv_grad_accum,
+                              const float *__restrict__ xyz_grad_accum, const int *__restrict__ grad_accum_count,
+                              float *xyz, float *rgb, float *sh, float *opacity, float *scale, float *quaternion,
+                              const int num_sh_coef, bool *d_mask, int *d_write_index, curandState *state) {
   if (!(use_delete || use_split || use_clone))
     return;
 
@@ -114,7 +140,7 @@ __global__ void fused_adaptive_density_kernel(
   }
 
   // Split
-  const bool split = densify && scale_max > clone_scale_threshold && scale_max > split_scale_threshold;
+  const bool split = (densify && scale_max > clone_scale_threshold) || (scale_max > split_scale_threshold);
 
   if (use_split) {
     const int write_idx = get_strided_write_index(num_split_samples, split, lane_id, active_mask, d_write_index);
@@ -203,4 +229,90 @@ __global__ void fused_adaptive_density_kernel(
   }
 }
 
-int adaptive_density() {}
+int adaptive_density(const int N, const int iter, const int num_sh_coef, const ConfigParameters &config,
+                     CudaDataManager &cuda, cudaStream_t stream) {
+  const int threads_per_block = 256;
+
+  // Calculate the number of blocks needed to cover all N Gaussians.
+  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
+
+  const dim3 gridsize(num_blocks, 1, 1);
+  const dim3 blocksize(threads_per_block, 1, 1);
+
+  // Create random states
+  curandState *curand_states;
+  CHECK_CUDA(cudaMalloc(&curand_states, threads_per_block * num_blocks * sizeof(curandState)));
+
+  setup_states<<<gridsize, blocksize>>>(curand_states, (uint64_t)time(NULL));
+
+  // Allocate memory for auxiliary arrays
+  float *uv_grad_avg_norm, *scale_max;
+  CHECK_CUDA(cudaMalloc(&uv_grad_avg_norm, N * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&scale_max, N * sizeof(float)));
+
+  // Compute auxiliary arrays
+  compute_aux_pre_densify_kernel<<<gridsize, blocksize, 0, stream>>>(N, cuda.uv_grad_accum, cuda.grad_accum_count,
+                                                                     cuda.scale, uv_grad_avg_norm, scale_max);
+
+  // Specify that we do not require a specific output order and do not require deterministic results
+  auto requirements = cuda::execution::require(cuda::execution::determinism::not_guaranteed,
+                                               cuda::execution::output_ordering::unsorted);
+  // Get percentiles
+  float scale_factor = 1.0f;
+  if (config.use_adaptive_fractional_densification) {
+    scale_factor = (static_cast<float>(config.adaptive_control_end - iter) /
+                    static_cast<float>(config.adaptive_control_end - config.adaptive_control_start) * 2.0f);
+  }
+
+  float uv_split_val = config.uv_grad_threshold;
+  if (config.use_fractional_densification) {
+    const int uv_k = static_cast<int>(floorf(N * ((1.0f - config.uv_grad_percentile) * scale_factor)));
+    auto output = thrust::device_vector<float>(uv_k, thrust::no_init);
+    // Query temporary storage requirements
+    size_t temp_storage_bytes{};
+    cub::DeviceTopK::MaxKeys(nullptr, temp_storage_bytes, uv_grad_avg_norm, output.begin(), N, uv_k, requirements);
+
+    // Allocate temporary storage
+    thrust::device_vector<char> temp_storage(temp_storage_bytes, thrust::no_init);
+
+    cub::DeviceTopK::MaxKeys(thrust::raw_pointer_cast(temp_storage.data()), temp_storage_bytes, uv_grad_avg_norm,
+                             output.begin(), N, k, requirements);
+    thrust::sort(output.begin(), output.end());
+    uv_split_val = output[0];
+  }
+
+  const int scale_k = static_cast<int>(floorf(N * ((1.0f - config.scale_norm_percentile) * scale_factor)));
+  auto output = thrust::device_vector<float>(scale_k, thrust::no_init);
+  // Query temporary storage requirements
+  size_t temp_storage_bytes{};
+  cub::DeviceTopK::MaxKeys(nullptr, temp_storage_bytes, scale_max, output.begin(), N, scale_k, requirements);
+
+  // Allocate temporary storage
+  thrust::device_vector<char> temp_storage(temp_storage_bytes, thrust::no_init);
+
+  cub::DeviceTopK::MaxKeys(thrust::raw_pointer_cast(temp_storage.data()), temp_storage_bytes, scale_max, output.begin(),
+                           N, scale_k, requirements);
+  thrust::sort(output.begin(), output.end());
+  float split_scale_threshold = output[0];
+
+  // Reset mask before adaptive density checks
+  CHECK_CUDA(cudaMemset(cuda.d_mask, false, config.max_gaussians * sizeof(bool)));
+  // Set global index to end of array
+  int *global_index;
+  CHECK_CUDA(cudaMalloc(&global_index, sizeof(int)));
+  CHECK_CUDA(cudaMemset(global_index, N, sizeof(int)));
+
+  fused_adaptive_density_kernel<<<gridsize, blocksize, 0, stream>>>(
+      N, config.max_gaussians, config.use_delete, config.use_clone, config.use_split, config.delete_opacity_threashold,
+      config.clone_scale_threshold, split_scale_threshold, uv_split_val, config.num_split_samples,
+      config.split_scale_factor, cuda.uv_grad_accum, cuda.xyz_grad_accum, cuda.grad_accum_count, cuda.xyz, cuda.rgb,
+      cuda.sh, cuda.opacity, cuda.scale, cuda.quaternion, num_sh_coef, cuda.d_mask, global_index, curand_states);
+
+  // Free memory
+  CHECK_CUDA(cudaFree(global_index));
+  CHECK_CUDA(cudaFree(uv_grad_avg_norm));
+  CHECK_CUDA(cudaFree(scale_max));
+  CHECK_CUDA(cudaFree(curand_states));
+
+  return 0;
+}
