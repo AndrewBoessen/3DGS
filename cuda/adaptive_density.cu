@@ -165,21 +165,20 @@ __global__ void fused_adaptive_density_kernel(
       for (int i = 0; i < num_split_samples; i++) {
         // add new Gaussians
         d_mask[write_idx + i] = true;
-        float rand_scale_x = curand_uniform(&state[idx]) * exp_scale.x;
-        float rand_scale_y = curand_uniform(&state[idx]) * exp_scale.y;
-        float rand_scale_z = curand_uniform(&state[idx]) * exp_scale.z;
+        const float v_x = curand_uniform(&state[idx]) * exp_scale.x;
+        const float v_y = curand_uniform(&state[idx]) * exp_scale.y;
+        const float v_z = curand_uniform(&state[idx]) * exp_scale.z;
 
-        // Multiply scale by rotation matrix
-        rand_scale_x = rand_scale_x * r00 + rand_scale_x * r10 + rand_scale_x * r20;
-        rand_scale_y = rand_scale_y * r01 + rand_scale_y * r11 + rand_scale_y * r21;
-        rand_scale_z = rand_scale_z * r02 + rand_scale_z * r12 + rand_scale_z * r22;
+        const float rot_v_x = v_x * r00 + v_y * r01 + v_z * r02;
+        const float rot_v_y = v_x * r10 + v_y * r11 + v_z * r12;
+        const float rot_v_z = v_x * r20 + v_y * r21 + v_z * r22;
 
         // Write new Gaussian
 
         // xyz
-        xyz[(write_idx + i) * 3 + 0] = new_x + rand_scale_x;
-        xyz[(write_idx + i) * 3 + 1] = new_y + rand_scale_y;
-        xyz[(write_idx + i) * 3 + 2] = new_z + rand_scale_z;
+        xyz[(write_idx + i) * 3 + 0] = new_x + rot_v_x;
+        xyz[(write_idx + i) * 3 + 1] = new_y + rot_v_y;
+        xyz[(write_idx + i) * 3 + 2] = new_z + rot_v_z;
         // rgb
 #pragma unroll
         for (int j = 0; j < 3; j++)
