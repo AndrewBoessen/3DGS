@@ -57,7 +57,7 @@ target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp Eigen3::Eige
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu cuda/spherical_harmonics.cu cuda/render.cu cuda/loss.cu cuda/projection_backward.cu cuda/gaussian_backward.cu cuda/spherical_harmonics_backward.cu cuda/render_backward.cu cuda/optimizer.cu)
+add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu cuda/spherical_harmonics.cu cuda/render.cu cuda/loss.cu cuda/projection_backward.cu cuda/gaussian_backward.cu cuda/spherical_harmonics_backward.cu cuda/render_backward.cu cuda/optimizer.cu cuda/adaptive_density.cu)
 
 target_include_directories(gsplat_cuda
   PUBLIC
