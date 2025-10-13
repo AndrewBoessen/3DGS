@@ -83,11 +83,7 @@ void Trainer::reset_opacity(CudaDataManager &cuda) {
 
 void Trainer::add_sh_band(CudaDataManager &cuda) {}
 
-void Trainer::split_gaussians(CudaDataManager &cuda) {}
-
-void Trainer::clone_gaussians(CudaDataManager &cuda) {}
-
-void Trainer::adaptive_density(CudaDataManager &cuda) {}
+void Trainer::adaptive_density(CudaDataManager &cuda, const int iter, const int num_gaussians, const int num_sh_coef) {}
 
 float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera, CudaDataManager &cuda,
                              ForwardPassData &pass_data, const std::vector<cudaStream_t> &streams) {
@@ -155,8 +151,8 @@ float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera,
   return loss;
 }
 
-void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data, int iter, int num_gaussians,
-                             int num_sh_coef) {
+void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data, const int iter,
+                             const int num_gaussians, const int num_sh_coef) {
   // Select moment vectors by filtering based on the culled mask
   filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_xyz_culled,
                         cuda.v_grad_xyz_culled);
@@ -350,7 +346,7 @@ void Trainer::train() {
     // --- ADAPTIVE DENSITY ---
     if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&
         iter < config.adaptive_control_end) {
-      adaptive_density(cuda);
+      adaptive_density(cuda, iter, num_gaussians, num_sh_coef);
       reset_grad_accum(cuda);
     }
 

@@ -38,44 +38,12 @@ public:
         cameras(std::move(cameras)) {}
 
   /**
-   * @breif Resets the gradient accumulation for xyz and uv.
-   * @note This will set all values for Gaussians to zero. This must be run
-   * only after the adaptive density in run and `gaussians` is resized.
-   */
-  void reset_grad_accum(CudaDataManager &cuda);
-
-  /**
    * @brief Splits the full image dataset into training and testing sets.
    * @note This method uses a deterministic "every N-th image" strategy based on the
    * `test_split_ratio` in the configuration. Images are sorted by name before
    * splitting to ensure reproducibility across runs.
    */
   void test_train_split();
-
-  /**
-   * @brief Resets the opacity of all Gaussians to a predefined value.
-   * @note This is typically done at the beginning of training to help prune
-   * Gaussians that do not contribute significantly to the rendered images. The
-   * value is transformed into logit space before being assigned.
-   */
-  void reset_opacity(CudaDataManager &cuda);
-
-  /**
-   * @brief Increases the spherical harmonics (SH) degree for all Gaussians.
-   * @note This function progressively increases the complexity of the Gaussian
-   * color representation, allowing for more detailed and view-dependent effects
-   * as training progresses. It upgrades the SH bands up to the maximum level
-   * specified in the configuration.
-   */
-  void add_sh_band(CudaDataManager &cuda);
-
-  /**
-   * @brief Manages the adaptive densification of Gaussians during training.
-   * @note This function is intended to be called periodically. It identifies
-   * Gaussians that need to be split (to represent finer details) or cloned (to
-   * fill in under-reconstructed areas) based on their gradients.
-   */
-  void adaptive_density(CudaDataManager &cuda);
 
   /**
    * @brief Starts and manages the main training loop.
@@ -101,25 +69,27 @@ private:
   std::vector<Image> train_images;
 
   /**
-   * @brief Splits specified Gaussians into multiple, smaller Gaussians.
-   * @note This method replaces large Gaussians with several smaller ones sampled
-   * from their distribution. This helps to model finer details in the scene.
-   * The scales of the new Gaussians are reduced by a configurable factor.
-   */
-  void split_gaussians(CudaDataManager &cuda);
-
-  /**
-   * @brief Clones specified Gaussians to increase density in under-reconstructed areas.
-   * @note This method duplicates Gaussians in place, effectively increasing their
-   * influence in regions that require more geometric detail.
-   */
-  void clone_gaussians(CudaDataManager &cuda);
-
-  /**
    * @brief Free temporary memory buffers for training iteration
    * @param[in] pass_data Temporary buffer data
    */
   void cleanup_iteration_buffers(ForwardPassData &pass_data);
+
+  /**
+   * @breif Resets the gradient accumulation for xyz and uv.
+   * @note This will set all values for Gaussians to zero. This must be run
+   * only after the adaptive density in run and `gaussians` is resized.
+   * @param[in,out] cuda Device data to store gradients and parameters
+   */
+  void reset_grad_accum(CudaDataManager &cuda);
+
+  /**
+   * @brief Resets the opacity of all Gaussians to a predefined value.
+   * @note This is typically done at the beginning of training to help prune
+   * Gaussians that do not contribute significantly to the rendered images. The
+   * value is transformed into logit space before being assigned.
+   * @param[in,out] cuda Device data to store gradients and parameters
+   */
+  void reset_opacity(CudaDataManager &cuda);
 
   /**
    * @brief Compute gradients from forward pass
@@ -142,6 +112,27 @@ private:
    * @param[in] num_gaussians Total number of trainable Gaussians
    * @param[in] num_sh_coef The number of spherical harmonics coefficients
    */
-  void optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data, int iter, int num_gaussians,
-                      int num_sh_coef);
+  void optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data, const int iter, const int num_gaussians,
+                      const int num_sh_coef);
+
+  /**
+   * @brief Increases the spherical harmonics (SH) degree for all Gaussians.
+   * @note This function progressively increases the complexity of the Gaussian
+   * color representation, allowing for more detailed and view-dependent effects
+   * as training progresses. It upgrades the SH bands up to the maximum level
+   * specified in the configuration.
+   */
+  void add_sh_band(CudaDataManager &cuda);
+
+  /**
+   * @brief Manages the adaptive densification of Gaussians during training.
+   * @note This function is intended to be called periodically. It identifies
+   * Gaussians that need to be split (to represent finer details) or cloned (to
+   * fill in under-reconstructed areas) based on their gradients.
+   * @param[in,out] cuda Device data to store gradients and parameters
+   * @param[in] iter The iteration number
+   * @param[in] num_gaussians Total number of trainable Gaussians
+   * @param[in] num_sh_coef The number of spherical harmonics coefficients
+   */
+  void adaptive_density(CudaDataManager &cuda, const int iter, const int num_gaussians, const int num_sh_coef);
 };
