@@ -14,8 +14,8 @@ num_iters: 7000
 ssim_frac: 0.2
 base_lr: 0.002
 xyz_lr_multiplier: 0.1
-quat_lr_multiplier: 2
-scale_lr_multiplier: 5
+quat_lr_multiplier: 1
+scale_lr_multiplier: 2
 opacity_lr_multiplier: 10
 rgb_lr_multiplier: 2
 sh_lr_multiplier: 0.1
@@ -33,8 +33,8 @@ add_sh_band_interval: 1000
 use_split: true
 use_clone: true
 use_delete: true
-adaptive_control_start: 750
-adaptive_control_end: 6500
+adaptive_control_start: 500
+adaptive_control_end: 5000
 adaptive_control_interval: 100
 max_gaussians: 4250000
 delete_opacity_threshold: 0.1

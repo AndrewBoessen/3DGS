@@ -77,7 +77,7 @@ void Trainer::reset_grad_accum(CudaDataManager &cuda) {
 void Trainer::reset_opacity(CudaDataManager &cuda) {
   // set all Gaussian opacity
   const double opc = config.reset_opacity_value;
-  const float new_opc = log(opc) - log(1 - opc);
+  const float new_opc = log(opc) - log(1.0f - opc);
 
   CHECK_CUDA(cudaMemset(cuda.d_opacity, new_opc, config.max_gaussians * sizeof(float)));
 }
@@ -196,23 +196,37 @@ int Trainer::adaptive_density_step(CudaDataManager &cuda, const int iter, const 
 }
 
 float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera, CudaDataManager &cuda,
-                             ForwardPassData &pass_data, const std::vector<cudaStream_t> &streams) {
-  const int NUM_STREAMS = streams.size();
+                             ForwardPassData &pass_data) {
   const int width = (int)curr_camera.width;
   const int height = (int)curr_camera.height;
 
-  // Load ground truth image and copy to device
+  // Load ground truth image from file
   cv::Mat bgr_gt_image = cv::imread(curr_image.name, cv::IMREAD_COLOR);
+
+  // **1. Add robust error handling**
+  if (bgr_gt_image.empty()) {
+    // Throw an exception if the image failed to load, preventing a halt.
+    throw std::runtime_error("Failed to load image: " + curr_image.name);
+  }
+  if (bgr_gt_image.cols != width || bgr_gt_image.rows != height) {
+    // Throw an exception if the image dimensions do not match expectations.
+    throw std::runtime_error("Image dimensions mismatch for " + curr_image.name + ". Expected " +
+                             std::to_string(width) + "x" + std::to_string(height) + ", but got " +
+                             std::to_string(bgr_gt_image.cols) + "x" + std::to_string(bgr_gt_image.rows));
+  }
+
+  // Convert image to the required format (RGB, 32-bit float)
   cv::Mat rgb_gt_image;
   cv::cvtColor(bgr_gt_image, rgb_gt_image, cv::COLOR_BGR2RGB);
   cv::Mat float_gt_image;
   rgb_gt_image.convertTo(float_gt_image, CV_32FC3, 1.0 / 255.0);
-  std::vector<float> gt_image_data_vec((float *)float_gt_image.datastart, (float *)float_gt_image.dataend);
 
+  // **2. Copy directly and efficiently to the device**
+  // This avoids creating an unnecessary intermediate std::vector.
   float *d_gt_image;
-  CHECK_CUDA(cudaMalloc(&d_gt_image, height * width * 3 * sizeof(float)));
-  CHECK_CUDA(
-      cudaMemcpy(d_gt_image, gt_image_data_vec.data(), height * width * 3 * sizeof(float), cudaMemcpyHostToDevice));
+  const size_t image_size_bytes = (size_t)height * width * 3 * sizeof(float);
+  CHECK_CUDA(cudaMalloc(&d_gt_image, image_size_bytes));
+  CHECK_CUDA(cudaMemcpy(d_gt_image, float_gt_image.data, image_size_bytes, cudaMemcpyHostToDevice));
 
   // Compute loss and image gradient
   float *d_grad_image;
@@ -225,35 +239,20 @@ float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera,
                         pass_data.d_splats_per_pixel, pass_data.d_weight_per_pixel, d_grad_image, width, height,
                         cuda.d_grad_precompute_rgb, cuda.d_grad_opacity, cuda.d_grad_uv, cuda.d_grad_conic);
 
-  int offset = 0;
-  for (int i = 0; i < NUM_STREAMS; ++i) {
-    int remainder = pass_data.num_culled % NUM_STREAMS;
-    int size = pass_data.num_culled / NUM_STREAMS + (i < remainder ? 1 : 0);
-    if (size <= 0)
-      continue;
+  const int num_sh_coef = (pass_data.l_max + 1) * (pass_data.l_max + 1) - 1;
 
-    const int num_sh_coef = (pass_data.l_max + 1) * (pass_data.l_max + 1) - 1;
-
-    cudaStream_t stream = streams[i];
-    precompute_spherical_harmonics_backward(cuda.d_xyz_c_culled + offset * 3, cuda.d_grad_precompute_rgb + offset * 3,
-                                            pass_data.l_max, size, cuda.d_grad_sh + offset * num_sh_coef,
-                                            cuda.d_grad_rgb + offset * 3, stream);
-    compute_conic_backward(pass_data.d_J + offset * 6, pass_data.d_sigma + offset * 9, cuda.d_T,
-                           cuda.d_grad_conic + offset * 3, size, cuda.d_grad_J + offset * 6,
-                           cuda.d_grad_sigma + offset * 9, stream);
-    compute_projection_jacobian_backward(cuda.d_xyz_c_culled + offset * 3, cuda.d_K, cuda.d_grad_J + offset * 6, size,
-                                         cuda.d_grad_xyz_c + offset * 3, stream);
-    compute_sigma_backward(cuda.d_quaternion_culled + offset * 4, cuda.d_scale_culled + offset * 3,
-                           cuda.d_grad_sigma + offset * 9, size, cuda.d_grad_quaternion + offset * 4,
-                           cuda.d_grad_scale + offset * 3, stream);
-    camera_intrinsic_projection_backward(cuda.d_xyz_c_culled + offset * 3, cuda.d_K, cuda.d_grad_uv + offset * 2, size,
-                                         cuda.d_grad_xyz_c + offset * 3, stream);
-    camera_extrinsic_projection_backward(cuda.d_xyz_culled + offset * 3, cuda.d_T, cuda.d_grad_xyz_c + offset * 3, size,
-                                         cuda.d_grad_xyz + offset * 3, stream);
-    offset += size;
-  }
-
-  CHECK_CUDA(cudaDeviceSynchronize());
+  precompute_spherical_harmonics_backward(cuda.d_xyz_c_culled, cuda.d_grad_precompute_rgb, pass_data.l_max,
+                                          pass_data.num_culled, cuda.d_grad_sh, cuda.d_grad_rgb);
+  compute_conic_backward(pass_data.d_J, pass_data.d_sigma, cuda.d_T, cuda.d_grad_conic, pass_data.num_culled,
+                         cuda.d_grad_J, cuda.d_grad_sigma);
+  compute_projection_jacobian_backward(cuda.d_xyz_c_culled, cuda.d_K, cuda.d_grad_J, pass_data.num_culled,
+                                       cuda.d_grad_xyz_c);
+  compute_sigma_backward(cuda.d_quaternion_culled, cuda.d_scale_culled, cuda.d_grad_sigma, pass_data.num_culled,
+                         cuda.d_grad_quaternion, cuda.d_grad_scale);
+  camera_intrinsic_projection_backward(cuda.d_xyz_c_culled, cuda.d_K, cuda.d_grad_uv, pass_data.num_culled,
+                                       cuda.d_grad_xyz_c);
+  camera_extrinsic_projection_backward(cuda.d_xyz_culled, cuda.d_T, cuda.d_grad_xyz_c, pass_data.num_culled,
+                                       cuda.d_grad_xyz);
 
   CHECK_CUDA(cudaFree(d_gt_image));
   CHECK_CUDA(cudaFree(d_grad_image));
@@ -326,8 +325,6 @@ void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_
   // Update gradient accumulators
   accumulate_gradients(num_gaussians, cuda.d_mask, cuda.d_grad_xyz, cuda.d_grad_uv, cuda.d_xyz_grad_accum,
                        cuda.d_uv_grad_accum, cuda.d_grad_accum_dur);
-
-  CHECK_CUDA(cudaDeviceSynchronize());
 }
 
 void Trainer::cleanup_iteration_buffers(ForwardPassData &pass_data) {
@@ -343,14 +340,9 @@ void Trainer::cleanup_iteration_buffers(ForwardPassData &pass_data) {
 }
 
 void Trainer::train() {
-  constexpr int NUM_STREAMS = 4;
-
-  // Setup: Initialize CUDA data manager, streams, and data splits
+  // Setup: Initialize CUDA data manager and data splits
   CudaDataManager cuda(config.max_gaussians);
-  std::vector<cudaStream_t> streams(NUM_STREAMS);
-  for (int i = 0; i < NUM_STREAMS; ++i) {
-    CHECK_CUDA(cudaStreamCreate(&streams[i]));
-  }
+
   reset_grad_accum(cuda);
 
   // Set optimizer moment vectors
@@ -413,7 +405,7 @@ void Trainer::train() {
     CHECK_CUDA(cudaMemcpy(cuda.d_T, h_T, 12 * sizeof(float), cudaMemcpyHostToDevice));
 
     // --- FORWARD PASS via RASTERIZE MODULE ---
-    rasterize_image(num_gaussians, curr_camera, config, cuda, pass_data, streams);
+    rasterize_image(num_gaussians, curr_camera, config, cuda, pass_data);
 
     if (pass_data.num_culled == 0) {
       std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;
@@ -426,7 +418,7 @@ void Trainer::train() {
                  curr_camera.height);
 
     // --- BACKWARD PASS ---
-    float loss = backward_pass(curr_image, curr_camera, cuda, pass_data, streams);
+    float loss = backward_pass(curr_image, curr_camera, cuda, pass_data);
     std::cout << "LOSS TOTAL " << loss << std::endl;
 
     // --- OPTIMIZER STEP ---
@@ -439,11 +431,11 @@ void Trainer::train() {
       reset_grad_accum(cuda);
     }
 
-    if (iter > config.reset_opacity_start && iter % config.reset_opacity_interval == 0 &&
-        iter < config.reset_opacity_end) {
-      reset_opacity(cuda);
-      reset_grad_accum(cuda);
-    }
+    // if (iter > config.reset_opacity_start && iter % config.reset_opacity_interval == 0 &&
+    //     iter < config.reset_opacity_end) {
+    //   reset_opacity(cuda);
+    //   reset_grad_accum(cuda);
+    // }
 
     // Free temporary buffers for this iteration
     cleanup_iteration_buffers(pass_data);

@@ -90,10 +90,10 @@ TEST_F(ConfigTest, ParseValidConfig) {
   // Verify a few key parameters to ensure the file was read correctly.
   EXPECT_EQ(params.dataset_path, "/data/nerf_synthetic/lego");
   EXPECT_EQ(params.downsample_factor, 2);
-  EXPECT_DOUBLE_EQ(params.ssim_frac, 0.2);
+  EXPECT_FLOAT_EQ(params.ssim_frac, 0.2);
   EXPECT_TRUE(params.use_background);
   EXPECT_EQ(params.max_sh_band, 2);
-  EXPECT_DOUBLE_EQ(params.split_scale_factor, 1.5);
+  EXPECT_FLOAT_EQ(params.split_scale_factor, 1.5);
 }
 
 // Test that parsing a non-existent file throws an exception.

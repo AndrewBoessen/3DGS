@@ -44,24 +44,23 @@ __global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *
     // Cooperatively load a batch of splat data into shared memory
     for (int i = thread_id; i < splat_batch_size; i += block_size) {
       const int tile_splat_idx = batch_idx * splat_batch_size + i;
-      if (tile_splat_idx >= num_splats_this_tile) {
-        break;
-      }
-      const int global_splat_idx = splat_idx_start + tile_splat_idx;
+      if (tile_splat_idx < num_splats_this_tile) {
+        const int global_splat_idx = splat_idx_start + tile_splat_idx;
 
-      const int gaussian_idx = gaussian_idx_by_splat_idx[global_splat_idx];
-      _uvs[i * 2 + 0] = uvs[gaussian_idx * 2 + 0];
-      _uvs[i * 2 + 1] = uvs[gaussian_idx * 2 + 1];
-      _opacity[i] = opacity[gaussian_idx];
+        const int gaussian_idx = gaussian_idx_by_splat_idx[global_splat_idx];
+        _uvs[i * 2 + 0] = uvs[gaussian_idx * 2 + 0];
+        _uvs[i * 2 + 1] = uvs[gaussian_idx * 2 + 1];
+        _opacity[i] = opacity[gaussian_idx];
 
 #pragma unroll
-      for (int channel = 0; channel < 3; channel++) {
-        _rgb[i * 3 + channel] = rgb[gaussian_idx * 3 + channel];
-      }
+        for (int channel = 0; channel < 3; channel++) {
+          _rgb[i * 3 + channel] = rgb[gaussian_idx * 3 + channel];
+        }
 
 #pragma unroll
-      for (int j = 0; j < 3; j++) {
-        _conic[i * 3 + j] = conic[gaussian_idx * 3 + j];
+        for (int j = 0; j < 3; j++) {
+          _conic[i * 3 + j] = conic[gaussian_idx * 3 + j];
+        }
       }
     }
     __syncthreads();

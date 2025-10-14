@@ -567,7 +567,6 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   if (sorted_gaussians == nullptr) {
     coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N,
                                                              d_buffer_bytes, nullptr, d_buffer_index);
-    CHECK_CUDA(cudaGetLastError());
 
     // update host bytes counter
     int temp_bytes = 0;
@@ -585,7 +584,6 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
   coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N, d_buffer_bytes,
                                                            d_pairs, d_buffer_index);
-  CHECK_CUDA(cudaGetLastError());
 
   // get max z depth for key multiplier
   float *d_max_z;

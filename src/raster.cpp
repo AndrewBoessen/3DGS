@@ -3,27 +3,15 @@
 #include "gsplat/cuda_forward.hpp"
 
 void rasterize_image(const int num_gaussians, const Camera &camera, const ConfigParameters &config,
-                     CudaDataManager &cuda, ForwardPassData &pass_data, const std::vector<cudaStream_t> &streams) {
-  const int NUM_STREAMS = streams.size();
+                     CudaDataManager &cuda, ForwardPassData &pass_data) {
   const int width = (int)camera.width;
   const int height = (int)camera.height;
 
   // Step 1: Projections and Culling
-  int offset = 0;
-  for (int i = 0; i < NUM_STREAMS; ++i) {
-    int remainder = num_gaussians % NUM_STREAMS;
-    int size = num_gaussians / NUM_STREAMS + (i < remainder ? 1 : 0);
-    if (size <= 0)
-      continue;
-
-    cudaStream_t stream = streams[i];
-    camera_extrinsic_projection(cuda.d_xyz + offset * 3, cuda.d_T, size, cuda.d_xyz_c + offset * 3, stream);
-    camera_intrinsic_projection(cuda.d_xyz_c + offset * 3, cuda.d_K, size, cuda.d_uv + offset * 2, stream);
-    cull_gaussians(cuda.d_uv + offset * 2, cuda.d_xyz_c + offset * 3, size, config.near_thresh, config.far_thresh,
-                   config.cull_mask_padding, width, height, cuda.d_mask + offset, stream);
-    offset += size;
-  }
-  CHECK_CUDA(cudaDeviceSynchronize()); // Sync streams to ensure mask is complete
+  camera_extrinsic_projection(cuda.d_xyz, cuda.d_T, num_gaussians, cuda.d_xyz_c);
+  camera_intrinsic_projection(cuda.d_xyz_c, cuda.d_K, num_gaussians, cuda.d_uv);
+  cull_gaussians(cuda.d_uv, cuda.d_xyz_c, num_gaussians, config.near_thresh, config.far_thresh,
+                 config.cull_mask_padding, width, height, cuda.d_mask);
 
   // subtract 1 to account for band 0 being rgb
   const int num_sh_coef = (pass_data.l_max + 1) * (pass_data.l_max + 1) - 1;
@@ -33,6 +21,8 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
                            cuda.d_rgb_culled, cuda.d_sh_culled, cuda.d_opacity_culled, cuda.d_scale_culled,
                            cuda.d_quaternion_culled, cuda.d_uv_culled, cuda.d_xyz_c_culled, &pass_data.num_culled);
 
+  CHECK_CUDA(cudaDeviceSynchronize());
+
   if (pass_data.num_culled == 0) {
     return; // No Gaussians in view
   }
@@ -40,40 +30,17 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
   // Step 3; Compute final RGB values from spherical harmonics
   CHECK_CUDA(cudaMalloc(&pass_data.d_precomputed_rgb, pass_data.num_culled * 3 * sizeof(float)));
 
-  offset = 0;
-  for (int i = 0; i < NUM_STREAMS; ++i) {
-    int remainder = pass_data.num_culled % NUM_STREAMS;
-    int size = pass_data.num_culled / NUM_STREAMS + (i < remainder ? 1 : 0);
-    if (size <= 0)
-      continue;
-
-    cudaStream_t stream = streams[i];
-    precompute_spherical_harmonics(cuda.d_xyz_c_culled + offset * 3, cuda.d_sh_culled + offset * num_sh_coef,
-                                   cuda.d_rgb_culled + offset * 3, pass_data.l_max, size,
-                                   pass_data.d_precomputed_rgb + offset * 3, stream);
-    offset += size;
-  }
+  precompute_spherical_harmonics(cuda.d_xyz_c_culled, cuda.d_sh_culled, cuda.d_rgb_culled, pass_data.l_max,
+                                 pass_data.num_culled, pass_data.d_precomputed_rgb);
 
   // Step 4: Compute Covariance and Conics
   CHECK_CUDA(cudaMalloc(&pass_data.d_sigma, pass_data.num_culled * 9 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&pass_data.d_conic, pass_data.num_culled * 3 * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&pass_data.d_J, pass_data.num_culled * 6 * sizeof(float)));
 
-  offset = 0;
-  for (int i = 0; i < NUM_STREAMS; ++i) {
-    int remainder = pass_data.num_culled % NUM_STREAMS;
-    int size = pass_data.num_culled / NUM_STREAMS + (i < remainder ? 1 : 0);
-    if (size <= 0)
-      continue;
-
-    cudaStream_t stream = streams[i];
-    compute_sigma(cuda.d_quaternion_culled + offset * 4, cuda.d_scale_culled + offset * 3, size,
-                  pass_data.d_sigma + offset * 9, stream);
-    compute_conic(cuda.d_xyz_c_culled + offset * 3, cuda.d_K, pass_data.d_sigma + offset * 9, cuda.d_T, size,
-                  pass_data.d_J + offset * 6, pass_data.d_conic + offset * 3, stream);
-    offset += size;
-  }
-  CHECK_CUDA(cudaDeviceSynchronize()); // Sync streams for sorting
+  compute_sigma(cuda.d_quaternion_culled, cuda.d_scale_culled, pass_data.num_culled, pass_data.d_sigma);
+  compute_conic(cuda.d_xyz_c_culled, cuda.d_K, pass_data.d_sigma, cuda.d_T, pass_data.num_culled, pass_data.d_J,
+                pass_data.d_conic);
 
   // Step 5: Sort Gaussians by tile
   const int n_tiles_x = (width + TILE_SIZE_FWD - 1) / TILE_SIZE_FWD;

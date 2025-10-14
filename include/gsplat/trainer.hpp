@@ -105,11 +105,10 @@ private:
    * @param[in] curr_camera Current camera parameters
    * @param[in,out] cuda Device data to store gradients in
    * @param[in,out] pass_data Forward pass temporary buffers
-   * @param[in] streams CUDA streams to use
    * @return Loss value
    */
   float backward_pass(const Image &curr_image, const Camera &curr_camera, CudaDataManager &cuda,
-                      ForwardPassData &pass_data, const std::vector<cudaStream_t> &streams);
+                      ForwardPassData &pass_data);
 
   /**
    * @brief Perform optimizer step to update Gaussian parameters
