@@ -355,12 +355,25 @@ void Trainer::train() {
   CHECK_CUDA(cudaMemset(cuda.v_grad_scale, 0.0f, config.max_gaussians * 3 * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.v_grad_quaternion, 0.0f, config.max_gaussians * 4 * sizeof(float)));
 
+  // Copy Gaussian data from host to device
+  int num_gaussians = gaussians.size();
+  CHECK_CUDA(cudaMemcpy(cuda.d_xyz, gaussians.xyz.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
+  CHECK_CUDA(cudaMemcpy(cuda.d_rgb, gaussians.rgb.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
+  CHECK_CUDA(
+      cudaMemcpy(cuda.d_opacity, gaussians.opacity.data(), num_gaussians * sizeof(float), cudaMemcpyHostToDevice));
+  CHECK_CUDA(
+      cudaMemcpy(cuda.d_scale, gaussians.scale.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
+  CHECK_CUDA(cudaMemcpy(cuda.d_quaternion, gaussians.quaternion.data(), num_gaussians * 4 * sizeof(float),
+                        cudaMemcpyHostToDevice));
+
   // TRAINING LOOP
   for (int iter = 0; iter < config.num_iters; ++iter) {
     std::cout << "ITER " << iter << std::endl;
+    std::cout << "NUM GAUSS" << num_gaussians << std::endl;
     ForwardPassData pass_data;
-    const int num_gaussians = gaussians.size();
     const int num_sh_coef = (pass_data.l_max + 1) * (pass_data.l_max + 1) - 1;
+
+    zero_grad(cuda, num_gaussians, num_sh_coef);
 
     // Get current training image and camera
     Image curr_image = train_images[iter % train_images.size()];
@@ -410,7 +423,7 @@ void Trainer::train() {
     // --- ADAPTIVE DENSITY ---
     if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&
         iter < config.adaptive_control_end) {
-      adaptive_density_step(cuda, iter, num_gaussians, num_sh_coef);
+      num_gaussians = adaptive_density_step(cuda, iter, num_gaussians, num_sh_coef);
       reset_grad_accum(cuda);
     }
 
