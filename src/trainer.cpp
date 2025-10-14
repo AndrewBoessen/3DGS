@@ -123,6 +123,18 @@ int Trainer::adaptive_density_step(CudaDataManager &cuda, const int iter, const 
   if (num_sh_coef > 0) {
   }
 
+  // zero values in temp buffer before write
+  CHECK_CUDA(cudaMemset(cuda.m_grad_xyz_culled, 0.0f, config.max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.v_grad_xyz_culled, 0.0f, config.max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.m_grad_rgb_culled, 0.0f, config.max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.v_grad_rgb_culled, 0.0f, config.max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.m_grad_opacity_culled, 0.0f, config.max_gaussians * 1 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.v_grad_opacity_culled, 0.0f, config.max_gaussians * 1 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.m_grad_scale_culled, 0.0f, config.max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.v_grad_scale_culled, 0.0f, config.max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.m_grad_quaternion_culled, 0.0f, config.max_gaussians * 4 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.v_grad_quaternion_culled, 0.0f, config.max_gaussians * 4 * sizeof(float)));
+
   // filter moment vectors for optimizer
   filter_moment_vectors(total_size, 3, cuda.d_mask, cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_xyz_culled,
                         cuda.v_grad_xyz_culled);
@@ -369,7 +381,7 @@ void Trainer::train() {
   // TRAINING LOOP
   for (int iter = 0; iter < config.num_iters; ++iter) {
     std::cout << "ITER " << iter << std::endl;
-    std::cout << "NUM GAUSS" << num_gaussians << std::endl;
+    std::cout << "NUM GAUSSIANS " << num_gaussians << std::endl;
     ForwardPassData pass_data;
     const int num_sh_coef = (pass_data.l_max + 1) * (pass_data.l_max + 1) - 1;
 

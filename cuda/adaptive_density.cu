@@ -33,7 +33,7 @@ __device__ __forceinline__ int get_strided_write_index(const int stride, const b
 
 __device__ __forceinline__ bool keep_test(const float opacity, const int grad_accum_count, const float2 uv_grad,
                                           const float op_threshold) {
-  const float op_param_threshold = __logf(op_threshold) - (1.0f - op_threshold);
+  const float op_param_threshold = __logf(op_threshold) - __logf(1.0f - op_threshold);
   const float norm = sqrtf(uv_grad.x * uv_grad.x + uv_grad.y * uv_grad.y);
   return !(opacity < op_param_threshold || norm == 0.0f || grad_accum_count == 0);
 }
@@ -102,13 +102,13 @@ fused_adaptive_density_kernel(const int N, const int max_gaussians, const bool u
 
   const float uv_grad_avg_norm = sqrtf(uv_grad_avg.x * uv_grad_avg.x + uv_grad_avg.y * uv_grad_avg.y);
 
-  const bool densify = keep && uv_grad_avg_norm > uv_split_val;
+  const bool densify = keep && (uv_grad_avg_norm > uv_split_val);
 
   const float3 exp_scale = {expf(scale[idx * 3 + 0]), expf(scale[idx * 3 + 1]), expf(scale[idx * 3 + 2])};
   const float scale_max = fmaxf(exp_scale.x, fmaxf(exp_scale.y, exp_scale.z));
 
   // Clone
-  const bool clone = densify && scale_max <= clone_scale_threshold;
+  const bool clone = densify && (scale_max <= clone_scale_threshold);
 
   if (use_clone) {
     const int write_idx = get_strided_write_index(1, clone, lane_id, active_mask, d_write_index);
@@ -144,7 +144,7 @@ fused_adaptive_density_kernel(const int N, const int max_gaussians, const bool u
   }
 
   // Split
-  const bool split = (densify && scale_max > clone_scale_threshold) || (scale_max > split_scale_threshold);
+  const bool split = (densify && (scale_max > clone_scale_threshold)) || (scale_max > split_scale_threshold);
 
   if (use_split) {
     const int write_idx = get_strided_write_index(num_split_samples, split, lane_id, active_mask, d_write_index);
@@ -277,7 +277,7 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef,
 
   float uv_split_val = uv_grad_threshold;
   if (use_fractional_densification) {
-    const int uv_k = static_cast<int>(floorf(N * ((1.0f - uv_grad_percentile) * scale_factor)));
+    const int uv_k = static_cast<int>(floorf(N * (1.0f - (1.0f - uv_grad_percentile) * scale_factor)));
 
     void *d_uv_temp_storage = nullptr;
     float *uv_output;
@@ -290,13 +290,13 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef,
 
     cub::DeviceRadixSort::SortKeys(d_uv_temp_storage, temp_storage_bytes, scale_max, uv_output, N);
     // Min of output
-    CHECK_CUDA(cudaMemcpy(&uv_split_val, uv_output + uv_k - 1, sizeof(float), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(&uv_split_val, uv_output + uv_k, sizeof(float), cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaFree(d_uv_temp_storage));
     CHECK_CUDA(cudaFree(uv_output));
   }
 
   float split_scale_threshold;
-  const int scale_k = static_cast<int>(floorf(N * ((1.0f - scale_norm_percentile) * scale_factor)));
+  const int scale_k = static_cast<int>(floorf(N * (1.0f - (1.0f - scale_norm_percentile) * scale_factor)));
 
   void *d_scale_temp_storage = nullptr;
   float *scale_output;
@@ -309,7 +309,7 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef,
 
   cub::DeviceRadixSort::SortKeys(d_scale_temp_storage, temp_storage_bytes, scale_max, scale_output, N);
   // Min of output
-  CHECK_CUDA(cudaMemcpy(&split_scale_threshold, scale_output + scale_k - 1, sizeof(float), cudaMemcpyDeviceToHost));
+  CHECK_CUDA(cudaMemcpy(&split_scale_threshold, scale_output + scale_k, sizeof(float), cudaMemcpyDeviceToHost));
   CHECK_CUDA(cudaFree(d_scale_temp_storage));
   CHECK_CUDA(cudaFree(scale_output));
 
