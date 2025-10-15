@@ -52,18 +52,18 @@ target_include_directories(gsplat
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp Eigen3::Eigen nanoflann::nanoflann ${OpenCV_LIBS})
+target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp OpenMP::OpenMP_CXX Eigen3::Eigen nanoflann::nanoflann ${OpenCV_LIBS})
 
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu cuda/spherical_harmonics.cu cuda/render.cu cuda/loss.cu cuda/projection_backward.cu cuda/gaussian_backward.cu cuda/spherical_harmonics_backward.cu cuda/render_backward.cu cuda/optimizer.cu)
+add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu cuda/spherical_harmonics.cu cuda/render.cu cuda/loss.cu cuda/projection_backward.cu cuda/gaussian_backward.cu cuda/spherical_harmonics_backward.cu cuda/render_backward.cu cuda/optimizer.cu cuda/adaptive_density.cu)
 
 target_include_directories(gsplat_cuda
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat_cuda PUBLIC CUDA::cublas sphericart OpenMP::OpenMP_CXX)
+target_link_libraries(gsplat_cuda PUBLIC sphericart)
 
 # ===================================================================
 # MAIN EXECUTABLE
@@ -111,3 +111,6 @@ add_gtest_executable(cuda_backward_tests tests/cuda_backward_test.cpp gsplat_cud
 
 # --- CUDA Optimizer Tests ---
 add_gtest_executable(cuda_optimizer_tests tests/optimizer_test.cpp gsplat_cuda)
+
+# --- Adaptive Density Tests ---
+add_gtest_executable(adaptive_density_tests tests/adaptive_density_test.cpp gsplat_cuda)

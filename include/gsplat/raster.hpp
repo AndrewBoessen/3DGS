@@ -3,7 +3,6 @@
 #include "dataloader/colmap.hpp"
 #include "gsplat/cuda_data.hpp"
 #include "gsplat/utils.hpp"
-#include <vector>
 
 /**
  * @brief Rasterizes an image from a set of Gaussians using pre-allocated CUDA buffers.
@@ -14,7 +13,6 @@
  * @param[in]     config         Configuration parameters for rendering.
  * @param[in,out] cuda           A manager for long-lived CUDA device buffers.
  * @param[out]    pass_data      A struct to be populated with pointers to per-iteration device buffers
- * @param[in]     streams        A vector of CUDA streams for parallel execution.
  */
 void rasterize_image(const int num_gaussians, const Camera &camera, const ConfigParameters &config,
-                     CudaDataManager &cuda, ForwardPassData &pass_data, const std::vector<cudaStream_t> &streams);
+                     CudaDataManager &cuda, ForwardPassData &pass_data);

@@ -24,30 +24,30 @@ ConfigParameters parseConfig(const std::string &filename) {
     params.downsample_factor = getNodeValue<int>(config, "downsample_factor");
     params.print_interval = getNodeValue<int>(config, "print_interval");
     params.num_iters = getNodeValue<int>(config, "num_iters");
-    params.ssim_frac = getNodeValue<double>(config, "ssim_frac");
+    params.ssim_frac = getNodeValue<float>(config, "ssim_frac");
     params.test_eval_interval = getNodeValue<int>(config, "test_eval_interval");
     params.test_split_ratio = getNodeValue<int>(config, "test_split_ratio");
 
     // Initial Gaussian properties
-    params.initial_opacity = getNodeValue<double>(config, "initial_opacity");
+    params.initial_opacity = getNodeValue<float>(config, "initial_opacity");
     params.initial_scale_num_neighbors = getNodeValue<int>(config, "initial_scale_num_neighbors");
-    params.initial_scale_factor = getNodeValue<double>(config, "initial_scale_factor");
-    params.max_initial_scale = getNodeValue<double>(config, "max_initial_scale");
+    params.initial_scale_factor = getNodeValue<float>(config, "initial_scale_factor");
+    params.max_initial_scale = getNodeValue<float>(config, "max_initial_scale");
 
     // Rendering thresholds
-    params.near_thresh = getNodeValue<double>(config, "near_thresh");
-    params.far_thresh = getNodeValue<double>(config, "far_thresh");
-    params.mh_dist = getNodeValue<double>(config, "mh_dist");
+    params.near_thresh = getNodeValue<float>(config, "near_thresh");
+    params.far_thresh = getNodeValue<float>(config, "far_thresh");
+    params.mh_dist = getNodeValue<float>(config, "mh_dist");
     params.cull_mask_padding = getNodeValue<int>(config, "cull_mask_padding");
 
     // Learning rates
-    params.base_lr = getNodeValue<double>(config, "base_lr");
-    params.xyz_lr_multiplier = getNodeValue<double>(config, "xyz_lr_multiplier");
-    params.quat_lr_multiplier = getNodeValue<double>(config, "quat_lr_multiplier");
-    params.scale_lr_multiplier = getNodeValue<double>(config, "scale_lr_multiplier");
-    params.opacity_lr_multiplier = getNodeValue<double>(config, "opacity_lr_multiplier");
-    params.rgb_lr_multiplier = getNodeValue<double>(config, "rgb_lr_multiplier");
-    params.sh_lr_multiplier = getNodeValue<double>(config, "sh_lr_multiplier");
+    params.base_lr = getNodeValue<float>(config, "base_lr");
+    params.xyz_lr_multiplier = getNodeValue<float>(config, "xyz_lr_multiplier");
+    params.quat_lr_multiplier = getNodeValue<float>(config, "quat_lr_multiplier");
+    params.scale_lr_multiplier = getNodeValue<float>(config, "scale_lr_multiplier");
+    params.opacity_lr_multiplier = getNodeValue<float>(config, "opacity_lr_multiplier");
+    params.rgb_lr_multiplier = getNodeValue<float>(config, "rgb_lr_multiplier");
+    params.sh_lr_multiplier = getNodeValue<float>(config, "sh_lr_multiplier");
 
     // Background settings
     params.use_background = getNodeValue<bool>(config, "use_background");
@@ -55,7 +55,7 @@ ConfigParameters parseConfig(const std::string &filename) {
 
     // Opacity reset settings
     params.reset_opacity_interval = getNodeValue<int>(config, "reset_opacity_interval");
-    params.reset_opacity_value = getNodeValue<double>(config, "reset_opacity_value");
+    params.reset_opacity_value = getNodeValue<float>(config, "reset_opacity_value");
     params.reset_opacity_start = getNodeValue<int>(config, "reset_opacity_start");
     params.reset_opacity_end = getNodeValue<int>(config, "reset_opacity_end");
 
@@ -72,15 +72,15 @@ ConfigParameters parseConfig(const std::string &filename) {
     params.adaptive_control_end = getNodeValue<int>(config, "adaptive_control_end");
     params.adaptive_control_interval = getNodeValue<int>(config, "adaptive_control_interval");
     params.max_gaussians = getNodeValue<int>(config, "max_gaussians");
-    params.delete_opacity_threshold = getNodeValue<double>(config, "delete_opacity_threshold");
-    params.clone_scale_threshold = getNodeValue<double>(config, "clone_scale_threshold");
-    params.max_scale_norm = getNodeValue<double>(config, "max_scale_norm");
+    params.delete_opacity_threshold = getNodeValue<float>(config, "delete_opacity_threshold");
+    params.clone_scale_threshold = getNodeValue<float>(config, "clone_scale_threshold");
+    params.max_scale_norm = getNodeValue<float>(config, "max_scale_norm");
     params.use_fractional_densification = getNodeValue<bool>(config, "use_fractional_densification");
     params.use_adaptive_fractional_densification = getNodeValue<bool>(config, "use_adaptive_fractional_densification");
-    params.uv_grad_percentile = getNodeValue<double>(config, "uv_grad_percentile");
-    params.scale_norm_percentile = getNodeValue<double>(config, "scale_norm_percentile");
-    params.uv_grad_threshold = getNodeValue<double>(config, "uv_grad_threshold");
-    params.split_scale_factor = getNodeValue<double>(config, "split_scale_factor");
+    params.uv_grad_percentile = getNodeValue<float>(config, "uv_grad_percentile");
+    params.scale_norm_percentile = getNodeValue<float>(config, "scale_norm_percentile");
+    params.uv_grad_threshold = getNodeValue<float>(config, "uv_grad_threshold");
+    params.split_scale_factor = getNodeValue<float>(config, "split_scale_factor");
     params.num_split_samples = getNodeValue<int>(config, "num_split_samples");
 
   } catch (const YAML::Exception &e) {

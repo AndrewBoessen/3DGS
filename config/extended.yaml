@@ -15,7 +15,7 @@ ssim_frac: 0.2
 base_lr: 0.002
 xyz_lr_multiplier: 0.1
 quat_lr_multiplier: 2
-scale_lr_multiplier: 5
+scale_lr_multiplier: 2
 opacity_lr_multiplier: 10
 rgb_lr_multiplier: 2
 sh_lr_multiplier: 0.1

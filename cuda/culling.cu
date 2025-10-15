@@ -270,27 +270,46 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
   }
 }
 
-__global__ void find_tile_boundaries_kernel(const double *__restrict__ sorted_keys, const int num_splats, float *max_z,
+__global__ void find_tile_boundaries_kernel(const double *__restrict__ sorted_keys, const int num_splats,
+                                            const int num_tiles, const float *max_z,
                                             int *__restrict__ splat_start_end_idx_by_tile_idx) {
-  const double tile_idx_key_multiplier = *max_z + 1.0f;
+  const double tile_idx_key_multiplier = (double)*max_z + 1.0;
+
   int splat_idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (splat_idx >= num_splats)
+  if (splat_idx >= num_splats) {
     return;
+  }
 
   int current_tile_id = floor(sorted_keys[splat_idx] / tile_idx_key_multiplier);
+  current_tile_id = min(max(current_tile_id, 0), num_tiles - 1);
 
-  if (splat_idx == 0) {
-    splat_start_end_idx_by_tile_idx[current_tile_id] = 0;
+  int prev_tile_id;
+  const bool is_first_splat = (splat_idx == 0);
+
+  if (is_first_splat) {
+    // The first splat is always a boundary. We can think of the "previous"
+    // tile as -1 to ensure the boundary logic triggers correctly.
+    prev_tile_id = -1;
   } else {
-    int prev_tile_id = floor(sorted_keys[splat_idx - 1] / tile_idx_key_multiplier);
-    if (current_tile_id != prev_tile_id) {
-      splat_start_end_idx_by_tile_idx[current_tile_id] = splat_idx;
-      splat_start_end_idx_by_tile_idx[prev_tile_id + 1] = splat_idx;
+    prev_tile_id = floor(sorted_keys[splat_idx - 1] / tile_idx_key_multiplier);
+    prev_tile_id = min(max(prev_tile_id, 0), num_tiles - 1);
+  }
+
+  // If this thread's splat has a different tile ID than the previous one,
+  // it's responsible for writing the new boundary location.
+  if (current_tile_id > prev_tile_id) {
+    for (int i = prev_tile_id + 1; i <= current_tile_id; ++i) {
+      splat_start_end_idx_by_tile_idx[i] = splat_idx;
     }
   }
 
+  // The thread processing the very last splat is responsible for writing the final
+  // boundary marker. This marks the end of the last non-empty tile and fills
+  // in the markers for any subsequent empty tiles.
   if (splat_idx == num_splats - 1) {
-    splat_start_end_idx_by_tile_idx[current_tile_id + 1] = num_splats;
+    for (int i = current_tile_id + 1; i <= num_tiles; ++i) {
+      splat_start_end_idx_by_tile_idx[i] = num_splats;
+    }
   }
 }
 
@@ -309,6 +328,28 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
 
   frustum_culling_kernel<<<gridsize, blocksize, 0, stream>>>(uv, xyz, N, near_thresh, far_thresh, padding, width,
                                                              height, mask);
+}
+
+__global__ void scatter_add_gradients_kernel(const float *d_grad_uv_culled, const float *d_grad_xyz_culled,
+                                             const bool *d_mask, const int *d_culled_count_prefix_sum,
+                                             int num_gaussians, float *d_uv_grad_accum_full,
+                                             float *d_xyz_grad_accum_full, int *d_grad_accum_dur_full) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= num_gaussians)
+    return;
+
+  if (d_mask[idx]) {
+    int culled_idx = d_culled_count_prefix_sum[idx];
+
+    atomicAdd(&d_uv_grad_accum_full[idx * 2 + 0], d_grad_uv_culled[culled_idx * 2 + 0]);
+    atomicAdd(&d_uv_grad_accum_full[idx * 2 + 1], d_grad_uv_culled[culled_idx * 2 + 1]);
+
+    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 0], d_grad_xyz_culled[culled_idx * 3 + 0]);
+    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 1], d_grad_xyz_culled[culled_idx * 3 + 1]);
+    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 2], d_grad_xyz_culled[culled_idx * 3 + 2]);
+
+    atomicAdd(&d_grad_accum_dur_full[idx], 1);
+  }
 }
 
 __global__ void scatter_groups_kernel(const float *input, const bool *mask, const int *scan_out, const int N,
@@ -367,6 +408,82 @@ void filter_moment_vectors(const int N, const int S, const bool *d_mask, const f
   // Apply mask
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_m, d_mask, mask_sum, N, d_m_culled, S);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_v, d_mask, mask_sum, N, d_v_culled, S);
+
+  // Free the temporary storage.
+  CHECK_CUDA(cudaFree(d_temp_storage));
+  CHECK_CUDA(cudaFree(mask_sum));
+}
+
+void filter_strided_vector(const int N, const int S, const bool *d_mask, const float *d_v, float *d_v_culled,
+                           cudaStream_t stream) {
+  int *mask_sum;
+  CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
+  void *d_temp_storage = nullptr;
+  size_t temp_storage_bytes = 0;
+
+  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
+  // Allocate temporary storage
+  cudaMalloc(&d_temp_storage, temp_storage_bytes);
+
+  // Run exclusive prefix sum
+  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
+
+  const int threads_per_block = 256;
+  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
+
+  // Apply mask
+  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_v, d_mask, mask_sum, N, d_v_culled, S);
+
+  // Free the temporary storage.
+  CHECK_CUDA(cudaFree(d_temp_storage));
+  CHECK_CUDA(cudaFree(mask_sum));
+}
+
+int mask_sum(const int N, const bool *d_mask) {
+  int *d_out = nullptr;
+  void *d_temp_storage = nullptr;
+
+  // Allocate device memory
+  CHECK_CUDA(cudaMalloc(&d_out, sizeof(int)));
+
+  // Determine temporary storage size
+  size_t temp_storage_bytes = 0;
+  cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_mask, d_out, N);
+
+  // Allocate temporary storage
+  CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+
+  // Perform the sum reduction
+  cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_mask, d_out, N);
+
+  // Copy result back to host
+  int h_out;
+  CHECK_CUDA(cudaMemcpy(&h_out, d_out, sizeof(int), cudaMemcpyDeviceToHost));
+
+  CHECK_CUDA(cudaFree(d_temp_storage));
+  CHECK_CUDA(cudaFree(d_out));
+  return h_out;
+}
+
+void accumulate_gradients(const int N, const bool *d_mask, const float *d_grad_xyz, const float *d_grad_uv,
+                          float *d_xyz_grad_accum, float *d_uv_grad_acuum, int *d_grad_accum_dur, cudaStream_t stream) {
+  int *mask_sum;
+  CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
+  void *d_temp_storage = nullptr;
+  size_t temp_storage_bytes = 0;
+
+  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
+  // Allocate temporary storage
+  cudaMalloc(&d_temp_storage, temp_storage_bytes);
+
+  // Run exclusive prefix sum
+  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
+
+  const int threads_per_block = 256;
+  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
+
+  scatter_add_gradients_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
+      d_grad_uv, d_grad_xyz, d_mask, mask_sum, N, d_uv_grad_acuum, d_xyz_grad_accum, d_grad_accum_dur);
 
   // Free the temporary storage.
   CHECK_CUDA(cudaFree(d_temp_storage));
@@ -469,7 +586,6 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   if (sorted_gaussians == nullptr) {
     coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N,
                                                              d_buffer_bytes, nullptr, d_buffer_index);
-    CHECK_CUDA(cudaGetLastError());
 
     // update host bytes counter
     int temp_bytes = 0;
@@ -487,7 +603,6 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
   coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N, d_buffer_bytes,
                                                            d_pairs, d_buffer_index);
-  CHECK_CUDA(cudaGetLastError());
 
   // get max z depth for key multiplier
   float *d_max_z;
@@ -540,8 +655,8 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   CHECK_CUDA(cudaMemset(splat_start_end_idx_by_tile_idx, 0, (num_tiles + 1) * sizeof(int)));
 
   const int boundary_blocks = (num_splats + threads_per_block - 1) / threads_per_block;
-  find_tile_boundaries_kernel<<<boundary_blocks, threads_per_block, 0, stream>>>(d_sort_keys, num_splats, d_max_z,
-                                                                                 splat_start_end_idx_by_tile_idx);
+  find_tile_boundaries_kernel<<<boundary_blocks, threads_per_block, 0, stream>>>(
+      d_sort_keys, num_splats, num_tiles, d_max_z, splat_start_end_idx_by_tile_idx);
 
   CHECK_CUDA(cudaFree(d_max_z));
   CHECK_CUDA(cudaFree(d_sort_keys));

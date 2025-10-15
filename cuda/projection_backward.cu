@@ -61,7 +61,7 @@ void camera_intrinsic_projection_backward(const float *const xyz_c, const float 
   ASSERT_DEVICE_POINTER(uv_grad_out);
   ASSERT_DEVICE_POINTER(xyz_c_grad_in);
 
-  const int threads_per_block = 1024;
+  const int threads_per_block = 256;
   const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
 
   dim3 gridsize(num_blocks, 1, 1);
@@ -120,7 +120,7 @@ void camera_extrinsic_projection_backward(const float *const xyz_w, const float 
   ASSERT_DEVICE_POINTER(xyz_c_grad_out);
   ASSERT_DEVICE_POINTER(xyz_w_grad_in);
 
-  const int threads_per_block = 1024;
+  const int threads_per_block = 256;
   const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
 
   dim3 gridsize(num_blocks, 1, 1);

@@ -51,6 +51,10 @@ struct CudaDataManager {
   float *v_grad_xyz_culled, *v_grad_rgb_culled, *v_grad_sh_culled, *v_grad_opacity_culled, *v_grad_scale_culled,
       *v_grad_quaternion_culled;
 
+  // Gradient accum
+  float *d_xyz_grad_accum, *d_uv_grad_accum;
+  int *d_grad_accum_dur;
+
   CudaDataManager(size_t max_gaussians_in);
   ~CudaDataManager();
 };

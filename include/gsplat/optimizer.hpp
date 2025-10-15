@@ -5,6 +5,10 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+inline constexpr float B1 = 0.9f;
+inline constexpr float B2 = 0.999f;
+inline constexpr float EPS = 1e-8f;
+
 // Macro for checking CUDA API calls for errors.
 #define CHECK_CUDA(call)                                                                                               \
   do {                                                                                                                 \
@@ -16,7 +20,7 @@
   } while (0)
 
 /**
- * @brief Filter optimzier moment vactors based on mask
+ * @brief Filter optimzier moment vectors based on mask
  * @param[in]  N           Number of parameters
  * @param[in]  S           Size of stride
  * @param[in]  d_mask      Binary mask
@@ -28,6 +32,19 @@
  */
 void filter_moment_vectors(const int N, const int S, const bool *d_mask, const float *d_m, const float *d_v,
                            float *d_m_culled, float *d_v_culled, cudaStream_t stream = 0);
+/**
+ * @brief Filter strided vector based on mask
+ * @param[in]  N           Number of parameters
+ * @param[in]  S           Size of stride
+ * @param[in]  d_mask      Binary mask
+ * @param[in]  d_v         Original vector
+ * @param[out] d_v_culled  Filtered vector
+ * @param[in]  stream      The CUDA stream to execute on
+ */
+void filter_strided_vector(const int N, const int S, const bool *d_mask, const float *d_v, float *d_v_culled,
+                           cudaStream_t stream = 0);
+
+int mask_sum(const int N, const bool *d_mask);
 
 /**
  * @brief Launch CUDA kernel to compute one step of Adam optimizer
