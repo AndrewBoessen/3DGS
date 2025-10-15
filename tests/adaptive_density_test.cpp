@@ -22,12 +22,17 @@ protected:
     ASSERT_GT(deviceCount, 0);
   }
 
-  // Pointers to device memory
+  // Pointers to device memory for Gaussian attributes
   float *d_xyz = nullptr, *d_rgb = nullptr, *d_sh = nullptr, *d_opacity = nullptr;
   float *d_scale = nullptr, *d_quaternion = nullptr;
   float *d_uv_grad_accum = nullptr, *d_xyz_grad_accum = nullptr;
   int *d_grad_accum_count = nullptr;
   bool *d_mask = nullptr;
+
+  // Pointers to device memory for optimizer moment vectors
+  float *d_m_xyz = nullptr, *d_v_xyz = nullptr, *d_m_rgb = nullptr, *d_v_rgb = nullptr;
+  float *d_m_sh = nullptr, *d_v_sh = nullptr, *d_m_opacity = nullptr, *d_v_opacity = nullptr;
+  float *d_m_scale = nullptr, *d_v_scale = nullptr, *d_m_quaternion = nullptr, *d_v_quaternion = nullptr;
 
   // Parameters
   int N;
@@ -36,6 +41,7 @@ protected:
 
   // Clean up all allocated device memory
   void TearDown() override {
+    // Free Gaussian attributes
     if (d_xyz)
       CUDA_CHECK(cudaFree(d_xyz));
     if (d_rgb)
@@ -56,6 +62,32 @@ protected:
       CUDA_CHECK(cudaFree(d_grad_accum_count));
     if (d_mask)
       CUDA_CHECK(cudaFree(d_mask));
+
+    // Free optimizer moments
+    if (d_m_xyz)
+      CUDA_CHECK(cudaFree(d_m_xyz));
+    if (d_v_xyz)
+      CUDA_CHECK(cudaFree(d_v_xyz));
+    if (d_m_rgb)
+      CUDA_CHECK(cudaFree(d_m_rgb));
+    if (d_v_rgb)
+      CUDA_CHECK(cudaFree(d_v_rgb));
+    if (d_m_sh)
+      CUDA_CHECK(cudaFree(d_m_sh));
+    if (d_v_sh)
+      CUDA_CHECK(cudaFree(d_v_sh));
+    if (d_m_opacity)
+      CUDA_CHECK(cudaFree(d_m_opacity));
+    if (d_v_opacity)
+      CUDA_CHECK(cudaFree(d_v_opacity));
+    if (d_m_scale)
+      CUDA_CHECK(cudaFree(d_m_scale));
+    if (d_v_scale)
+      CUDA_CHECK(cudaFree(d_v_scale));
+    if (d_m_quaternion)
+      CUDA_CHECK(cudaFree(d_m_quaternion));
+    if (d_v_quaternion)
+      CUDA_CHECK(cudaFree(d_v_quaternion));
   }
 
   // Helper to initialize host and device data for a test
@@ -66,7 +98,7 @@ protected:
     max_gaussians = max_g;
     num_sh_coef = sh_c;
 
-    // Allocate device memory
+    // Allocate device memory for Gaussian attributes
     CUDA_CHECK(cudaMalloc(&d_xyz, max_gaussians * 3 * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_rgb, max_gaussians * 3 * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_opacity, max_gaussians * sizeof(float)));
@@ -76,30 +108,57 @@ protected:
     CUDA_CHECK(cudaMalloc(&d_xyz_grad_accum, max_gaussians * 3 * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_grad_accum_count, max_gaussians * sizeof(int)));
     CUDA_CHECK(cudaMalloc(&d_mask, max_gaussians * sizeof(bool)));
+
+    // Allocate device memory for optimizer moments
+    CUDA_CHECK(cudaMalloc(&d_m_xyz, max_gaussians * 3 * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_v_xyz, max_gaussians * 3 * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_m_rgb, max_gaussians * 3 * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_v_rgb, max_gaussians * 3 * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_m_opacity, max_gaussians * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_v_opacity, max_gaussians * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_m_scale, max_gaussians * 3 * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_v_scale, max_gaussians * 3 * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_m_quaternion, max_gaussians * 4 * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_v_quaternion, max_gaussians * 4 * sizeof(float)));
+
     if (num_sh_coef > 0) {
       CUDA_CHECK(cudaMalloc(&d_sh, max_gaussians * num_sh_coef * sizeof(float)));
+      CUDA_CHECK(cudaMalloc(&d_m_sh, max_gaussians * num_sh_coef * sizeof(float)));
+      CUDA_CHECK(cudaMalloc(&d_v_sh, max_gaussians * num_sh_coef * sizeof(float)));
     }
 
-    // Create dummy host data
+    // Create dummy host data for attributes
     std::vector<float> h_xyz(N * 3, 1.0f);
     std::vector<float> h_rgb(N * 3, 0.5f);
-    std::vector<float> h_quat(N * 4, 1.0f);
-    h_quat[0] = 1.0f;
-    h_quat[1] = 0.0f;
-    h_quat[2] = 0.0f;
-    h_quat[3] = 0.0f; // Identity quaternion
+    std::vector<float> h_quat(N * 4, 0.0f);
+    h_quat[0] = 1.0f; // Identity quaternion
     std::vector<float> h_xyz_grad(N * 3, 0.01f);
 
-    // Copy data to device
+    // Copy attribute data to device
     CUDA_CHECK(cudaMemcpy(d_xyz, h_xyz.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_rgb, h_rgb.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_quaternion, h_quat.data(), N * 4 * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_xyz_grad_accum, h_xyz_grad.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
-
     CUDA_CHECK(cudaMemcpy(d_opacity, h_opacity.data(), N * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_scale, h_scale.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_uv_grad_accum, h_uv_grad.data(), N * 2 * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_grad_accum_count, h_grad_count.data(), N * sizeof(int), cudaMemcpyHostToDevice));
+
+    // Initialize optimizer moments to zero on device
+    CUDA_CHECK(cudaMemset(d_m_xyz, 0, max_gaussians * 3 * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_v_xyz, 0, max_gaussians * 3 * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_m_rgb, 0, max_gaussians * 3 * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_v_rgb, 0, max_gaussians * 3 * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_m_opacity, 0, max_gaussians * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_v_opacity, 0, max_gaussians * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_m_scale, 0, max_gaussians * 3 * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_v_scale, 0, max_gaussians * 3 * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_m_quaternion, 0, max_gaussians * 4 * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_v_quaternion, 0, max_gaussians * 4 * sizeof(float)));
+    if (num_sh_coef > 0) {
+      CUDA_CHECK(cudaMemset(d_m_sh, 0, max_gaussians * num_sh_coef * sizeof(float)));
+      CUDA_CHECK(cudaMemset(d_v_sh, 0, max_gaussians * num_sh_coef * sizeof(float)));
+    }
   }
 };
 
@@ -113,7 +172,8 @@ TEST_F(AdaptiveDensityTest, NoOperation) {
 
   adaptive_density(N, 0, num_sh_coef, false, 0, 0, 0.0f, false, 0.0f, 0.0f, max_gaussians, false, false, false, 0.1f,
                    0.001f, 2, 1.6f, d_uv_grad_accum, d_grad_accum_count, d_scale, d_mask, d_xyz_grad_accum, d_xyz,
-                   d_rgb, d_sh, d_opacity, d_quaternion);
+                   d_rgb, d_sh, d_opacity, d_quaternion, d_m_xyz, d_v_xyz, d_m_rgb, d_v_rgb, d_m_opacity, d_v_opacity,
+                   d_m_scale, d_v_scale, d_m_quaternion, d_v_quaternion);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   std::vector<char> h_mask(max_gaussians);
@@ -148,7 +208,8 @@ TEST_F(AdaptiveDensityTest, DeletionLogic) {
 
   adaptive_density(N, 0, num_sh_coef, false, 0, 0, 0.0f, false, 0.0f, 0.0f, max_gaussians, true, false, false, 0.1f,
                    0.0f, 2, 1.6f, d_uv_grad_accum, d_grad_accum_count, d_scale, d_mask, d_xyz_grad_accum, d_xyz, d_rgb,
-                   d_sh, d_opacity, d_quaternion);
+                   d_sh, d_opacity, d_quaternion, d_m_xyz, d_v_xyz, d_m_rgb, d_v_rgb, d_m_opacity, d_v_opacity,
+                   d_m_scale, d_v_scale, d_m_quaternion, d_v_quaternion);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   std::vector<char> h_mask(max_gaussians);
@@ -185,7 +246,8 @@ TEST_F(AdaptiveDensityTest, CloningLogic) {
 
   adaptive_density(N, 0, num_sh_coef, false, 0, 0, uv_split_val, false, 0.0f, 0.0f, max_gaussians, true, true, false,
                    0.01f, clone_scale_threshold, 2, 1.6f, d_uv_grad_accum, d_grad_accum_count, d_scale, d_mask,
-                   d_xyz_grad_accum, d_xyz, d_rgb, d_sh, d_opacity, d_quaternion);
+                   d_xyz_grad_accum, d_xyz, d_rgb, d_sh, d_opacity, d_quaternion, d_m_xyz, d_v_xyz, d_m_rgb, d_v_rgb,
+                   d_m_opacity, d_v_opacity, d_m_scale, d_v_scale, d_m_quaternion, d_v_quaternion);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   std::vector<char> h_mask(max_gaussians);
@@ -236,7 +298,9 @@ TEST_F(AdaptiveDensityTest, SplittingLogic) {
 
   adaptive_density(N, 0, num_sh_coef, false, 0, 0, uv_split_val, false, 0.0f, 0.0f, max_gaussians, true, false, true,
                    0.01f, clone_scale_threshold, num_split_samples, split_scale_factor, d_uv_grad_accum,
-                   d_grad_accum_count, d_scale, d_mask, d_xyz_grad_accum, d_xyz, d_rgb, d_sh, d_opacity, d_quaternion);
+                   d_grad_accum_count, d_scale, d_mask, d_xyz_grad_accum, d_xyz, d_rgb, d_sh, d_opacity, d_quaternion,
+                   d_m_xyz, d_v_xyz, d_m_rgb, d_v_rgb, d_m_opacity, d_v_opacity, d_m_scale, d_v_scale, d_m_quaternion,
+                   d_v_quaternion);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   std::vector<char> h_mask(max_gaussians);
@@ -297,7 +361,9 @@ TEST_F(AdaptiveDensityTest, CombinedOperations) {
 
   adaptive_density(N, 0, num_sh_coef, false, 0, 0, uv_split_val, false, 0.0f, 0.0f, max_gaussians, true, true, true,
                    delete_op_threshold, clone_scale_threshold, num_split_samples, 1.6f, d_uv_grad_accum,
-                   d_grad_accum_count, d_scale, d_mask, d_xyz_grad_accum, d_xyz, d_rgb, d_sh, d_opacity, d_quaternion);
+                   d_grad_accum_count, d_scale, d_mask, d_xyz_grad_accum, d_xyz, d_rgb, d_sh, d_opacity, d_quaternion,
+                   d_m_xyz, d_v_xyz, d_m_rgb, d_v_rgb, d_m_opacity, d_v_opacity, d_m_scale, d_v_scale, d_m_quaternion,
+                   d_v_quaternion);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   std::vector<char> h_mask(max_gaussians);

@@ -107,9 +107,12 @@ int Trainer::adaptive_density_step(CudaDataManager &cuda, const int iter, const 
       config.uv_grad_percentile, config.scale_norm_percentile, config.max_gaussians, config.use_delete,
       config.use_clone, config.use_split, config.delete_opacity_threshold, config.clone_scale_threshold,
       config.num_split_samples, config.split_scale_factor, cuda.d_uv_grad_accum, cuda.d_grad_accum_dur, cuda.d_scale,
-      cuda.d_mask, cuda.d_xyz_grad_accum, cuda.d_xyz, cuda.d_rgb, cuda.d_sh, cuda.d_opacity, cuda.d_quaternion);
+      cuda.d_mask, cuda.d_xyz_grad_accum, cuda.d_xyz, cuda.d_rgb, cuda.d_sh, cuda.d_opacity, cuda.d_quaternion,
+      cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_rgb, cuda.v_grad_rgb, cuda.m_grad_opacity, cuda.v_grad_opacity,
+      cuda.m_grad_scale, cuda.v_grad_scale, cuda.m_grad_quaternion, cuda.v_grad_quaternion);
 
   int new_gaussian_size = mask_sum(total_size, cuda.d_mask);
+  printf("MASK SUM %d\n", new_gaussian_size);
 
   // --- FILTER PHASE ---
 
@@ -122,18 +125,6 @@ int Trainer::adaptive_density_step(CudaDataManager &cuda, const int iter, const 
 
   if (num_sh_coef > 0) {
   }
-
-  // zero values in temp buffer before write
-  CHECK_CUDA(cudaMemset(cuda.m_grad_xyz_culled, 0.0f, config.max_gaussians * 3 * sizeof(float)));
-  CHECK_CUDA(cudaMemset(cuda.v_grad_xyz_culled, 0.0f, config.max_gaussians * 3 * sizeof(float)));
-  CHECK_CUDA(cudaMemset(cuda.m_grad_rgb_culled, 0.0f, config.max_gaussians * 3 * sizeof(float)));
-  CHECK_CUDA(cudaMemset(cuda.v_grad_rgb_culled, 0.0f, config.max_gaussians * 3 * sizeof(float)));
-  CHECK_CUDA(cudaMemset(cuda.m_grad_opacity_culled, 0.0f, config.max_gaussians * 1 * sizeof(float)));
-  CHECK_CUDA(cudaMemset(cuda.v_grad_opacity_culled, 0.0f, config.max_gaussians * 1 * sizeof(float)));
-  CHECK_CUDA(cudaMemset(cuda.m_grad_scale_culled, 0.0f, config.max_gaussians * 3 * sizeof(float)));
-  CHECK_CUDA(cudaMemset(cuda.v_grad_scale_culled, 0.0f, config.max_gaussians * 3 * sizeof(float)));
-  CHECK_CUDA(cudaMemset(cuda.m_grad_quaternion_culled, 0.0f, config.max_gaussians * 4 * sizeof(float)));
-  CHECK_CUDA(cudaMemset(cuda.v_grad_quaternion_culled, 0.0f, config.max_gaussians * 4 * sizeof(float)));
 
   // filter moment vectors for optimizer
   filter_moment_vectors(total_size, 3, cuda.d_mask, cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_xyz_culled,
@@ -234,7 +225,7 @@ float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera,
   float loss = fused_loss(pass_data.d_image_buffer, d_gt_image, height, width, 3, config.ssim_frac, d_grad_image);
 
   // Backpropagate gradients from image to Gaussian parameters
-  render_image_backward(cuda.d_uv_culled, cuda.d_opacity_culled, pass_data.d_conic, pass_data.d_precomputed_rgb, 1.0f,
+  render_image_backward(cuda.d_uv_culled, cuda.d_opacity_culled, pass_data.d_conic, pass_data.d_precomputed_rgb, 0.1f,
                         pass_data.d_sorted_gaussians, pass_data.d_splat_start_end_idx_by_tile_idx,
                         pass_data.d_splats_per_pixel, pass_data.d_weight_per_pixel, d_grad_image, width, height,
                         cuda.d_grad_precompute_rgb, cuda.d_grad_opacity, cuda.d_grad_uv, cuda.d_grad_conic);

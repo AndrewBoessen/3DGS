@@ -63,7 +63,7 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
   CHECK_CUDA(cudaMalloc(&pass_data.d_splats_per_pixel, width * height * sizeof(int)));
   CHECK_CUDA(cudaMemset(pass_data.d_image_buffer, 0.0f, width * height * 3 * sizeof(float)));
 
-  render_image(cuda.d_uv_culled, cuda.d_opacity_culled, pass_data.d_conic, pass_data.d_precomputed_rgb, 1.0f,
+  render_image(cuda.d_uv_culled, cuda.d_opacity_culled, pass_data.d_conic, pass_data.d_precomputed_rgb, 0.1f,
                pass_data.d_sorted_gaussians, pass_data.d_splat_start_end_idx_by_tile_idx, width, height,
                pass_data.d_splats_per_pixel, pass_data.d_weight_per_pixel, pass_data.d_image_buffer);
 }

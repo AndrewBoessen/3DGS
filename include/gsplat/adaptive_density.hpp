@@ -35,8 +35,18 @@
  * @param[in,out]  sh                                     Spherical Harmonics parameter vector
  * @param[in,out]  opacity                                Opacity parameter vector
  * @param[in,out]  quaternion                             Quaternion parameter vector
+ * @param[in,out]  m_xyz                                  XYZ first moment vector
+ * @param[in,out]  v_xyz                                  XYZ second moment vector
+ * @param[in,out]  m_rgb                                  RGB first moment vector
+ * @param[in,out]  v_rgb                                  RGB second moment vector
+ * @param[in,out]  m_op                                   Opacity first moment vector
+ * @param[in,out]  v_op                                   Opacity second moment vector
+ * @param[in,out]  m_scale                                Scale first moment vector
+ * @param[in,out]  v_scale                                Scale second moment vector
+ * @param[in,out]  m_quat                                 Quaternion first moment vector
+ * @param[in,out]  v_quat                                 Quaternion second moment vector
  * @param[in]      stream                                 The CUDA stream to execute on
- * @return Total number of gaussians after
+ * @return Total number of gaussians after step
  */
 int adaptive_density(const int N, const int iter, const int num_sh_coef,
                      const bool use_adaptive_fractional_densification, const int adaptive_control_end,
@@ -47,4 +57,5 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef,
                      const float clone_scale_threshold, const int num_split_samples, const float split_scale_factor,
                      const float *uv_grad_accum, const int *grad_accum_count, float *scale, bool *d_mask,
                      const float *xyz_grad_accum, float *xyz, float *rgb, float *sh, float *opacity, float *quaternion,
-                     cudaStream_t stream = 0);
+                     float *m_xyz, float *v_xyz, float *m_rgb, float *v_rgb, float *m_op, float *v_op, float *m_scale,
+                     float *v_scale, float *m_quat, float *v_quat, cudaStream_t stream = 0);

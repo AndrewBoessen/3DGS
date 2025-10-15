@@ -270,27 +270,46 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
   }
 }
 
-__global__ void find_tile_boundaries_kernel(const double *__restrict__ sorted_keys, const int num_splats, float *max_z,
+__global__ void find_tile_boundaries_kernel(const double *__restrict__ sorted_keys, const int num_splats,
+                                            const int num_tiles, const float *max_z,
                                             int *__restrict__ splat_start_end_idx_by_tile_idx) {
-  const double tile_idx_key_multiplier = *max_z + 1.0f;
+  const double tile_idx_key_multiplier = (double)*max_z + 1.0;
+
   int splat_idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (splat_idx >= num_splats)
+  if (splat_idx >= num_splats) {
     return;
+  }
 
   int current_tile_id = floor(sorted_keys[splat_idx] / tile_idx_key_multiplier);
+  current_tile_id = min(max(current_tile_id, 0), num_tiles - 1);
 
-  if (splat_idx == 0) {
-    splat_start_end_idx_by_tile_idx[current_tile_id] = 0;
+  int prev_tile_id;
+  const bool is_first_splat = (splat_idx == 0);
+
+  if (is_first_splat) {
+    // The first splat is always a boundary. We can think of the "previous"
+    // tile as -1 to ensure the boundary logic triggers correctly.
+    prev_tile_id = -1;
   } else {
-    int prev_tile_id = floor(sorted_keys[splat_idx - 1] / tile_idx_key_multiplier);
-    if (current_tile_id != prev_tile_id) {
-      splat_start_end_idx_by_tile_idx[current_tile_id] = splat_idx;
-      splat_start_end_idx_by_tile_idx[prev_tile_id + 1] = splat_idx;
+    prev_tile_id = floor(sorted_keys[splat_idx - 1] / tile_idx_key_multiplier);
+    prev_tile_id = min(max(prev_tile_id, 0), num_tiles - 1);
+  }
+
+  // If this thread's splat has a different tile ID than the previous one,
+  // it's responsible for writing the new boundary location.
+  if (current_tile_id > prev_tile_id) {
+    for (int i = prev_tile_id + 1; i <= current_tile_id; ++i) {
+      splat_start_end_idx_by_tile_idx[i] = splat_idx;
     }
   }
 
+  // The thread processing the very last splat is responsible for writing the final
+  // boundary marker. This marks the end of the last non-empty tile and fills
+  // in the markers for any subsequent empty tiles.
   if (splat_idx == num_splats - 1) {
-    splat_start_end_idx_by_tile_idx[current_tile_id + 1] = num_splats;
+    for (int i = current_tile_id + 1; i <= num_tiles; ++i) {
+      splat_start_end_idx_by_tile_idx[i] = num_splats;
+    }
   }
 }
 
@@ -636,8 +655,8 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   CHECK_CUDA(cudaMemset(splat_start_end_idx_by_tile_idx, 0, (num_tiles + 1) * sizeof(int)));
 
   const int boundary_blocks = (num_splats + threads_per_block - 1) / threads_per_block;
-  find_tile_boundaries_kernel<<<boundary_blocks, threads_per_block, 0, stream>>>(d_sort_keys, num_splats, d_max_z,
-                                                                                 splat_start_end_idx_by_tile_idx);
+  find_tile_boundaries_kernel<<<boundary_blocks, threads_per_block, 0, stream>>>(
+      d_sort_keys, num_splats, num_tiles, d_max_z, splat_start_end_idx_by_tile_idx);
 
   CHECK_CUDA(cudaFree(d_max_z));
   CHECK_CUDA(cudaFree(d_sort_keys));
