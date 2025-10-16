@@ -211,9 +211,9 @@ fused_adaptive_density_kernel(const int N, const int max_gaussians, const bool u
       for (int i = 0; i < num_split_samples; i++) {
         // add new Gaussians
         d_mask[write_idx + i] = true;
-        const float v_x = curand_uniform(&state[idx]) * exp_scale.x;
-        const float v_y = curand_uniform(&state[idx]) * exp_scale.y;
-        const float v_z = curand_uniform(&state[idx]) * exp_scale.z;
+        const float v_x = curand_normal(&state[idx]) * exp_scale.x;
+        const float v_y = curand_normal(&state[idx]) * exp_scale.y;
+        const float v_z = curand_normal(&state[idx]) * exp_scale.z;
 
         const float rot_v_x = v_x * r00 + v_y * r01 + v_z * r02;
         const float rot_v_y = v_x * r10 + v_y * r11 + v_z * r12;
@@ -317,11 +317,11 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef,
     CHECK_CUDA(cudaMalloc(&uv_output, N * sizeof(float)));
     // Query temporary storage requirements
     temp_storage_bytes = 0;
-    cub::DeviceRadixSort::SortKeys(d_uv_temp_storage, temp_storage_bytes, scale_max, uv_output, N);
+    cub::DeviceRadixSort::SortKeys(d_uv_temp_storage, temp_storage_bytes, uv_grad_avg_norm, uv_output, N);
 
     CHECK_CUDA(cudaMalloc(&d_uv_temp_storage, temp_storage_bytes));
 
-    cub::DeviceRadixSort::SortKeys(d_uv_temp_storage, temp_storage_bytes, scale_max, uv_output, N);
+    cub::DeviceRadixSort::SortKeys(d_uv_temp_storage, temp_storage_bytes, uv_grad_avg_norm, uv_output, N);
     // Min of output
     CHECK_CUDA(cudaMemcpy(&uv_split_val, uv_output + uv_k, sizeof(float), cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaFree(d_uv_temp_storage));
@@ -342,13 +342,13 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef,
   CHECK_CUDA(cudaMalloc(&d_scale_temp_storage, temp_storage_bytes));
 
   cub::DeviceRadixSort::SortKeys(d_scale_temp_storage, temp_storage_bytes, scale_max, scale_output, N);
-  // Min of output
   CHECK_CUDA(cudaMemcpy(&split_scale_threshold, scale_output + scale_k, sizeof(float), cudaMemcpyDeviceToHost));
   CHECK_CUDA(cudaFree(d_scale_temp_storage));
   CHECK_CUDA(cudaFree(scale_output));
 
   // Reset mask before adaptive density checks
   CHECK_CUDA(cudaMemset(d_mask, false, max_gaussians * sizeof(bool)));
+
   // Set global index to end of array
   int *global_index;
   CHECK_CUDA(cudaMalloc(&global_index, sizeof(int)));
