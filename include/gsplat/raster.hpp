@@ -15,4 +15,4 @@
  * @param[out]    pass_data      A struct to be populated with pointers to per-iteration device buffers
  */
 void rasterize_image(const int num_gaussians, const Camera &camera, const ConfigParameters &config,
-                     CudaDataManager &cuda, ForwardPassData &pass_data);
+                     CudaDataManager &cuda, ForwardPassData &pass_data, float bg_color);

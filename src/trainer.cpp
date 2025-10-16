@@ -187,7 +187,7 @@ int Trainer::adaptive_density_step(CudaDataManager &cuda, const int iter, const 
 }
 
 float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera, CudaDataManager &cuda,
-                             ForwardPassData &pass_data) {
+                             ForwardPassData &pass_data, float bg_color) {
   const int width = (int)curr_camera.width;
   const int height = (int)curr_camera.height;
 
@@ -225,8 +225,8 @@ float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera,
   float loss = fused_loss(pass_data.d_image_buffer, d_gt_image, height, width, 3, config.ssim_frac, d_grad_image);
 
   // Backpropagate gradients from image to Gaussian parameters
-  render_image_backward(cuda.d_uv_culled, cuda.d_opacity_culled, pass_data.d_conic, pass_data.d_precomputed_rgb, 0.1f,
-                        pass_data.d_sorted_gaussians, pass_data.d_splat_start_end_idx_by_tile_idx,
+  render_image_backward(cuda.d_uv_culled, cuda.d_opacity_culled, pass_data.d_conic, pass_data.d_precomputed_rgb,
+                        bg_color, pass_data.d_sorted_gaussians, pass_data.d_splat_start_end_idx_by_tile_idx,
                         pass_data.d_splats_per_pixel, pass_data.d_weight_per_pixel, d_grad_image, width, height,
                         cuda.d_grad_precompute_rgb, cuda.d_grad_opacity, cuda.d_grad_uv, cuda.d_grad_conic);
 
@@ -395,8 +395,13 @@ void Trainer::train() {
     CHECK_CUDA(cudaMemcpy(cuda.d_K, h_K, 9 * sizeof(float), cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemcpy(cuda.d_T, h_T, 12 * sizeof(float), cudaMemcpyHostToDevice));
 
+    // Background color
+    float bg_color = 0.0f;
+    if (config.use_background)
+      bg_color = (iter % 255) / 255.0f;
+
     // --- FORWARD PASS via RASTERIZE MODULE ---
-    rasterize_image(num_gaussians, curr_camera, config, cuda, pass_data);
+    rasterize_image(num_gaussians, curr_camera, config, cuda, pass_data, bg_color);
 
     if (pass_data.num_culled == 0) {
       std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;
@@ -409,7 +414,7 @@ void Trainer::train() {
                  curr_camera.height);
 
     // --- BACKWARD PASS ---
-    float loss = backward_pass(curr_image, curr_camera, cuda, pass_data);
+    float loss = backward_pass(curr_image, curr_camera, cuda, pass_data, bg_color);
     std::cout << "LOSS TOTAL " << loss << std::endl;
 
     // --- OPTIMIZER STEP ---

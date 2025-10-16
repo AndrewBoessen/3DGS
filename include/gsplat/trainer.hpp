@@ -108,7 +108,7 @@ private:
    * @return Loss value
    */
   float backward_pass(const Image &curr_image, const Camera &curr_camera, CudaDataManager &cuda,
-                      ForwardPassData &pass_data);
+                      ForwardPassData &pass_data, float bg_color);
 
   /**
    * @brief Perform optimizer step to update Gaussian parameters
