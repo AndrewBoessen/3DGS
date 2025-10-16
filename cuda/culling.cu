@@ -547,8 +547,6 @@ void filter_gaussians_by_mask(const int N, const int num_sh_coef, const bool *d_
   // Apply mask to all arrays
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_xyz, d_mask, mask_sum, N, d_xyz_culled, 3);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_rgb, d_mask, mask_sum, N, d_rgb_culled, 3);
-  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_sh, d_mask, mask_sum, N, d_sh_culled,
-                                                                     num_sh_coef * 3);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_opacity, d_mask, mask_sum, N, d_opacity_culled,
                                                                      1);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_scale, d_mask, mask_sum, N, d_scale_culled, 3);
@@ -556,6 +554,9 @@ void filter_gaussians_by_mask(const int N, const int num_sh_coef, const bool *d_
                                                                      d_quaternion_culled, 4);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_uv, d_mask, mask_sum, N, d_uv_culled, 2);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_xyz_c, d_mask, mask_sum, N, d_xyz_c_culled, 3);
+  if (num_sh_coef > 0)
+    select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_sh, d_mask, mask_sum, N, d_sh_culled,
+                                                                       num_sh_coef * 3);
 
   // Free the temporary storage.
   CHECK_CUDA(cudaFree(d_temp_storage));

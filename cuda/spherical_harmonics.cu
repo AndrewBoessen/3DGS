@@ -29,6 +29,8 @@ __global__ void compute_rgb_from_sh_kernel(const float *sh_coefficients, const f
     g += point_sh_coeffs[i * 3 + 1] * sh_val;
     b += point_sh_coeffs[i * 3 + 2] * sh_val;
   }
+  if (idx == 0)
+    printf("R %f G %f B %f\n", r, g, b);
 
   // Apply sigmoid activation to map the output to the [0, 1] range
   rgb[idx * 3 + 0] = r;

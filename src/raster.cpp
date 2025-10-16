@@ -3,7 +3,7 @@
 #include "gsplat/cuda_forward.hpp"
 
 void rasterize_image(const int num_gaussians, const Camera &camera, const ConfigParameters &config,
-                     CudaDataManager &cuda, ForwardPassData &pass_data, float bg_color) {
+                     CudaDataManager &cuda, ForwardPassData &pass_data, const float bg_color, const int l_max) {
   const int width = (int)camera.width;
   const int height = (int)camera.height;
 
@@ -14,7 +14,7 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
                  config.cull_mask_padding, width, height, cuda.d_mask);
 
   // subtract 1 to account for band 0 being rgb
-  const int num_sh_coef = (pass_data.l_max + 1) * (pass_data.l_max + 1) - 1;
+  const int num_sh_coef = (l_max + 1) * (l_max + 1) - 1;
   // Step 2: Filter Gaussians based on the culling mask
   filter_gaussians_by_mask(num_gaussians, num_sh_coef, cuda.d_mask, cuda.d_xyz, cuda.d_rgb, cuda.d_sh, cuda.d_opacity,
                            cuda.d_scale, cuda.d_quaternion, cuda.d_uv, cuda.d_xyz_c, cuda.d_xyz_culled,
@@ -30,8 +30,8 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
   // Step 3; Compute final RGB values from spherical harmonics
   CHECK_CUDA(cudaMalloc(&pass_data.d_precomputed_rgb, pass_data.num_culled * 3 * sizeof(float)));
 
-  precompute_spherical_harmonics(cuda.d_xyz_c_culled, cuda.d_sh_culled, cuda.d_rgb_culled, pass_data.l_max,
-                                 pass_data.num_culled, pass_data.d_precomputed_rgb);
+  precompute_spherical_harmonics(cuda.d_xyz_c_culled, cuda.d_sh_culled, cuda.d_rgb_culled, l_max, pass_data.num_culled,
+                                 pass_data.d_precomputed_rgb);
 
   // Step 4: Compute Covariance and Conics
   CHECK_CUDA(cudaMalloc(&pass_data.d_sigma, pass_data.num_culled * 9 * sizeof(float)));

@@ -82,7 +82,8 @@ void Trainer::reset_opacity(CudaDataManager &cuda) {
   CHECK_CUDA(cudaMemset(cuda.d_opacity, new_opc, config.max_gaussians * sizeof(float)));
 }
 
-void Trainer::zero_grad(CudaDataManager &cuda, const int num_gaussians, const int num_sh_coef) {
+void Trainer::zero_grad(CudaDataManager &cuda) {
+  const int num_sh_coef = (l_max + 1) * (l_max + 1) - 1;
   CHECK_CUDA(cudaMemset(cuda.d_grad_xyz, 0.0f, 3 * num_gaussians * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.d_grad_rgb, 0.0f, 3 * num_gaussians * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.d_grad_sh, 0.0f, num_sh_coef * 3 * num_gaussians * sizeof(float)));
@@ -97,10 +98,36 @@ void Trainer::zero_grad(CudaDataManager &cuda, const int num_gaussians, const in
   CHECK_CUDA(cudaMemset(cuda.d_grad_precompute_rgb, 0.0f, 3 * num_gaussians * sizeof(float)));
 }
 
-void Trainer::add_sh_band(CudaDataManager &cuda) {}
+void Trainer::add_sh_band(CudaDataManager &cuda, ForwardPassData &pass_data) {
+  if (l_max >= config.max_sh_band)
+    return;
 
-int Trainer::adaptive_density_step(CudaDataManager &cuda, const int iter, const int num_gaussians,
-                                   const int num_sh_coef) {
+  if (l_max == 0) {
+    CHECK_CUDA(cudaMemset(cuda.d_sh, 0.0f, config.max_gaussians * 3 * 15 * sizeof(float)));
+    l_max++;
+    return;
+  }
+
+  const int curr_param_count = (l_max + 1) * (l_max + 1) - 1;
+  l_max++;
+  const int new_param_count = (l_max + 1) * (l_max + 1) - 1;
+
+  // Copy data to temp buffer
+  CHECK_CUDA(cudaMemcpy(cuda.d_sh_culled, cuda.d_sh, num_gaussians * 3 * curr_param_count * sizeof(float),
+                        cudaMemcpyDeviceToDevice));
+  // Zero sh params before copy back
+  CHECK_CUDA(cudaMemset(cuda.d_sh, 0.0f, num_gaussians * 3 * new_param_count * sizeof(float)));
+  // Strided copy back to leave space for new params
+  const size_t src_pitch = curr_param_count * 3 * sizeof(float);   // Pitch of the source (input) matrix
+  const size_t dst_pitch = new_param_count * 3 * sizeof(float);    // Pitch of the destination (output) matrix
+  const size_t width_bytes = curr_param_count * 3 * sizeof(float); // Width of the block to copy in bytes
+  const size_t height_rows = num_gaussians;                        // Height of the block to copy (number of rows)
+  CHECK_CUDA(cudaMemcpy2D(cuda.d_sh, dst_pitch, cuda.d_sh_culled, src_pitch, width_bytes, height_rows,
+                          cudaMemcpyDeviceToDevice));
+}
+
+void Trainer::adaptive_density_step(CudaDataManager &cuda) {
+  const int num_sh_coef = (l_max + 1) * (l_max + 1) - 1;
   const int total_size = adaptive_density(
       num_gaussians, iter, num_sh_coef, config.use_adaptive_fractional_densification, config.adaptive_control_end,
       config.adaptive_control_start, config.uv_grad_threshold, config.use_fractional_densification,
@@ -109,7 +136,8 @@ int Trainer::adaptive_density_step(CudaDataManager &cuda, const int iter, const 
       config.num_split_samples, config.split_scale_factor, cuda.d_uv_grad_accum, cuda.d_grad_accum_dur, cuda.d_scale,
       cuda.d_mask, cuda.d_xyz_grad_accum, cuda.d_xyz, cuda.d_rgb, cuda.d_sh, cuda.d_opacity, cuda.d_quaternion,
       cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_rgb, cuda.v_grad_rgb, cuda.m_grad_opacity, cuda.v_grad_opacity,
-      cuda.m_grad_scale, cuda.v_grad_scale, cuda.m_grad_quaternion, cuda.v_grad_quaternion);
+      cuda.m_grad_scale, cuda.v_grad_scale, cuda.m_grad_quaternion, cuda.v_grad_quaternion, cuda.m_grad_sh,
+      cuda.v_grad_sh);
 
   int new_gaussian_size = mask_sum(total_size, cuda.d_mask);
   printf("MASK SUM %d\n", new_gaussian_size);
@@ -124,6 +152,7 @@ int Trainer::adaptive_density_step(CudaDataManager &cuda, const int iter, const 
   filter_strided_vector(total_size, 4, cuda.d_mask, cuda.d_quaternion, cuda.d_quaternion_culled);
 
   if (num_sh_coef > 0) {
+    filter_strided_vector(total_size, num_sh_coef * 3, cuda.d_mask, cuda.d_sh, cuda.d_sh_culled);
   }
 
   // filter moment vectors for optimizer
@@ -139,6 +168,8 @@ int Trainer::adaptive_density_step(CudaDataManager &cuda, const int iter, const 
                         cuda.m_grad_quaternion_culled, cuda.v_grad_quaternion_culled);
 
   if (num_sh_coef > 0) {
+    filter_moment_vectors(total_size, num_sh_coef * 3, cuda.d_mask, cuda.m_grad_sh, cuda.v_grad_sh,
+                          cuda.m_grad_sh_culled, cuda.v_grad_sh_culled);
   }
 
   // --- COPY PHASE ---
@@ -156,6 +187,8 @@ int Trainer::adaptive_density_step(CudaDataManager &cuda, const int iter, const 
                         cudaMemcpyDeviceToDevice));
 
   if (num_sh_coef > 0) {
+    CHECK_CUDA(cudaMemcpy(cuda.d_sh, cuda.d_sh_culled, new_gaussian_size * num_sh_coef * 3 * sizeof(float),
+                          cudaMemcpyDeviceToDevice));
   }
 
   // copy moment vectors back
@@ -181,13 +214,17 @@ int Trainer::adaptive_density_step(CudaDataManager &cuda, const int iter, const 
                         cudaMemcpyDeviceToDevice));
 
   if (num_sh_coef > 0) {
+    CHECK_CUDA(cudaMemcpy(cuda.m_grad_sh, cuda.m_grad_sh_culled, new_gaussian_size * num_sh_coef * 3 * sizeof(float),
+                          cudaMemcpyDeviceToDevice));
+    CHECK_CUDA(cudaMemcpy(cuda.v_grad_sh, cuda.v_grad_sh_culled, new_gaussian_size * num_sh_coef * 3 * sizeof(float),
+                          cudaMemcpyDeviceToDevice));
   }
 
-  return new_gaussian_size;
+  num_gaussians = new_gaussian_size;
 }
 
 float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera, CudaDataManager &cuda,
-                             ForwardPassData &pass_data, float bg_color) {
+                             ForwardPassData &pass_data, const float bg_color) {
   const int width = (int)curr_camera.width;
   const int height = (int)curr_camera.height;
 
@@ -230,10 +267,8 @@ float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera,
                         pass_data.d_splats_per_pixel, pass_data.d_weight_per_pixel, d_grad_image, width, height,
                         cuda.d_grad_precompute_rgb, cuda.d_grad_opacity, cuda.d_grad_uv, cuda.d_grad_conic);
 
-  const int num_sh_coef = (pass_data.l_max + 1) * (pass_data.l_max + 1) - 1;
-
-  precompute_spherical_harmonics_backward(cuda.d_xyz_c_culled, cuda.d_grad_precompute_rgb, pass_data.l_max,
-                                          pass_data.num_culled, cuda.d_grad_sh, cuda.d_grad_rgb);
+  precompute_spherical_harmonics_backward(cuda.d_xyz_c_culled, cuda.d_grad_precompute_rgb, l_max, pass_data.num_culled,
+                                          cuda.d_grad_sh, cuda.d_grad_rgb);
   compute_conic_backward(pass_data.d_J, pass_data.d_sigma, cuda.d_T, cuda.d_grad_conic, pass_data.num_culled,
                          cuda.d_grad_J, cuda.d_grad_sigma);
   compute_projection_jacobian_backward(cuda.d_xyz_c_culled, cuda.d_K, cuda.d_grad_J, pass_data.num_culled,
@@ -251,8 +286,7 @@ float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera,
   return loss;
 }
 
-void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data, const int iter,
-                             const int num_gaussians, const int num_sh_coef) {
+void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data) {
   // Select moment vectors by filtering based on the culled mask
   filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_xyz_culled,
                         cuda.v_grad_xyz_culled);
@@ -302,8 +336,9 @@ void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_
   scatter_params(num_gaussians, 4, cuda.d_mask, cuda.d_quaternion_culled, cuda.d_quaternion);
 
   // Update Spherical Harmonics (SH) parameters if they are being used
+  const int num_sh_coef = (l_max + 1) * (l_max + 1) - 1;
   if (num_sh_coef > 0) {
-    filter_moment_vectors(num_gaussians, num_sh_coef, cuda.d_mask, cuda.m_grad_sh, cuda.v_grad_sh,
+    filter_moment_vectors(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.m_grad_sh, cuda.v_grad_sh,
                           cuda.m_grad_sh_culled, cuda.v_grad_sh_culled);
     adam_step(cuda.d_sh_culled, cuda.d_grad_sh, cuda.m_grad_sh_culled, cuda.v_grad_sh_culled,
               config.base_lr * config.sh_lr_multiplier, B1, B2, EPS, b1_t_corr, b2_t_corr,
@@ -339,19 +374,19 @@ void Trainer::train() {
   // Set optimizer moment vectors
   CHECK_CUDA(cudaMemset(cuda.m_grad_xyz, 0.0f, config.max_gaussians * 3 * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.m_grad_rgb, 0.0f, config.max_gaussians * 3 * sizeof(float)));
-  CHECK_CUDA(cudaMemset(cuda.m_grad_sh, 0.0f, config.max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.m_grad_sh, 0.0f, config.max_gaussians * 3 * 15 * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.m_grad_opacity, 0.0f, config.max_gaussians * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.m_grad_scale, 0.0f, config.max_gaussians * 3 * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.m_grad_quaternion, 0.0f, config.max_gaussians * 4 * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.v_grad_xyz, 0.0f, config.max_gaussians * 3 * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.v_grad_rgb, 0.0f, config.max_gaussians * 3 * sizeof(float)));
-  CHECK_CUDA(cudaMemset(cuda.v_grad_sh, 0.0f, config.max_gaussians * 3 * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.v_grad_sh, 0.0f, config.max_gaussians * 3 * 15 * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.v_grad_opacity, 0.0f, config.max_gaussians * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.v_grad_scale, 0.0f, config.max_gaussians * 3 * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.v_grad_quaternion, 0.0f, config.max_gaussians * 4 * sizeof(float)));
 
   // Copy Gaussian data from host to device
-  int num_gaussians = gaussians.size();
+  num_gaussians = gaussians.size();
   CHECK_CUDA(cudaMemcpy(cuda.d_xyz, gaussians.xyz.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
   CHECK_CUDA(cudaMemcpy(cuda.d_rgb, gaussians.rgb.data(), num_gaussians * 3 * sizeof(float), cudaMemcpyHostToDevice));
   CHECK_CUDA(
@@ -362,13 +397,13 @@ void Trainer::train() {
                         cudaMemcpyHostToDevice));
 
   // TRAINING LOOP
-  for (int iter = 0; iter < config.num_iters; ++iter) {
+  while (iter < config.num_iters) {
     std::cout << "ITER " << iter << std::endl;
     std::cout << "NUM GAUSSIANS " << num_gaussians << std::endl;
+    std::cout << "SH BAND " << l_max << std::endl;
     ForwardPassData pass_data;
-    const int num_sh_coef = (pass_data.l_max + 1) * (pass_data.l_max + 1) - 1;
 
-    zero_grad(cuda, num_gaussians, num_sh_coef);
+    zero_grad(cuda);
 
     // Get current training image and camera
     Image curr_image = train_images[iter % train_images.size()];
@@ -400,8 +435,12 @@ void Trainer::train() {
     if (config.use_background)
       bg_color = (iter % 255) / 255.0f;
 
+    // Add SH bands
+    if (iter % config.add_sh_band_interval == 0 && iter >= config.add_sh_band_interval)
+      add_sh_band(cuda, pass_data);
+
     // --- FORWARD PASS via RASTERIZE MODULE ---
-    rasterize_image(num_gaussians, curr_camera, config, cuda, pass_data, bg_color);
+    rasterize_image(num_gaussians, curr_camera, config, cuda, pass_data, bg_color, l_max);
 
     if (pass_data.num_culled == 0) {
       std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;
@@ -418,12 +457,12 @@ void Trainer::train() {
     std::cout << "LOSS TOTAL " << loss << std::endl;
 
     // --- OPTIMIZER STEP ---
-    optimizer_step(cuda, pass_data, iter, num_gaussians, num_sh_coef);
+    optimizer_step(cuda, pass_data);
 
     // --- ADAPTIVE DENSITY ---
     if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&
         iter < config.adaptive_control_end) {
-      num_gaussians = adaptive_density_step(cuda, iter, num_gaussians, num_sh_coef);
+      adaptive_density_step(cuda);
       reset_grad_accum(cuda);
     }
 
@@ -435,5 +474,8 @@ void Trainer::train() {
 
     // Free temporary buffers for this iteration
     cleanup_iteration_buffers(pass_data);
+
+    // Increment iteration
+    iter++;
   }
 }

@@ -132,13 +132,13 @@ __global__ void fused_loss_kernel(const float *__restrict__ image, const float *
       float dD = (2.0f * mu_p * d_mu_p) * (var_p + var_g + SSIMConstants::C2) +
                  (mu_p * mu_p + mu_g * mu_g + SSIMConstants::C1) * d_var_p;
 
-      float d_ssim = (dN * ssim_den - ssim_num * dD) / (ssim_den * ssim_den);
+      float d_ssim = (dN * ssim_den - ssim_num * dD) / (ssim_den * ssim_den + 1e-6f);
 
       // Add weighted SSIM gradient part. Grad of loss (1-SSIM) is -d_ssim.
-      image_grad[central_idx] -= ssim_weight * d_ssim;
+      image_grad[central_idx] -= ssim_weight * 0.5f * d_ssim;
     }
     avg_ssim /= 3.0f;
-    pixel_ssim_loss = 1.0f - avg_ssim;
+    pixel_ssim_loss = (1.0f - avg_ssim) / 2.0f;
   }
 
   // --- Combine losses and store in shared memory for reduction ---

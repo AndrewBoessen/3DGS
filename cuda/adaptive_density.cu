@@ -72,8 +72,8 @@ fused_adaptive_density_kernel(const int N, const int max_gaussians, const bool u
                               const float *__restrict__ xyz_grad_accum, const int *__restrict__ grad_accum_count,
                               float *xyz, float *rgb, float *sh, float *opacity, float *scale, float *quaternion,
                               float *m_xyz, float *v_xyz, float *m_rgb, float *v_rgb, float *m_op, float *v_op,
-                              float *m_scale, float *v_scale, float *m_quat, float *v_quat, const int num_sh_coef,
-                              bool *d_mask, int *d_write_index, curandState *state) {
+                              float *m_scale, float *v_scale, float *m_quat, float *v_quat, float *m_sh, float *v_sh,
+                              const int num_sh_coef, bool *d_mask, int *d_write_index, curandState *state) {
   if (!(use_delete || use_split || use_clone))
     return;
 
@@ -139,23 +139,38 @@ fused_adaptive_density_kernel(const int N, const int max_gaussians, const bool u
         quaternion[write_idx * 4 + j] = quaternion[idx * 4 + j];
       // sh
       if (num_sh_coef > 0) {
-        for (int j = 0; j < num_sh_coef; j++)
-          sh[write_idx * num_sh_coef + j] = sh[idx * num_sh_coef + j];
+        for (int j = 0; j < num_sh_coef * 3; j++)
+          sh[write_idx * num_sh_coef * 3 + j] = sh[idx * num_sh_coef * 3 + j];
       }
       // optimizer moment vectors
 #pragma unroll
-      for (int j = 0; j < 3; j++)
+      for (int j = 0; j < 3; j++) {
         m_xyz[write_idx * 3 + j] = 0.0f;
+        v_xyz[write_idx * 3 + j] = 0.0f;
+      }
 #pragma unroll
-      for (int j = 0; j < 3; j++)
+      for (int j = 0; j < 3; j++) {
         m_rgb[write_idx * 3 + j] = 0.0f;
+        v_rgb[write_idx * 3 + j] = 0.0f;
+      }
       m_op[write_idx] = 0.0f;
+      v_op[write_idx] = 0.0f;
 #pragma unroll
-      for (int j = 0; j < 3; j++)
+      for (int j = 0; j < 3; j++) {
         m_scale[write_idx * 3 + j] = 0.0f;
+        v_scale[write_idx * 3 + j] = 0.0f;
+      }
 #pragma unroll
-      for (int j = 0; j < 4; j++)
+      for (int j = 0; j < 4; j++) {
         m_quat[write_idx * 4 + j] = 0.0f;
+        v_quat[write_idx * 4 + j] = 0.0f;
+      }
+      if (num_sh_coef > 0) {
+        for (int j = 0; j < num_sh_coef * 3; j++) {
+          m_sh[write_idx * num_sh_coef * 3 + j] = 0.0f;
+          v_sh[write_idx * num_sh_coef * 3 + j] = 0.0f;
+        }
+      }
     }
   }
 
@@ -241,22 +256,39 @@ fused_adaptive_density_kernel(const int N, const int max_gaussians, const bool u
           quaternion[(write_idx + i) * 4 + j] = quaternion[idx * 4 + j];
         // sh
         if (num_sh_coef > 0) {
-          for (int j = 0; j < num_sh_coef; j++)
-            sh[(write_idx + i) * num_sh_coef + j] = sh[idx * num_sh_coef + j];
+          for (int j = 0; j < num_sh_coef * 3; j++)
+            sh[(write_idx + i) * num_sh_coef * 3 + j] = sh[idx * num_sh_coef + j];
+        }
+
+        // optimizer moment vectors
+#pragma unroll
+        for (int j = 0; j < 3; j++) {
+          m_xyz[(write_idx + i) * 3 + j] = 0.0f;
+          v_xyz[(write_idx + i) * 3 + j] = 0.0f;
         }
 #pragma unroll
-        for (int j = 0; j < 3; j++)
-          m_xyz[write_idx * 3 + j] = 0.0f;
+        for (int j = 0; j < 3; j++) {
+          m_rgb[(write_idx + i) * 3 + j] = 0.0f;
+          v_rgb[(write_idx + i) * 3 + j] = 0.0f;
+        }
+        m_op[(write_idx + i)] = 0.0f;
+        v_op[(write_idx + i)] = 0.0f;
 #pragma unroll
-        for (int j = 0; j < 3; j++)
-          m_rgb[write_idx * 3 + j] = 0.0f;
-        m_op[write_idx] = 0.0f;
+        for (int j = 0; j < 3; j++) {
+          m_scale[(write_idx + i) * 3 + j] = 0.0f;
+          v_scale[(write_idx + i) * 3 + j] = 0.0f;
+        }
 #pragma unroll
-        for (int j = 0; j < 3; j++)
-          m_scale[write_idx * 3 + j] = 0.0f;
-#pragma unroll
-        for (int j = 0; j < 4; j++)
-          m_quat[write_idx * 4 + j] = 0.0f;
+        for (int j = 0; j < 4; j++) {
+          m_quat[(write_idx + i) * 4 + j] = 0.0f;
+          v_quat[(write_idx + i) * 4 + j] = 0.0f;
+        }
+        if (num_sh_coef > 0) {
+          for (int j = 0; j < num_sh_coef * 3; j++) {
+            m_sh[(write_idx + i) * num_sh_coef * 3 + j] = 0.0f;
+            v_sh[(write_idx + i) * num_sh_coef * 3 + j] = 0.0f;
+          }
+        }
       }
     }
   }
@@ -272,7 +304,7 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef,
                      const float *uv_grad_accum, const int *grad_accum_count, float *scale, bool *d_mask,
                      const float *xyz_grad_accum, float *xyz, float *rgb, float *sh, float *opacity, float *quaternion,
                      float *m_xyz, float *v_xyz, float *m_rgb, float *v_rgb, float *m_op, float *v_op, float *m_scale,
-                     float *v_scale, float *m_quat, float *v_quat, cudaStream_t stream) {
+                     float *v_scale, float *m_quat, float *v_quat, float *m_sh, float *v_sh, cudaStream_t stream) {
   const int threads_per_block = 256;
 
   // Calculate the number of blocks needed to cover all N Gaussians.
@@ -280,8 +312,6 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef,
 
   const dim3 gridsize(num_blocks, 1, 1);
   const dim3 blocksize(threads_per_block, 1, 1);
-
-  printf("NUM GAUSS %d\n", N);
 
   // Create random states
   curandState *curand_states;
@@ -310,7 +340,6 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef,
   float uv_split_val = uv_grad_threshold;
   if (use_fractional_densification) {
     const int uv_k = static_cast<int>(floorf(N * (1.0f - (1.0f - uv_grad_percentile) * scale_factor)));
-    printf("UV K %d\n", uv_k);
 
     void *d_uv_temp_storage = nullptr;
     float *uv_output;
@@ -330,7 +359,6 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef,
 
   float split_scale_threshold;
   const int scale_k = static_cast<int>(floorf(N * (1.0f - (1.0f - scale_norm_percentile) * scale_factor)));
-  printf("SCALE K %d\n", scale_k);
 
   void *d_scale_temp_storage = nullptr;
   float *scale_output;
@@ -358,7 +386,7 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef,
       N, max_gaussians, use_delete, use_clone, use_split, delete_opacity_threshold, clone_scale_threshold,
       split_scale_threshold, uv_split_val, num_split_samples, split_scale_factor, uv_grad_accum, xyz_grad_accum,
       grad_accum_count, xyz, rgb, sh, opacity, scale, quaternion, m_xyz, v_xyz, m_rgb, v_rgb, m_op, v_op, m_scale,
-      v_scale, m_quat, v_quat, num_sh_coef, d_mask, global_index, curand_states);
+      v_scale, m_quat, v_quat, m_sh, v_sh, num_sh_coef, d_mask, global_index, curand_states);
 
   // Free memory
   CHECK_CUDA(cudaFree(uv_grad_avg_norm));
@@ -367,7 +395,6 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef,
 
   int total_size = 0;
   CHECK_CUDA(cudaMemcpy(&total_size, global_index, sizeof(int), cudaMemcpyDeviceToHost));
-  printf("TOTAL SIZE %d\n", total_size);
 
   CHECK_CUDA(cudaFree(global_index));
   return total_size;
