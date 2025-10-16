@@ -203,3 +203,5 @@ void scatter_params(const int N, const int S, const bool *d_mask, const float *s
 void accumulate_gradients(const int N, const bool *d_mask, const float *d_grad_xyz, const float *d_grad_uv,
                           float *d_xyz_grad_accum, float *d_uv_grad_acuum, int *d_grad_accum_dur,
                           cudaStream_t stream = 0);
+
+void set_values(const int size, float *vals, const float val);

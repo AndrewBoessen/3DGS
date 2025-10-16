@@ -257,7 +257,7 @@ fused_adaptive_density_kernel(const int N, const int max_gaussians, const bool u
         // sh
         if (num_sh_coef > 0) {
           for (int j = 0; j < num_sh_coef * 3; j++)
-            sh[(write_idx + i) * num_sh_coef * 3 + j] = sh[idx * num_sh_coef + j];
+            sh[(write_idx + i) * num_sh_coef * 3 + j] = sh[idx * num_sh_coef * 3 + j];
         }
 
         // optimizer moment vectors

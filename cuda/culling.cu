@@ -3,6 +3,22 @@
 #include <cub/cub.cuh>
 #include <math_constants.h>
 
+// Kernel to set every element of a float array to a specific value
+__global__ void set_value_kernel(float *arr, float value, int n) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  // A safety check to prevent writing out of bounds
+  if (idx < n) {
+    arr[idx] = value;
+  }
+}
+
+void set_values(const int size, float *vals, const float val) {
+  const int threads = 256;
+  const int blocks = (size + threads - 1) / threads;
+  set_value_kernel<<<blocks, threads>>>(vals, val, size);
+}
+
 __device__ __forceinline__ bool z_distance_culling(const float z, const float near_thresh, const float far_thresh) {
   return z >= near_thresh && z <= far_thresh;
 }

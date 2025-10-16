@@ -79,7 +79,7 @@ void Trainer::reset_opacity(CudaDataManager &cuda) {
   const double opc = config.reset_opacity_value;
   const float new_opc = log(opc) - log(1.0f - opc);
 
-  CHECK_CUDA(cudaMemset(cuda.d_opacity, new_opc, config.max_gaussians * sizeof(float)));
+  set_values(num_gaussians, cuda.d_opacity, new_opc);
 }
 
 void Trainer::zero_grad(CudaDataManager &cuda) {
@@ -400,7 +400,6 @@ void Trainer::train() {
   while (iter < config.num_iters) {
     std::cout << "ITER " << iter << std::endl;
     std::cout << "NUM GAUSSIANS " << num_gaussians << std::endl;
-    std::cout << "SH BAND " << l_max << std::endl;
     ForwardPassData pass_data;
 
     zero_grad(cuda);
@@ -466,11 +465,11 @@ void Trainer::train() {
       reset_grad_accum(cuda);
     }
 
-    // if (iter > config.reset_opacity_start && iter % config.reset_opacity_interval == 0 &&
-    //     iter < config.reset_opacity_end) {
-    //   reset_opacity(cuda);
-    //   reset_grad_accum(cuda);
-    // }
+    if (iter > config.reset_opacity_start && iter % config.reset_opacity_interval == 0 &&
+        iter < config.reset_opacity_end) {
+      reset_opacity(cuda);
+      reset_grad_accum(cuda);
+    }
 
     // Free temporary buffers for this iteration
     cleanup_iteration_buffers(pass_data);
