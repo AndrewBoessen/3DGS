@@ -274,23 +274,9 @@ __global__ void sigma_backward_kernel(const float *__restrict__ q, const float *
   // --- 3. Compute final gradients for scale (s) and quaternion (q) ---
 
   // Gradient for scale: ds = dS_vec * exp(s)
-  float scale_grad_factor = 1.0f;
-
-  const float scale_grad_x = dS_vec_x * S_x;
-  const float scale_grad_y = dS_vec_y * S_y;
-  const float scale_grad_z = dS_vec_z * S_z;
-
-  const float scale_grad_norm =
-      sqrtf(scale_grad_x * scale_grad_x + scale_grad_y * scale_grad_y + scale_grad_z * scale_grad_z);
-
-  const float clip_thresh = 2.0f;
-  if (scale_grad_norm > clip_thresh) {
-    scale_grad_factor = clip_thresh / scale_grad_norm;
-  }
-
-  dS_in[idx * 3 + 0] = scale_grad_x * scale_grad_factor;
-  dS_in[idx * 3 + 1] = scale_grad_y * scale_grad_factor;
-  dS_in[idx * 3 + 2] = scale_grad_z * scale_grad_factor;
+  dS_in[idx * 3 + 0] = dS_vec_x * S_x;
+  dS_in[idx * 3 + 1] = dS_vec_y * S_y;
+  dS_in[idx * 3 + 2] = dS_vec_z * S_z;
 
   // Gradient for quaternion
   // dq_i = sum(dR_jk * dR_jk/dq_i)
