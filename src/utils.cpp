@@ -74,7 +74,6 @@ ConfigParameters parseConfig(const std::string &filename) {
     params.max_gaussians = getNodeValue<int>(config, "max_gaussians");
     params.delete_opacity_threshold = getNodeValue<float>(config, "delete_opacity_threshold");
     params.clone_scale_threshold = getNodeValue<float>(config, "clone_scale_threshold");
-    params.max_scale_norm = getNodeValue<float>(config, "max_scale_norm");
     params.use_fractional_densification = getNodeValue<bool>(config, "use_fractional_densification");
     params.use_adaptive_fractional_densification = getNodeValue<bool>(config, "use_adaptive_fractional_densification");
     params.uv_grad_percentile = getNodeValue<float>(config, "uv_grad_percentile");

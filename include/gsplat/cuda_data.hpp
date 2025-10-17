@@ -61,7 +61,6 @@ struct CudaDataManager {
 
 // Data structure to hold pointers for buffers allocated per-iteration.
 struct ForwardPassData {
-  int l_max = 0;
   int num_culled = 0;
   // Buffers dependent on num_culled
   float *d_sigma = nullptr, *d_conic = nullptr, *d_J = nullptr, *d_precomputed_rgb = nullptr;

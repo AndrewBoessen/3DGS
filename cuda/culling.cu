@@ -3,6 +3,22 @@
 #include <cub/cub.cuh>
 #include <math_constants.h>
 
+// Kernel to set every element of a float array to a specific value
+__global__ void set_value_kernel(float *arr, float value, int n) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  // A safety check to prevent writing out of bounds
+  if (idx < n) {
+    arr[idx] = value;
+  }
+}
+
+void set_values(const int size, float *vals, const float val) {
+  const int threads = 256;
+  const int blocks = (size + threads - 1) / threads;
+  set_value_kernel<<<blocks, threads>>>(vals, val, size);
+}
+
 __device__ __forceinline__ bool z_distance_culling(const float z, const float near_thresh, const float far_thresh) {
   return z >= near_thresh && z <= far_thresh;
 }
@@ -547,8 +563,6 @@ void filter_gaussians_by_mask(const int N, const int num_sh_coef, const bool *d_
   // Apply mask to all arrays
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_xyz, d_mask, mask_sum, N, d_xyz_culled, 3);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_rgb, d_mask, mask_sum, N, d_rgb_culled, 3);
-  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_sh, d_mask, mask_sum, N, d_sh_culled,
-                                                                     num_sh_coef * 3);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_opacity, d_mask, mask_sum, N, d_opacity_culled,
                                                                      1);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_scale, d_mask, mask_sum, N, d_scale_culled, 3);
@@ -556,6 +570,9 @@ void filter_gaussians_by_mask(const int N, const int num_sh_coef, const bool *d_
                                                                      d_quaternion_culled, 4);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_uv, d_mask, mask_sum, N, d_uv_culled, 2);
   select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_xyz_c, d_mask, mask_sum, N, d_xyz_c_culled, 3);
+  if (num_sh_coef > 0)
+    select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_sh, d_mask, mask_sum, N, d_sh_culled,
+                                                                       num_sh_coef * 3);
 
   // Free the temporary storage.
   CHECK_CUDA(cudaFree(d_temp_storage));

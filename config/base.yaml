@@ -17,8 +17,8 @@ xyz_lr_multiplier: 0.16
 quat_lr_multiplier: 1
 scale_lr_multiplier: 5
 opacity_lr_multiplier: 25
-rgb_lr_multiplier: 10
-sh_lr_multiplier: 0.1
+rgb_lr_multiplier: 4
+sh_lr_multiplier: 0.2
 test_eval_interval: 500
 test_split_ratio: 8
 use_background: true
@@ -37,13 +37,12 @@ adaptive_control_start: 750
 adaptive_control_end: 6500
 adaptive_control_interval: 100
 max_gaussians: 4250000
-delete_opacity_threshold: 0.1
+delete_opacity_threshold: 0.005
 clone_scale_threshold: 0.01
-max_scale_norm: 0.5
 use_fractional_densification: true
 use_adaptive_fractional_densification: true
-uv_grad_percentile: 0.95
-scale_norm_percentile: 0.95
+uv_grad_percentile: 0.96
+scale_norm_percentile: 0.99
 uv_grad_threshold: 0.0002
 split_scale_factor: 1.6
 num_split_samples: 2

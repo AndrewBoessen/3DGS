@@ -45,6 +45,8 @@
  * @param[in,out]  v_scale                                Scale second moment vector
  * @param[in,out]  m_quat                                 Quaternion first moment vector
  * @param[in,out]  v_quat                                 Quaternion second moment vector
+ * @param[in,out]  m_sh                                   Spherical Harmonics first moment vector
+ * @param[in,out]  v_sh                                   Spherical Harmonics second moment vector
  * @param[in]      stream                                 The CUDA stream to execute on
  * @return Total number of gaussians after step
  */
@@ -58,4 +60,4 @@ int adaptive_density(const int N, const int iter, const int num_sh_coef,
                      const float *uv_grad_accum, const int *grad_accum_count, float *scale, bool *d_mask,
                      const float *xyz_grad_accum, float *xyz, float *rgb, float *sh, float *opacity, float *quaternion,
                      float *m_xyz, float *v_xyz, float *m_rgb, float *v_rgb, float *m_op, float *v_op, float *m_scale,
-                     float *v_scale, float *m_quat, float *v_quat, cudaStream_t stream = 0);
+                     float *v_scale, float *m_quat, float *v_quat, float *m_sh, float *v_sh, cudaStream_t stream = 0);

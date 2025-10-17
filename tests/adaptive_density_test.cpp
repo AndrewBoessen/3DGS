@@ -173,7 +173,7 @@ TEST_F(AdaptiveDensityTest, NoOperation) {
   adaptive_density(N, 0, num_sh_coef, false, 0, 0, 0.0f, false, 0.0f, 0.0f, max_gaussians, false, false, false, 0.1f,
                    0.001f, 2, 1.6f, d_uv_grad_accum, d_grad_accum_count, d_scale, d_mask, d_xyz_grad_accum, d_xyz,
                    d_rgb, d_sh, d_opacity, d_quaternion, d_m_xyz, d_v_xyz, d_m_rgb, d_v_rgb, d_m_opacity, d_v_opacity,
-                   d_m_scale, d_v_scale, d_m_quaternion, d_v_quaternion);
+                   d_m_scale, d_v_scale, d_m_quaternion, d_v_quaternion, d_m_sh, d_v_sh);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   std::vector<char> h_mask(max_gaussians);
@@ -209,7 +209,7 @@ TEST_F(AdaptiveDensityTest, DeletionLogic) {
   adaptive_density(N, 0, num_sh_coef, false, 0, 0, 0.0f, false, 0.0f, 0.0f, max_gaussians, true, false, false, 0.1f,
                    0.0f, 2, 1.6f, d_uv_grad_accum, d_grad_accum_count, d_scale, d_mask, d_xyz_grad_accum, d_xyz, d_rgb,
                    d_sh, d_opacity, d_quaternion, d_m_xyz, d_v_xyz, d_m_rgb, d_v_rgb, d_m_opacity, d_v_opacity,
-                   d_m_scale, d_v_scale, d_m_quaternion, d_v_quaternion);
+                   d_m_scale, d_v_scale, d_m_quaternion, d_v_quaternion, d_m_sh, d_v_sh);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   std::vector<char> h_mask(max_gaussians);
@@ -247,7 +247,7 @@ TEST_F(AdaptiveDensityTest, CloningLogic) {
   adaptive_density(N, 0, num_sh_coef, false, 0, 0, uv_split_val, false, 0.0f, 0.0f, max_gaussians, true, true, false,
                    0.01f, clone_scale_threshold, 2, 1.6f, d_uv_grad_accum, d_grad_accum_count, d_scale, d_mask,
                    d_xyz_grad_accum, d_xyz, d_rgb, d_sh, d_opacity, d_quaternion, d_m_xyz, d_v_xyz, d_m_rgb, d_v_rgb,
-                   d_m_opacity, d_v_opacity, d_m_scale, d_v_scale, d_m_quaternion, d_v_quaternion);
+                   d_m_opacity, d_v_opacity, d_m_scale, d_v_scale, d_m_quaternion, d_v_quaternion, d_m_sh, d_v_sh);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   std::vector<char> h_mask(max_gaussians);
@@ -300,7 +300,7 @@ TEST_F(AdaptiveDensityTest, SplittingLogic) {
                    0.01f, clone_scale_threshold, num_split_samples, split_scale_factor, d_uv_grad_accum,
                    d_grad_accum_count, d_scale, d_mask, d_xyz_grad_accum, d_xyz, d_rgb, d_sh, d_opacity, d_quaternion,
                    d_m_xyz, d_v_xyz, d_m_rgb, d_v_rgb, d_m_opacity, d_v_opacity, d_m_scale, d_v_scale, d_m_quaternion,
-                   d_v_quaternion);
+                   d_v_quaternion, d_m_sh, d_v_sh);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   std::vector<char> h_mask(max_gaussians);
@@ -363,7 +363,7 @@ TEST_F(AdaptiveDensityTest, CombinedOperations) {
                    delete_op_threshold, clone_scale_threshold, num_split_samples, 1.6f, d_uv_grad_accum,
                    d_grad_accum_count, d_scale, d_mask, d_xyz_grad_accum, d_xyz, d_rgb, d_sh, d_opacity, d_quaternion,
                    d_m_xyz, d_v_xyz, d_m_rgb, d_v_rgb, d_m_opacity, d_v_opacity, d_m_scale, d_v_scale, d_m_quaternion,
-                   d_v_quaternion);
+                   d_v_quaternion, d_m_sh, d_v_sh);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   std::vector<char> h_mask(max_gaussians);

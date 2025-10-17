@@ -68,6 +68,13 @@ private:
   /// @brief A vector of images designated for the training set.
   std::vector<Image> train_images;
 
+  /// @brief The current training iteration
+  int iter = 0;
+  /// @brief The current spherical_harmonics band
+  int l_max = 0;
+  /// @ The current number of trainable Gaussians
+  int num_gaussians = 0;
+
   /**
    * @brief Free temporary memory buffers for training iteration
    * @param[in] pass_data Temporary buffer data
@@ -97,7 +104,7 @@ private:
    * @param[in] num_gaussians Total number of trainable Gaussians
    * @param[in] num_sh_coef The number of spherical harmonics coefficients
    */
-  void zero_grad(CudaDataManager &cuda, const int num_gaussians, const int num_sh_coef);
+  void zero_grad(CudaDataManager &cuda);
 
   /**
    * @brief Compute gradients from forward pass
@@ -108,7 +115,7 @@ private:
    * @return Loss value
    */
   float backward_pass(const Image &curr_image, const Camera &curr_camera, CudaDataManager &cuda,
-                      ForwardPassData &pass_data, float bg_color);
+                      ForwardPassData &pass_data, const float bg_color);
 
   /**
    * @brief Perform optimizer step to update Gaussian parameters
@@ -118,8 +125,7 @@ private:
    * @param[in] num_gaussians Total number of trainable Gaussians
    * @param[in] num_sh_coef The number of spherical harmonics coefficients
    */
-  void optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data, const int iter, const int num_gaussians,
-                      const int num_sh_coef);
+  void optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data);
 
   /**
    * @brief Increases the spherical harmonics (SH) degree for all Gaussians.
@@ -128,7 +134,7 @@ private:
    * as training progresses. It upgrades the SH bands up to the maximum level
    * specified in the configuration.
    */
-  void add_sh_band(CudaDataManager &cuda);
+  void add_sh_band(CudaDataManager &cuda, ForwardPassData &pass_data);
 
   /**
    * @brief Manages the adaptive densification of Gaussians during training.
@@ -140,5 +146,5 @@ private:
    * @param[in] num_gaussians Total number of trainable Gaussians
    * @param[in] num_sh_coef The number of spherical harmonics coefficients
    */
-  int adaptive_density_step(CudaDataManager &cuda, const int iter, const int num_gaussians, const int num_sh_coef);
+  void adaptive_density_step(CudaDataManager &cuda);
 };

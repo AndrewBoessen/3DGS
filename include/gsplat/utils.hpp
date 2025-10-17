@@ -65,7 +65,6 @@ struct ConfigParameters {
   int max_gaussians;
   double delete_opacity_threshold;
   double clone_scale_threshold;
-  double max_scale_norm;
   bool use_fractional_densification;
   bool use_adaptive_fractional_densification;
   double uv_grad_percentile;

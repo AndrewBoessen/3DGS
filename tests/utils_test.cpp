@@ -54,7 +54,6 @@ protected:
         << "max_gaussians: 1000000\n"
         << "delete_opacity_threshold: 0.005\n"
         << "clone_scale_threshold: 0.01\n"
-        << "max_scale_norm: 1.0\n"
         << "use_fractional_densification: true\n"
         << "use_adaptive_fractional_densification: true\n"
         << "uv_grad_percentile: 0.5\n"
