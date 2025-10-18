@@ -190,3 +190,41 @@ std::optional<std::unordered_map<uint64_t, Point3D>> ReadPoints3DBinary(const st
   }
   return points3D;
 }
+
+double computeMaxDiagonal(const std::unordered_map<int, Image> &images) {
+  if (images.empty()) {
+    return 0.0;
+  }
+
+  // 1. Calculate the world coordinates (centers) of all cameras.
+  // This is equivalent to C = -R^T * t
+  std::vector<Eigen::Vector3d> camera_centers;
+  camera_centers.reserve(images.size());
+
+  for (const auto &pair : images) {
+    const Image &img = pair.second;
+    Eigen::Matrix3d R = img.QvecToRotMat();
+    Eigen::Vector3d t = img.tvec;
+
+    // Calculate camera center in world coordinates
+    Eigen::Vector3d center = -R.transpose() * t;
+    camera_centers.push_back(center);
+  }
+
+  // 2. Compute the average camera center (centroid).
+  Eigen::Vector3d sum_of_centers = Eigen::Vector3d::Zero();
+  for (const auto &center : camera_centers) {
+    sum_of_centers += center;
+  }
+  Eigen::Vector3d avg_center = sum_of_centers / camera_centers.size();
+
+  // 3. Find the maximum distance from any camera to the average center.
+  double max_dist = 0.0;
+  for (const auto &center : camera_centers) {
+    // Calculate the Euclidean distance (L2 norm) between the center and the average
+    double dist = (center - avg_center).norm();
+    max_dist = std::max(max_dist, dist);
+  }
+
+  return max_dist;
+}

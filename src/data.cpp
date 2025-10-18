@@ -76,7 +76,7 @@ CudaDataManager::CudaDataManager(size_t max_gaussians_in) : max_gaussians(max_ga
 
   // Gradient accum vectors
   CHECK_CUDA(cudaMalloc(&d_xyz_grad_accum, max_gaussians * 3 * sizeof(float)));
-  CHECK_CUDA(cudaMalloc(&d_uv_grad_accum, max_gaussians * 2 * sizeof(float)));
+  CHECK_CUDA(cudaMalloc(&d_uv_grad_accum, max_gaussians * sizeof(float)));
   CHECK_CUDA(cudaMalloc(&d_grad_accum_dur, max_gaussians * sizeof(int)));
 }
 
