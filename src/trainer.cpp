@@ -9,6 +9,7 @@
 #include "gsplat/raster.hpp"
 #include <format>
 #include <iostream>
+#include <random>
 
 // Helper function to save an image from a device buffer
 void save_image(const std::string &filename, const float *d_image_buffer, int width, int height) {
@@ -286,7 +287,7 @@ float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera,
   return loss;
 }
 
-void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data) {
+void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data, const Camera &curr_camera) {
   // Select moment vectors by filtering based on the culled mask
   filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_xyz_culled,
                         cuda.v_grad_xyz_culled);
@@ -349,8 +350,8 @@ void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_
   }
 
   // Update gradient accumulators
-  accumulate_gradients(num_gaussians, cuda.d_mask, cuda.d_grad_xyz, cuda.d_grad_uv, cuda.d_xyz_grad_accum,
-                       cuda.d_uv_grad_accum, cuda.d_grad_accum_dur);
+  accumulate_gradients(num_gaussians, curr_camera.params[0], curr_camera.params[1], cuda.d_mask, cuda.d_grad_xyz,
+                       cuda.d_grad_uv, cuda.d_xyz_grad_accum, cuda.d_uv_grad_accum, cuda.d_grad_accum_dur);
 }
 
 void Trainer::cleanup_iteration_buffers(ForwardPassData &pass_data) {
@@ -396,6 +397,10 @@ void Trainer::train() {
   CHECK_CUDA(cudaMemcpy(cuda.d_quaternion, gaussians.quaternion.data(), num_gaussians * 4 * sizeof(float),
                         cudaMemcpyHostToDevice));
 
+  std::random_device rd;                                             // obtain a random number from hardware
+  std::mt19937 gen(rd());                                            // seed the generator
+  std::uniform_int_distribution<> distr(0, train_images.size() - 1); // define the range
+
   // TRAINING LOOP
   while (iter < config.num_iters) {
     std::cout << "ITER " << iter << std::endl;
@@ -405,7 +410,7 @@ void Trainer::train() {
     zero_grad(cuda);
 
     // Get current training image and camera
-    Image curr_image = train_images[iter % train_images.size()];
+    Image curr_image = train_images[distr(gen)];
     Camera curr_camera = cameras[curr_image.camera_id];
 
     // Prepare and copy camera parameters to device
@@ -456,7 +461,7 @@ void Trainer::train() {
     std::cout << "LOSS TOTAL " << loss << std::endl;
 
     // --- OPTIMIZER STEP ---
-    optimizer_step(cuda, pass_data);
+    optimizer_step(cuda, pass_data, curr_camera);
 
     // --- ADAPTIVE DENSITY ---
     if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&

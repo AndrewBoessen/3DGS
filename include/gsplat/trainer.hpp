@@ -125,7 +125,7 @@ private:
    * @param[in] num_gaussians Total number of trainable Gaussians
    * @param[in] num_sh_coef The number of spherical harmonics coefficients
    */
-  void optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data);
+  void optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data, const Camera &curr_camera);
 
   /**
    * @brief Increases the spherical harmonics (SH) degree for all Gaussians.

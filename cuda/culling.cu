@@ -346,10 +346,11 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
                                                              height, mask);
 }
 
-__global__ void scatter_add_gradients_kernel(const float *d_grad_uv_culled, const float *d_grad_xyz_culled,
-                                             const bool *d_mask, const int *d_culled_count_prefix_sum,
-                                             int num_gaussians, float *d_uv_grad_accum_full,
-                                             float *d_xyz_grad_accum_full, int *d_grad_accum_dur_full) {
+__global__ void scatter_add_gradients_kernel(const float u_scale, const float v_scale, const float *d_grad_uv_culled,
+                                             const float *d_grad_xyz_culled, const bool *d_mask,
+                                             const int *d_culled_count_prefix_sum, int num_gaussians,
+                                             float *d_uv_grad_accum_full, float *d_xyz_grad_accum_full,
+                                             int *d_grad_accum_dur_full) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= num_gaussians)
     return;
@@ -357,12 +358,12 @@ __global__ void scatter_add_gradients_kernel(const float *d_grad_uv_culled, cons
   if (d_mask[idx]) {
     int culled_idx = d_culled_count_prefix_sum[idx];
 
-    atomicAdd(&d_uv_grad_accum_full[idx * 2 + 0], d_grad_uv_culled[culled_idx * 2 + 0]);
-    atomicAdd(&d_uv_grad_accum_full[idx * 2 + 1], d_grad_uv_culled[culled_idx * 2 + 1]);
+    atomicAdd(&d_uv_grad_accum_full[idx * 2 + 0], abs(d_grad_uv_culled[culled_idx * 2 + 0] * u_scale));
+    atomicAdd(&d_uv_grad_accum_full[idx * 2 + 1], abs(d_grad_uv_culled[culled_idx * 2 + 1] * v_scale));
 
-    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 0], d_grad_xyz_culled[culled_idx * 3 + 0]);
-    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 1], d_grad_xyz_culled[culled_idx * 3 + 1]);
-    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 2], d_grad_xyz_culled[culled_idx * 3 + 2]);
+    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 0], abs(d_grad_xyz_culled[culled_idx * 3 + 0]));
+    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 1], abs(d_grad_xyz_culled[culled_idx * 3 + 1]));
+    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 2], abs(d_grad_xyz_culled[culled_idx * 3 + 2]));
 
     atomicAdd(&d_grad_accum_dur_full[idx], 1);
   }
@@ -481,8 +482,9 @@ int mask_sum(const int N, const bool *d_mask) {
   return h_out;
 }
 
-void accumulate_gradients(const int N, const bool *d_mask, const float *d_grad_xyz, const float *d_grad_uv,
-                          float *d_xyz_grad_accum, float *d_uv_grad_acuum, int *d_grad_accum_dur, cudaStream_t stream) {
+void accumulate_gradients(const int N, const float u_scale, const float v_scale, const bool *d_mask,
+                          const float *d_grad_xyz, const float *d_grad_uv, float *d_xyz_grad_accum,
+                          float *d_uv_grad_acuum, int *d_grad_accum_dur, cudaStream_t stream) {
   int *mask_sum;
   CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
   void *d_temp_storage = nullptr;
@@ -498,8 +500,9 @@ void accumulate_gradients(const int N, const bool *d_mask, const float *d_grad_x
   const int threads_per_block = 256;
   const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
 
-  scatter_add_gradients_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
-      d_grad_uv, d_grad_xyz, d_mask, mask_sum, N, d_uv_grad_acuum, d_xyz_grad_accum, d_grad_accum_dur);
+  scatter_add_gradients_kernel<<<num_blocks, threads_per_block, 0, stream>>>(u_scale, v_scale, d_grad_uv, d_grad_xyz,
+                                                                             d_mask, mask_sum, N, d_uv_grad_acuum,
+                                                                             d_xyz_grad_accum, d_grad_accum_dur);
 
   // Free the temporary storage.
   CHECK_CUDA(cudaFree(d_temp_storage));

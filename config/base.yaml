@@ -41,8 +41,8 @@ delete_opacity_threshold: 0.01
 clone_scale_threshold: 0.01
 use_fractional_densification: true
 use_adaptive_fractional_densification: true
-uv_grad_percentile: 0.95
-scale_norm_percentile: 0.98
+uv_grad_percentile: 0.96
+scale_norm_percentile: 0.99
 uv_grad_threshold: 0.0002
 split_scale_factor: 1.6
 num_split_samples: 2

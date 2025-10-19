@@ -105,7 +105,7 @@ __global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *
 
         // Alpha blending: C_out = α * C_in + (1 - α) * C_bg
         const float weight = alpha * (1.0f - alpha_accum);
-        if (weight <= 1e-4f) {
+        if (weight <= 1e-15f) {
           num_splats++;
           continue; // Skip negligible contributions
         }

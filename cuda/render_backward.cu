@@ -108,7 +108,7 @@ __global__ void render_tiles_backward_kernel(
         const float c = _conic[i * 3 + 2];
 
         const float det = a * c - b * b;
-        const float reciprocal_det = __frcp_rn(det + 1e-6);
+        const float reciprocal_det = __frcp_rn(det);
         const float mh_sq = (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff) * reciprocal_det;
 
         float g = 0.0f;
@@ -120,7 +120,7 @@ __global__ void render_tiles_backward_kernel(
         float alpha = fminf(0.999f, _opacity[i] * g);
 
         // Gaussian does not contribute to image
-        if (alpha >= 0.004) {
+        if (alpha >= 0.0f) {
 
           // alpha reciprical
           float ra = __frcp_rn(1.0f - alpha + 1e-6f);

@@ -90,6 +90,9 @@ fused_adaptive_density_kernel(const int N, const int max_gaussians, const bool u
   const float2 uv_grad = {uv_grad_accum[idx * 2 + 0], uv_grad_accum[idx * 2 + 1]};
   const int accum_count = grad_accum_count[idx];
 
+  const float3 exp_scale = {expf(scale[idx * 3 + 0]), expf(scale[idx * 3 + 1]), expf(scale[idx * 3 + 2])};
+  const float scale_max = fmaxf(exp_scale.x, fmaxf(exp_scale.y, exp_scale.z));
+
   // Delete
   bool keep = true;
   if (use_delete) {
@@ -105,9 +108,6 @@ fused_adaptive_density_kernel(const int N, const int max_gaussians, const bool u
   const float uv_grad_avg_norm = sqrtf(uv_grad_avg.x * uv_grad_avg.x + uv_grad_avg.y * uv_grad_avg.y);
 
   const bool densify = keep && (uv_grad_avg_norm > uv_split_val);
-
-  const float3 exp_scale = {expf(scale[idx * 3 + 0]), expf(scale[idx * 3 + 1]), expf(scale[idx * 3 + 2])};
-  const float scale_max = fmaxf(exp_scale.x, fmaxf(exp_scale.y, exp_scale.z));
 
   // Clone
   const bool clone = densify && (scale_max <= clone_scale_threshold);
