@@ -1,7 +1,7 @@
 // adaptive_density.cu
 
 #include "checks.cuh"
-#include "gsplat/adaptive_density.hpp"
+#include "gsplat/adaptive_density.cuh"
 #include <cmath>
 #include <ctime>
 #include <cub/cub.cuh>

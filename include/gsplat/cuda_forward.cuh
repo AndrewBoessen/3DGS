@@ -1,4 +1,4 @@
-// cuda_functions.hpp
+// cuda_functions.cuh
 
 #pragma once
 
@@ -6,16 +6,6 @@
 #include <cuda_runtime.h>
 
 inline constexpr int TILE_SIZE_FWD = 16;
-
-// Macro for checking CUDA API calls for errors.
-#define CHECK_CUDA(call)                                                                                               \
-  do {                                                                                                                 \
-    cudaError_t err = call;                                                                                            \
-    if (err != cudaSuccess) {                                                                                          \
-      fprintf(stderr, "CUDA Error in %s at line %d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err));               \
-      exit(EXIT_FAILURE);                                                                                              \
-    }                                                                                                                  \
-  } while (0)
 
 /**
  * @brief Compute conic of projected 2D covariance matrix
@@ -77,37 +67,6 @@ void camera_intrinsic_projection(float *const xyz, const float *K, const int N, 
  */
 void cull_gaussians(float *const uv, float *const xyz, const int N, const float near_thresh, const float far_thresh,
                     const int padding, const int width, const int height, bool *mask, cudaStream_t stream = 0);
-
-/**
- * @brief Filter the Guassian parameters by the provided mask and return filtered arrays
- * @param[in]  N
- * @param[in]  num_sh_coef
- * @param[in]  d_mask
- * @param[in]  d_xyz
- * @param[in]  d_rgb
- * @param[in]  d_opacity
- * @param[in]  d_scale
- * @param[in]  d_quaternion
- * @param[in]  d_uv
- * @param[in]  d_xyz_c
- * @param[out] d_xyz_culled
- * @param[out] d_rgb_culled
- * @param[out] d_sh_culled
- * @param[out] d_sh_culled
- * @param[out] d_opacity_culled
- * @param[out] d_scale_culled
- * @param[out] d_quaternion_culled
- * @param[out] d_uv_culled
- * @param[out] d_xyz_c_culled
- * @param[out] h_num_culled
- * @param[in]  stream The CUDA stream to execute kernel on
- */
-void filter_gaussians_by_mask(int N, const int num_sh_coef, const bool *d_mask, const float *d_xyz, const float *d_rgb,
-                              const float *d_sh, const float *d_opacity, const float *d_scale,
-                              const float *d_quaternion, const float *d_uv, const float *d_xyz_c, float *d_xyz_culled,
-                              float *d_rgb_culled, float *d_sh_culled, float *d_opacity_culled, float *d_scale_culled,
-                              float *d_quaternion_culled, float *d_uv_culled, float *d_xyz_c_culled, int *h_num_culled,
-                              cudaStream_t stream = 0);
 
 /**
  * @brief Lanuches CUDA kernels to get gaussian tile intersections sorted by depth
@@ -178,18 +137,6 @@ float fused_loss(const float *predicted_data, const float *gt_data, int rows, in
                  const float ssim_weight, float *image_grad, cudaStream_t stream = 0);
 
 /**
- * @brief Launch CUDA kernel to scatter params from filtered list to original list
- * @param[in]      N                 Total number of param groups
- * @param[in]      S                 Stride of param groups
- * @param[in]      d_mask            Mask on output of size N
- * @param[in]      selected_params   A device array of selected param groups
- * @param[in,out]  scattered_params  A device array to output param groups
- * @param[in]      stream            The CUDA stream to execute on
- */
-void scatter_params(const int N, const int S, const bool *d_mask, const float *selected_params, float *scattered_params,
-                    cudaStream_t stream = 0);
-
-/**
  * @brief Launch CUDA kernel to accumulate gradients
  * @param[in] N Total number of param
  * @param[in] d_mask Maks of on output of size N
@@ -203,5 +150,3 @@ void scatter_params(const int N, const int S, const bool *d_mask, const float *s
 void accumulate_gradients(const int N, const float u_scale, const float v_scale, const bool *d_mask,
                           const float *d_grad_xyz, const float *d_grad_uv, float *d_xyz_grad_accum,
                           float *d_uv_grad_acuum, int *d_grad_accum_dur, cudaStream_t stream = 0);
-
-void set_values(const int size, float *vals, const float val);

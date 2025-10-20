@@ -5,7 +5,7 @@
 [![arXiv](https://img.shields.io/badge/arXiv-2308.04079-b31b1b.svg)](https://arxiv.org/abs/2308.04079)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/AndrewBoessen/3DGS/ci.yml?branch=main)](https://github.com/AndrewBoessen/3DGS/actions)
 [![GitHub release](https://img.shields.io/github/v/release/AndrewBoessen/3DGS)](https://github.com/AndrewBoessen/3DGS/releases)
-[![C++ Standard](https://img.shields.io/badge/C%2B%2B-23-blue.svg)](https://en.cppreference.com/w/cpp/23)
+[![C++ Standard](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![CUDA Version](https://img.shields.io/badge/CUDA-13.0-green.svg)](https://developer.nvidia.com/cuda-downloads)
 
 A minimalist CUDA and C++ implementation of **3D Gaussian Splatting** for real-time radiance field rendering.
@@ -17,7 +17,7 @@ This repository provides a lightweight foundation for experimenting with the cor
 
 You will need a standard C++ development toolchain. Please install the following using your system's package manager (e.g., `apt` for Debian/Ubuntu, `brew` for macOS).
 
-- **C++ Compiler** with C++23 support (e.g., GCC 12+, Clang 15+)
+- **C++ Compiler** with C++20 support (e.g., GCC 12+, Clang 15+)
 
 - **CMake** (version 3.20 or later)
 

@@ -1,7 +1,9 @@
 // loss.cu
 
 #include "checks.cuh"
-#include "gsplat/cuda_forward.hpp"
+#include "gsplat/cuda_forward.cuh"
+#include "thrust/detail/raw_pointer_cast.h"
+#include <thrust/device_vector.h>
 
 // Define constants for SSIM calculation.
 namespace SSIMConstants {
@@ -172,20 +174,15 @@ float fused_loss(const float *predicted_data, const float *gt_data, int rows, in
   dim3 gridDim((cols + blockDim.x - 1) / blockDim.x, (rows + blockDim.y - 1) / blockDim.y);
 
   // --- Allocate memory for total loss on device ---
-  float *d_total_loss;
-  CHECK_CUDA(cudaMalloc(&d_total_loss, sizeof(float)));
-  CHECK_CUDA(cudaMemset(d_total_loss, 0, sizeof(float)));
+  thrust::device_vector<float> d_total_loss(1, 0.0f);
 
   size_t shared_mem_size = blockDim.x * blockDim.y * sizeof(float);
 
-  fused_loss_kernel<<<gridDim, blockDim, shared_mem_size, stream>>>(predicted_data, gt_data, rows, cols, ssim_weight,
-                                                                    image_grad, d_total_loss);
+  fused_loss_kernel<<<gridDim, blockDim, shared_mem_size, stream>>>(
+      predicted_data, gt_data, rows, cols, ssim_weight, image_grad, thrust::raw_pointer_cast(d_total_loss.data()));
 
   // --- Copy result back to host ---
-  float h_total_loss = 0.0f;
-  CHECK_CUDA(cudaMemcpy(&h_total_loss, d_total_loss, sizeof(float), cudaMemcpyDeviceToHost));
-
-  CHECK_CUDA(cudaFree(d_total_loss));
+  float h_total_loss = d_total_loss[0];
 
   // Return the mean loss per pixel
   return h_total_loss / (rows * cols);

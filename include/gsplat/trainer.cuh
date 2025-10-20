@@ -1,9 +1,9 @@
-// trainer.hpp
+// trainer.cuh
 
 #pragma once
 
 #include "dataloader/colmap.hpp"
-#include "gsplat/cuda_data.hpp"
+#include "gsplat/cuda_data.cuh"
 #include "gsplat/gaussian.hpp"
 #include "gsplat/utils.hpp"
 #include <Eigen/Dense>
@@ -76,18 +76,12 @@ private:
   int num_gaussians = 0;
 
   /**
-   * @brief Free temporary memory buffers for training iteration
-   * @param[in] pass_data Temporary buffer data
-   */
-  void cleanup_iteration_buffers(ForwardPassData &pass_data);
-
-  /**
    * @breif Resets the gradient accumulation for xyz and uv.
    * @note This will set all values for Gaussians to zero. This must be run
    * only after the adaptive density in run and `gaussians` is resized.
    * @param[in,out] cuda Device data to store gradients and parameters
    */
-  void reset_grad_accum(CudaDataManager &cuda);
+  void reset_grad_accum(GradientAccumulators &accumulators);
 
   /**
    * @brief Resets the opacity of all Gaussians to a predefined value.
@@ -96,15 +90,7 @@ private:
    * value is transformed into logit space before being assigned.
    * @param[in,out] cuda Device data to store gradients and parameters
    */
-  void reset_opacity(CudaDataManager &cuda);
-
-  /**
-   * @brief Zero gradient buffers before backward pass
-   * @param[in,out] cuda Device data to store gradients and parameters
-   * @param[in] num_gaussians Total number of trainable Gaussians
-   * @param[in] num_sh_coef The number of spherical harmonics coefficients
-   */
-  void zero_grad(CudaDataManager &cuda);
+  void reset_opacity(GaussianParameters &gaussians);
 
   /**
    * @brief Compute gradients from forward pass
@@ -114,8 +100,9 @@ private:
    * @param[in,out] pass_data Forward pass temporary buffers
    * @return Loss value
    */
-  float backward_pass(const Image &curr_image, const Camera &curr_camera, CudaDataManager &cuda,
-                      ForwardPassData &pass_data, const float bg_color);
+  float backward_pass(const Image &curr_image, const Camera &curr_camera, GaussianGradients &gradients,
+                      ForwardPassData &pass_data, GaussianParameters &gaussians, CameraParameters &camera,
+                      const float bg_color);
 
   /**
    * @brief Perform optimizer step to update Gaussian parameters
@@ -125,7 +112,8 @@ private:
    * @param[in] num_gaussians Total number of trainable Gaussians
    * @param[in] num_sh_coef The number of spherical harmonics coefficients
    */
-  void optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data, const Camera &curr_camera);
+  void optimizer_step(OptimizerParameters &optimizer, GaussianParameters &parameters, GaussianGradients &gradients,
+                      GradientAccumulators &accumulators, const Camera &curr_camera);
 
   /**
    * @brief Increases the spherical harmonics (SH) degree for all Gaussians.
@@ -134,7 +122,7 @@ private:
    * as training progresses. It upgrades the SH bands up to the maximum level
    * specified in the configuration.
    */
-  void add_sh_band(CudaDataManager &cuda, ForwardPassData &pass_data);
+  void add_sh_band(GaussianParameters &gaussians);
 
   /**
    * @brief Manages the adaptive densification of Gaussians during training.
@@ -146,5 +134,5 @@ private:
    * @param[in] num_gaussians Total number of trainable Gaussians
    * @param[in] num_sh_coef The number of spherical harmonics coefficients
    */
-  void adaptive_density_step(CudaDataManager &cuda);
+  void adaptive_density_step(GaussianParameters &gaussians, GradientAccumulators &accumulators);
 };

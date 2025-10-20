@@ -1,7 +1,7 @@
 // render_backward.cu
 
 #include "checks.cuh"
-#include "gsplat/cuda_backward.hpp"
+#include "gsplat/cuda_backward.cuh"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 
@@ -91,7 +91,7 @@ __global__ void render_tiles_backward_kernel(
     int chunk_start = chunk_idx * CHUNK_SIZE;
     int chunk_end = min((chunk_idx + 1) * CHUNK_SIZE, num_splats_this_tile);
     for (int i = chunk_end - chunk_start - 1; i >= 0; i--) {
-      const int tile_splat_idx = chunk_idx * CHUNK_SIZE + i;
+      const int tile_splat_idx = chunk_start + i;
 
       float grad_opa = 0.0f, grad_u = 0.0f, grad_v = 0.0f;
       float grad_rgb_local[3] = {0.0f, 0.0f, 0.0f};
@@ -117,7 +117,7 @@ __global__ void render_tiles_backward_kernel(
         }
 
         // effective opacity
-        float alpha = fminf(0.999f, _opacity[i] * g);
+        float alpha = _opacity[i] * g;
 
         // Gaussian does not contribute to image
         if (alpha >= 0.0f) {

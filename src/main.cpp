@@ -1,6 +1,6 @@
 #include "dataloader/colmap.hpp"
 #include "gsplat/gaussian.hpp"
-#include "gsplat/trainer.hpp"
+#include "gsplat/trainer.cuh"
 #include "gsplat/utils.hpp"
 #include <iostream>
 #include <stdexcept>

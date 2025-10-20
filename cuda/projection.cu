@@ -1,7 +1,7 @@
 // projection.cu
 
 #include "checks.cuh"
-#include "gsplat/cuda_forward.hpp"
+#include "gsplat/cuda_forward.cuh"
 
 __global__ void cam_extr_proj_kernel(const float *__restrict__ xyz_w, const float *__restrict__ T, const int N,
                                      float *xyz_c) {
