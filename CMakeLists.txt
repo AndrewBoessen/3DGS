@@ -7,12 +7,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_ARCHITECTURES 89)
+set(CMAKE_CUDA_ARCHITECTURES native)
 # ===================================================================
 # DEPENDENCIES
 # ===================================================================
-# Find CUDAToolkit
-find_package(CUDAToolkit REQUIRED)
 # Find OpenMP for sphericart parallelization
 find_package(OpenMP REQUIRED)
 # Find OpenCV for image procesing
@@ -59,7 +57,7 @@ target_include_directories(gsplat
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp OpenMP::OpenMP_CXX Eigen3::Eigen nanoflann::nanoflann ${OpenCV_LIBS} CCCL::Thrust CUDA::cudart)
+target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp OpenMP::OpenMP_CXX Eigen3::Eigen nanoflann::nanoflann OpenCV::OpenCV)
 
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION
@@ -82,7 +80,7 @@ target_include_directories(gsplat_cuda
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat_cuda PUBLIC sphericart CCCL::Thrust CCCL::CUB CUDA::cudart)
+target_link_libraries(gsplat_cuda PUBLIC sphericart CCCL::CCCL)
 
 # ===================================================================
 # MAIN EXECUTABLE
@@ -112,24 +110,24 @@ function(add_gtest_executable test_name source_file)
   gtest_discover_tests(${test_name})
 endfunction()
 
-## --- Dataloader Tests ---
-#add_gtest_executable(dataloader_tests tests/colmap_test.cpp dataloader)
-#target_compile_definitions(dataloader_tests PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test_data")
-#
-## --- Utils Tests ---
-#add_gtest_executable(utils_tests tests/utils_test.cpp gsplat)
-#
-## --- Gaussians Tests ---
-#add_gtest_executable(gaussian_tests tests/gaussian_test.cpp gsplat dataloader)
-#
-## --- CUDA Forward Tests ---
-#add_gtest_executable(cuda_forward_tests tests/cuda_forward_test.cpp gsplat_cuda)
-#
-## --- CUDA Backward Tests ---
-#add_gtest_executable(cuda_backward_tests tests/cuda_backward_test.cpp gsplat_cuda)
-#
-## --- CUDA Optimizer Tests ---
-#add_gtest_executable(cuda_optimizer_tests tests/optimizer_test.cpp gsplat_cuda)
-#
-## --- Adaptive Density Tests ---
-#add_gtest_executable(adaptive_density_tests tests/adaptive_density_test.cpp gsplat_cuda)
+# --- Dataloader Tests ---
+add_gtest_executable(dataloader_tests tests/colmap_test.cpp dataloader)
+target_compile_definitions(dataloader_tests PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test_data")
+
+# --- Utils Tests ---
+add_gtest_executable(utils_tests tests/utils_test.cpp gsplat)
+
+# --- Gaussians Tests ---
+add_gtest_executable(gaussian_tests tests/gaussian_test.cpp gsplat dataloader)
+
+# --- CUDA Forward Tests ---
+add_gtest_executable(cuda_forward_tests tests/cuda_forward_test.cpp gsplat_cuda)
+
+# --- CUDA Backward Tests ---
+add_gtest_executable(cuda_backward_tests tests/cuda_backward_test.cpp gsplat_cuda)
+
+# --- CUDA Optimizer Tests ---
+add_gtest_executable(cuda_optimizer_tests tests/optimizer_test.cpp gsplat_cuda)
+
+# --- Adaptive Density Tests ---
+add_gtest_executable(adaptive_density_tests tests/adaptive_density_test.cpp gsplat_cuda)
