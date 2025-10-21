@@ -1,7 +1,7 @@
 // spherical_harmonics.cu
 
 #include "checks.cuh"
-#include "gsplat/cuda_forward.hpp"
+#include "gsplat_cuda/cuda_forward.cuh"
 #include "sphericart_cuda.hpp"
 #include <thrust/device_vector.h>
 

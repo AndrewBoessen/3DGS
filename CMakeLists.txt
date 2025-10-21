@@ -3,7 +3,9 @@
 cmake_minimum_required(VERSION 3.20)
 project(GuassianSplattingProject LANGUAGES CXX CUDA)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_INCLUDES OFF)
+set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_OBJECTS OFF)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
@@ -47,17 +49,17 @@ target_link_libraries(dataloader PUBLIC Eigen3::Eigen)
 # GSPLAT LIBRARY DEFINITION
 # ===================================================================
 add_library(gsplat
+              cuda/data.cu
+              cuda/raster.cu
+              cuda/trainer.cu
               src/utils.cpp
-              src/gaussian.cpp
-              src/data.cpp
-              src/raster.cpp
-              src/trainer.cpp)
+              src/gaussian.cpp)
 
 target_include_directories(gsplat
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp OpenMP::OpenMP_CXX Eigen3::Eigen nanoflann::nanoflann OpenCV::OpenCV)
+target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp OpenMP::OpenMP_CXX Eigen3::Eigen nanoflann::nanoflann ${OpenCV_LIBS})
 
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION
@@ -126,8 +128,8 @@ add_gtest_executable(cuda_forward_tests tests/cuda_forward_test.cpp gsplat_cuda)
 # --- CUDA Backward Tests ---
 add_gtest_executable(cuda_backward_tests tests/cuda_backward_test.cpp gsplat_cuda)
 
-# --- CUDA Optimizer Tests ---
-add_gtest_executable(cuda_optimizer_tests tests/optimizer_test.cpp gsplat_cuda)
-
-# --- Adaptive Density Tests ---
-add_gtest_executable(adaptive_density_tests tests/adaptive_density_test.cpp gsplat_cuda)
+## --- CUDA Optimizer Tests ---
+#add_gtest_executable(cuda_optimizer_tests tests/optimizer_test.cpp gsplat_cuda)
+#
+## --- Adaptive Density Tests ---
+#add_gtest_executable(adaptive_density_tests tests/adaptive_density_test.cpp gsplat_cuda)

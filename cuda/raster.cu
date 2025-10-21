@@ -1,8 +1,8 @@
-// raster.cpp
+// raster.cu
 
-#include "gsplat/raster.hpp"
-#include "gsplat/cuda_data.hpp"
-#include "gsplat/cuda_forward.hpp"
+#include "gsplat_cuda/cuda_data.cuh"
+#include "gsplat_cuda/cuda_forward.cuh"
+#include "gsplat_cuda/raster.cuh"
 #include <thrust/count.h>
 #include <thrust/device_vector.h>
 

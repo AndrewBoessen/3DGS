@@ -3,7 +3,7 @@
 #include <gtest/gtest.h>
 #include <vector>
 
-#include "gsplat/adaptive_density.hpp"
+#include "gsplat_cuda/adaptive_density.cuh"
 
 // Helper macro for checking CUDA calls
 #define CUDA_CHECK(call)                                                                                               \

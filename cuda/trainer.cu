@@ -1,12 +1,12 @@
-// trainer.cpp
+// trainer.cu
 
-#include "gsplat/trainer.hpp"
-#include "gsplat/adaptive_density.hpp"
-#include "gsplat/cuda_backward.hpp"
-#include "gsplat/cuda_data.hpp"
-#include "gsplat/cuda_forward.hpp"
-#include "gsplat/optimizer.hpp"
-#include "gsplat/raster.hpp"
+#include "gsplat_cuda/adaptive_density.cuh"
+#include "gsplat_cuda/cuda_backward.cuh"
+#include "gsplat_cuda/cuda_data.cuh"
+#include "gsplat_cuda/cuda_forward.cuh"
+#include "gsplat_cuda/optimizer.cuh"
+#include "gsplat_cuda/raster.cuh"
+#include "gsplat_cuda/trainer.cuh"
 #include <Eigen/Dense>
 #include <iostream>
 #include <opencv2/opencv.hpp>

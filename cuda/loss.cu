@@ -1,8 +1,7 @@
 // loss.cu
 
 #include "checks.cuh"
-#include "gsplat/cuda_forward.hpp"
-#include "thrust/detail/raw_pointer_cast.h"
+#include "gsplat_cuda/cuda_forward.cuh"
 #include <thrust/device_vector.h>
 
 // Define constants for SSIM calculation.

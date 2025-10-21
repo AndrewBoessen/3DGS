@@ -1,7 +1,7 @@
 // render.cu
 
 #include "checks.cuh"
-#include "gsplat/cuda_forward.hpp"
+#include "gsplat_cuda/cuda_forward.cuh"
 
 constexpr int BATCH_SIZE = 256;
 

@@ -3,8 +3,8 @@
 #pragma once
 
 #include "dataloader/colmap.hpp"
-#include "gsplat/cuda_data.hpp"
 #include "gsplat/utils.hpp"
+#include "gsplat_cuda/cuda_data.cuh"
 
 /**
  * @brief Rasterizes an image from a set of Gaussians using pre-allocated CUDA buffers.

@@ -3,7 +3,7 @@
 #include <gtest/gtest.h>
 #include <vector>
 
-#include "gsplat/cuda_forward.hpp" // For kernel function declarations
+#include "gsplat_cuda/cuda_forward.cuh"
 
 // Macro for checking CUDA API calls for errors.
 #define CUDA_CHECK(err)                                                                                                \
@@ -426,11 +426,11 @@ TEST_F(CudaKernelTest, GetSortedGaussianList) {
   // G2 -> tile (2,2) [idx 10]
   // Total Pairs = 3 gaussians * 16 tiles to search.
   const int num_splats = 4;
-  const int num_splats_bytes = 3 * 4 * 4;
-  ASSERT_EQ(sorted_gaussian_bytes, num_splats_bytes * sizeof(int));
+  const int num_splats_size = 3 * 4 * 4;
+  ASSERT_EQ(sorted_gaussian_bytes, num_splats_size);
 
   // --- PASS 2: Execute with allocated buffers ---
-  CUDA_CHECK(cudaMalloc(&d_sorted_gaussians, sorted_gaussian_bytes));
+  CUDA_CHECK(cudaMalloc(&d_sorted_gaussians, sorted_gaussian_bytes * sizeof(int)));
   CUDA_CHECK(cudaMalloc(&d_splat_boundaries, (num_tiles + 1) * sizeof(int)));
 
   get_sorted_gaussian_list(d_uvs, d_xyz, d_conic, n_tiles_x, n_tiles_y, mh_dist, N, sorted_gaussian_bytes,
@@ -523,7 +523,7 @@ TEST_F(CudaKernelTest, PrecomputeSphericalHarmonics) {
   float *d_xyz, *d_sh_coefficients, *d_band_0, *d_rgb;
   CUDA_CHECK(cudaMalloc(&d_xyz, h_xyz.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_sh_coefficients, h_sh_coefficients.size() * sizeof(float)));
-  CHECK_CUDA(cudaMalloc(&d_band_0, h_band_0.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_band_0, h_band_0.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_rgb, h_rgb.size() * sizeof(float)));
 
   CUDA_CHECK(cudaMemcpy(d_xyz, h_xyz.data(), h_xyz.size() * sizeof(float), cudaMemcpyHostToDevice));

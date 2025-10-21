@@ -1,7 +1,7 @@
 // optimizer.cu
 
 #include "checks.cuh"
-#include "gsplat/optimizer.hpp"
+#include "gsplat_cuda/optimizer.cuh"
 
 __global__ void adam_kernel(const int N, float *__restrict__ param, const float *__restrict__ param_grad,
                             float *__restrict__ exp_avg, float *__restrict__ exp_avg_sq, const float lr, const float b1,

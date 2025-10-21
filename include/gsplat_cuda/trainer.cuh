@@ -3,9 +3,9 @@
 #pragma once
 
 #include "dataloader/colmap.hpp"
-#include "gsplat/cuda_data.hpp"
 #include "gsplat/gaussian.hpp"
 #include "gsplat/utils.hpp"
+#include "gsplat_cuda/cuda_data.cuh"
 #include <unordered_map>
 #include <vector>
 

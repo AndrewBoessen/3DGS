@@ -1,5 +1,5 @@
 #include "checks.cuh"
-#include "gsplat/cuda_forward.hpp"
+#include "gsplat_cuda/cuda_forward.cuh"
 #include <cassert>
 #include <cub/cub.cuh>
 #include <math_constants.h>
@@ -381,7 +381,7 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N, nullptr,
                                                            thrust::raw_pointer_cast(d_pairs.data()),
                                                            thrust::raw_pointer_cast(d_buffer_index.data()));
-  assert(d_buffer_index[0] < sorted_gaussian_size);
+  assert(d_buffer_index[0] == sorted_gaussian_size);
 
   // Copy z values to new array
   thrust::device_vector<float> z_vals(N);
