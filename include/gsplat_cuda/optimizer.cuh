@@ -21,7 +21,8 @@ inline constexpr float EPS = 1e-8f;
  * @param[in]     b2           Beta 2
  * @param[in]     eps          Epsilon value
  * @param[in]     N            Total number of parameters
+ * @param[in]     S            Stride of parameters
  * @param[in]     stream       The CUDA stream to execute on
  */
-void adam_step(float *params, float *const param_grads, float *exp_avg, float *exp_avg_sq, const float lr, float *steps,
-               const float b1, const float b2, const float eps, const int N, cudaStream_t stream = 0);
+void adam_step(float *params, float *const param_grads, float *exp_avg, float *exp_avg_sq, const float lr, int *steps,
+               const float b1, const float b2, const float eps, const int N, const int S, cudaStream_t stream = 0);

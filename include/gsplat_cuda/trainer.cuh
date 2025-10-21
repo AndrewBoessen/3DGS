@@ -110,8 +110,8 @@ private:
    * @param[in] num_gaussians Total number of trainable Gaussians
    * @param[in] num_sh_coef The number of spherical harmonics coefficients
    */
-  void optimizer_step(OptimizerParameters &optimizer, GaussianParameters &parameters, GaussianGradients &gradients,
-                      GradientAccumulators &accumulators, const Camera &curr_camera);
+  void optimizer_step(ForwardPassData pass_data, OptimizerParameters &optimizer, GaussianParameters &parameters,
+                      GaussianGradients &gradients, GradientAccumulators &accumulators, const Camera &curr_camera);
 
   /**
    * @brief Increases the spherical harmonics (SH) degree for all Gaussians.

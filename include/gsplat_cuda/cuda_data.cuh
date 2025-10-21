@@ -100,3 +100,30 @@ struct ForwardPassData {
 template <int STRIDE, typename T, typename MaskType>
 thrust::device_vector<T> compact_masked_array(const thrust::device_vector<T> &d_source,
                                               const thrust::device_vector<MaskType> &d_mask, int num_culled);
+
+/**
+ * @brief Scatters a compacted array back into a larger destination array based on a mask.
+ * @tparam STRIDE The stride of the data blocks.
+ * @tparam T The element type.
+ * @tparam MaskType The mask element type (e.g., bool, int).
+ * @param d_compacted The compacted source vector (output from `compact_masked_array`).
+ * @param d_mask The original mask used for compaction.
+ * @param d_destination The large destination vector to be overwritten.
+ */
+template <int STRIDE, typename T, typename MaskType>
+void scatter_masked_array(const thrust::device_vector<T> &d_compacted, const thrust::device_vector<MaskType> &d_mask,
+                          thrust::device_vector<T> &d_destination);
+
+/**
+ * @brief Scatters a compacted array into a larger destination array by
+ * *adding* its values to the existing elements.
+ * @tparam STRIDE The stride of the data blocks.
+ * @tparam T The element type (must be supported by atomicAdd, e.g., int, float, double).
+ * @tparam MaskType The mask element type.
+ * @param d_compacted The compacted source vector.
+ * @param d_mask The original mask used for compaction.
+ * @param d_destination The large destination vector to which values will be added.
+ */
+template <int STRIDE, typename T, typename MaskType>
+void scatter_add_masked_array(const thrust::device_vector<T> &d_compacted,
+                              const thrust::device_vector<MaskType> &d_mask, thrust::device_vector<T> &d_destination);

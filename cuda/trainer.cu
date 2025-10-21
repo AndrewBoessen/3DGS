@@ -13,37 +13,9 @@
 #include <random>
 #include <stdexcept>
 #include <thrust/device_vector.h>
+#include <thrust/functional.h>
 #include <thrust/host_vector.h>
-
-void save_image(const std::string &filename, const thrust::device_vector<float> &d_image_buffer, int width,
-                int height) {
-  const size_t expected_size = static_cast<size_t>(width * height * 3);
-
-  if (d_image_buffer.size() != expected_size) {
-    throw std::runtime_error("Device image buffer size does not match expected size (width*height*3).");
-  }
-
-  thrust::host_vector<float> h_image_data(expected_size);
-
-  try {
-    thrust::copy(d_image_buffer.begin(), d_image_buffer.end(), h_image_data.begin());
-  } catch (const std::exception &e) {
-    // Catch potential errors from the copy operation.
-    throw std::runtime_error("Failed to copy image data from device to host: " + std::string(e.what()));
-  }
-
-  cv::Mat float_image(height, width, CV_32FC3, h_image_data.data());
-
-  cv::Mat bgr_image;
-  float_image.convertTo(bgr_image, CV_8UC3, 255.0);
-  cv::cvtColor(bgr_image, bgr_image, cv::COLOR_RGB2BGR);
-
-  if (cv::imwrite(filename, bgr_image)) {
-    std::cout << "Saved image to " << filename << std::endl;
-  } else {
-    std::cerr << "Error: Failed to save image to " << filename << std::endl;
-  }
-}
+#include <thrust/transform.h>
 
 void Trainer::test_train_split() {
   const int split = config.test_split_ratio;
@@ -82,8 +54,8 @@ void Trainer::test_train_split() {
 }
 
 void Trainer::reset_grad_accum(GradientAccumulators &accumulators) {
-  thrust::fill_n(accumulators.d_uv_grad_accum.begin(), num_gaussians, 0.0f);
-  thrust::fill_n(accumulators.d_xyz_grad_accum.begin(), num_gaussians, 0.0f);
+  thrust::fill_n(accumulators.d_uv_grad_accum.begin(), num_gaussians * 2, 0.0f);
+  thrust::fill_n(accumulators.d_xyz_grad_accum.begin(), num_gaussians * 3, 0.0f);
   thrust::fill_n(accumulators.d_grad_accum_dur.begin(), num_gaussians, 0);
 }
 
@@ -236,19 +208,83 @@ float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera,
   return loss;
 }
 
-void optimizer_step(OptimizerParameters &optimizer, GaussianParameters &parameters, GaussianGradients &gradients,
-                    GradientAccumulators &accumulators, const Camera &curr_camera) {
-  // Select moment vectors by filtering based on the culled mask
+void Trainer::optimizer_step(ForwardPassData pass_data, OptimizerParameters &optimizer, GaussianParameters &parameters,
+                             GaussianGradients &gradients, GradientAccumulators &accumulators,
+                             const Camera &curr_camera) {
+  // Select parameters based on culled mask
+  auto d_xyz = compact_masked_array<3>(parameters.d_xyz, pass_data.d_mask, pass_data.num_culled);
+  auto d_rgb = compact_masked_array<3>(parameters.d_rgb, pass_data.d_mask, pass_data.num_culled);
+  auto d_op = compact_masked_array<1>(parameters.d_opacity, pass_data.d_mask, pass_data.num_culled);
+  auto d_scale = compact_masked_array<3>(parameters.d_scale, pass_data.d_mask, pass_data.num_culled);
+  auto d_quat = compact_masked_array<4>(parameters.d_quaternion, pass_data.d_mask, pass_data.num_culled);
+
+  // Select optimizer_parameters by filtering based on the culled mask
+  auto d_m_xyz = compact_masked_array<3>(optimizer.m_grad_xyz, pass_data.d_mask, pass_data.num_culled);
+  auto d_m_rgb = compact_masked_array<3>(optimizer.m_grad_rgb, pass_data.d_mask, pass_data.num_culled);
+  auto d_m_op = compact_masked_array<1>(optimizer.m_grad_opacity, pass_data.d_mask, pass_data.num_culled);
+  auto d_m_scale = compact_masked_array<3>(optimizer.m_grad_scale, pass_data.d_mask, pass_data.num_culled);
+  auto d_m_quat = compact_masked_array<4>(optimizer.m_grad_quaternion, pass_data.d_mask, pass_data.num_culled);
+
+  auto d_v_xyz = compact_masked_array<3>(optimizer.v_grad_xyz, pass_data.d_mask, pass_data.num_culled);
+  auto d_v_rgb = compact_masked_array<3>(optimizer.v_grad_rgb, pass_data.d_mask, pass_data.num_culled);
+  auto d_v_op = compact_masked_array<1>(optimizer.v_grad_opacity, pass_data.d_mask, pass_data.num_culled);
+  auto d_v_scale = compact_masked_array<3>(optimizer.v_grad_scale, pass_data.d_mask, pass_data.num_culled);
+  auto d_v_quat = compact_masked_array<4>(optimizer.v_grad_quaternion, pass_data.d_mask, pass_data.num_culled);
+
+  auto d_steps = compact_masked_array<1>(optimizer.d_training_steps, pass_data.d_mask, pass_data.num_culled);
 
   // Update parameters using the Adam optimizer step
+  adam_step(thrust::raw_pointer_cast(d_xyz.data()), thrust::raw_pointer_cast(gradients.d_grad_xyz.data()),
+            thrust::raw_pointer_cast(d_m_xyz.data()), thrust::raw_pointer_cast(d_v_xyz.data()),
+            config.base_lr * config.xyz_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+            pass_data.num_culled, 3);
+  adam_step(thrust::raw_pointer_cast(d_rgb.data()), thrust::raw_pointer_cast(gradients.d_grad_rgb.data()),
+            thrust::raw_pointer_cast(d_m_rgb.data()), thrust::raw_pointer_cast(d_v_rgb.data()),
+            config.base_lr * config.rgb_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+            pass_data.num_culled, 3);
+  adam_step(thrust::raw_pointer_cast(d_op.data()), thrust::raw_pointer_cast(gradients.d_grad_opacity.data()),
+            thrust::raw_pointer_cast(d_m_op.data()), thrust::raw_pointer_cast(d_v_op.data()),
+            config.base_lr * config.opacity_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+            pass_data.num_culled, 1);
+  adam_step(thrust::raw_pointer_cast(d_scale.data()), thrust::raw_pointer_cast(gradients.d_grad_scale.data()),
+            thrust::raw_pointer_cast(d_m_scale.data()), thrust::raw_pointer_cast(d_v_scale.data()),
+            config.base_lr * config.scale_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+            pass_data.num_culled, 3);
+  adam_step(thrust::raw_pointer_cast(d_quat.data()), thrust::raw_pointer_cast(gradients.d_grad_quaternion.data()),
+            thrust::raw_pointer_cast(d_m_quat.data()), thrust::raw_pointer_cast(d_v_quat.data()),
+            config.base_lr * config.quat_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+            pass_data.num_culled, 4);
 
   // Scatter the updated moment vectors back to the full tensors
+  scatter_masked_array<3>(d_m_xyz, pass_data.d_mask, optimizer.m_grad_xyz);
+  scatter_masked_array<3>(d_m_rgb, pass_data.d_mask, optimizer.m_grad_rgb);
+  scatter_masked_array<1>(d_m_op, pass_data.d_mask, optimizer.m_grad_opacity);
+  scatter_masked_array<3>(d_m_scale, pass_data.d_mask, optimizer.m_grad_scale);
+  scatter_masked_array<4>(d_m_quat, pass_data.d_mask, optimizer.m_grad_quaternion);
+
+  scatter_masked_array<3>(d_v_xyz, pass_data.d_mask, optimizer.v_grad_xyz);
+  scatter_masked_array<3>(d_v_rgb, pass_data.d_mask, optimizer.v_grad_rgb);
+  scatter_masked_array<1>(d_v_op, pass_data.d_mask, optimizer.v_grad_opacity);
+  scatter_masked_array<3>(d_v_scale, pass_data.d_mask, optimizer.v_grad_scale);
+  scatter_masked_array<4>(d_v_quat, pass_data.d_mask, optimizer.v_grad_quaternion);
 
   // Scatter the updated parameters back to the full tensors
+  scatter_masked_array<3>(d_xyz, pass_data.d_mask, parameters.d_xyz);
+  scatter_masked_array<3>(d_rgb, pass_data.d_mask, parameters.d_rgb);
+  scatter_masked_array<1>(d_op, pass_data.d_mask, parameters.d_opacity);
+  scatter_masked_array<3>(d_scale, pass_data.d_mask, parameters.d_scale);
+  scatter_masked_array<4>(d_quat, pass_data.d_mask, parameters.d_quaternion);
 
   // Update Spherical Harmonics (SH) parameters if they are being used
+  if (l_max > 0) {
+  }
 
   // Update gradient accumulators
+  scatter_add_masked_array<2>(gradients.d_grad_uv, pass_data.d_mask, accumulators.d_uv_grad_accum);
+  scatter_add_masked_array<3>(gradients.d_grad_xyz, pass_data.d_mask, accumulators.d_xyz_grad_accum);
+  thrust::device_vector<int> d_int_mask(pass_data.d_mask.size());
+  thrust::copy(pass_data.d_mask.begin(), pass_data.d_mask.end(), d_int_mask.begin());
+  scatter_add_masked_array<1>(d_int_mask, pass_data.d_mask, accumulators.d_grad_accum_dur);
 }
 
 void Trainer::train() {
@@ -343,7 +379,7 @@ void Trainer::train() {
     std::cout << "LOSS TOTAL " << loss << std::endl;
 
     // --- OPTIMIZER STEP ---
-    optimizer_step(cuda.optimizer, cuda.gaussians, cuda.gradients, cuda.accumulators, curr_camera);
+    optimizer_step(pass_data, cuda.optimizer, cuda.gaussians, cuda.gradients, cuda.accumulators, curr_camera);
 
     // --- ADAPTIVE DENSITY ---
     if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&
