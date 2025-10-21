@@ -1,15 +1,11 @@
-// cuda_data.cuh
+// cuda_data.hpp
 
 #pragma once
 
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <stdio.h>
-#include <thrust/copy.h>
 #include <thrust/device_vector.h>
-#include <thrust/iterator/counting_iterator.h>
-#include <thrust/iterator/permutation_iterator.h>
-#include <thrust/iterator/transform_iterator.h>
 
 // Holds the core parameters for each Gaussian splat.
 struct GaussianParameters {

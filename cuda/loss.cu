@@ -1,7 +1,7 @@
 // loss.cu
 
 #include "checks.cuh"
-#include "gsplat/cuda_forward.cuh"
+#include "gsplat/cuda_forward.hpp"
 #include "thrust/detail/raw_pointer_cast.h"
 #include <thrust/device_vector.h>
 

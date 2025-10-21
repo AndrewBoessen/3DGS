@@ -1,4 +1,4 @@
-// cuda_backward.cuh
+// cuda_backward.hpp
 
 #pragma once
 

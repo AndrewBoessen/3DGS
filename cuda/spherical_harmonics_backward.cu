@@ -1,7 +1,7 @@
 // spherical_harmonics_backward.cu
 
 #include "checks.cuh"
-#include "gsplat/cuda_backward.cuh"
+#include "gsplat/cuda_backward.hpp"
 #include "sphericart_cuda.hpp"
 #include <thrust/device_vector.h>
 

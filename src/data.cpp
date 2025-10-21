@@ -1,8 +1,9 @@
-// data.cu
+// data.cpp
 
-#include "gsplat/cuda_data.cuh"
+#include "gsplat/cuda_data.hpp"
 #include <exception>
 #include <stdlib.h>
+#include <thrust/device_vector.h>
 
 GaussianParameters::GaussianParameters(size_t max_gaussians) {
   try {

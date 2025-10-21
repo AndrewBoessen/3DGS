@@ -1,9 +1,9 @@
-// raster.cuh
+// raster.hpp
 
 #pragma once
 
 #include "dataloader/colmap.hpp"
-#include "gsplat/cuda_data.cuh"
+#include "gsplat/cuda_data.hpp"
 #include "gsplat/utils.hpp"
 
 /**

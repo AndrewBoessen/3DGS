@@ -1,23 +1,19 @@
-// trainer.cu
+// trainer.cpp
 
-#include "gsplat/adaptive_density.cuh"
-#include "gsplat/cuda_backward.cuh"
-#include "gsplat/cuda_data.cuh"
-#include "gsplat/cuda_forward.cuh"
-#include "gsplat/optimizer.cuh"
-#include "gsplat/raster.cuh"
-#include "gsplat/trainer.cuh"
+#include "gsplat/trainer.hpp"
+#include "gsplat/adaptive_density.hpp"
+#include "gsplat/cuda_backward.hpp"
+#include "gsplat/cuda_data.hpp"
+#include "gsplat/cuda_forward.hpp"
+#include "gsplat/optimizer.hpp"
+#include "gsplat/raster.hpp"
+#include <Eigen/Dense>
 #include <iostream>
+#include <opencv2/opencv.hpp>
 #include <random>
 #include <stdexcept>
-#include <thrust/copy.h>
-#include <thrust/count.h>
 #include <thrust/device_vector.h>
-#include <thrust/fill.h>
 #include <thrust/host_vector.h>
-#include <thrust/iterator/counting_iterator.h>
-#include <thrust/scatter.h>
-#include <thrust/sequence.h>
 
 void save_image(const std::string &filename, const thrust::device_vector<float> &d_image_buffer, int width,
                 int height) {
@@ -99,6 +95,20 @@ void Trainer::reset_opacity(GaussianParameters &gaussians) {
   thrust::fill_n(gaussians.d_opacity.begin(), num_gaussians, new_opc);
 }
 
+struct SHIndexMapper {
+  const int old_coeffs_per_gaussian;
+  const int new_coeffs_per_gaussian;
+
+  SHIndexMapper(int old_coeffs, int new_coeffs)
+      : old_coeffs_per_gaussian(old_coeffs), new_coeffs_per_gaussian(new_coeffs) {}
+
+  __host__ __device__ int operator()(int src_idx) const {
+    int gaussian_idx = src_idx / old_coeffs_per_gaussian;
+    int coeff_idx_in_gaussian = src_idx % old_coeffs_per_gaussian;
+    return gaussian_idx * new_coeffs_per_gaussian + coeff_idx_in_gaussian;
+  }
+};
+
 void Trainer::add_sh_band(GaussianParameters &gaussians) {
   if (l_max >= config.max_sh_band)
     return;
@@ -120,12 +130,12 @@ void Trainer::add_sh_band(GaussianParameters &gaussians) {
 
     thrust::device_vector<int> destination_map(temp_sh.size());
 
+    // 1. Instantiate the functor with the captured state
+    SHIndexMapper mapper(old_coeffs_per_gaussian, new_coeffs_per_gaussian);
+
+    // 2. Pass the functor instance to thrust::transform
     thrust::transform(thrust::counting_iterator<int>(0), thrust::counting_iterator<int>(temp_sh.size()),
-                      destination_map.begin(), [=] __host__ __device__(int src_idx) -> int {
-                        int gaussian_idx = src_idx / old_coeffs_per_gaussian;
-                        int coeff_idx_in_gaussian = src_idx % old_coeffs_per_gaussian;
-                        return gaussian_idx * new_coeffs_per_gaussian + coeff_idx_in_gaussian;
-                      });
+                      destination_map.begin(), mapper);
 
     thrust::fill(gaussians.d_sh.begin(), gaussians.d_sh.end(), 0.0f);
 
@@ -226,38 +236,17 @@ float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera,
   return loss;
 }
 
-void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data, const Camera &curr_camera) {
+void optimizer_step(OptimizerParameters &optimizer, GaussianParameters &parameters, GaussianGradients &gradients,
+                    GradientAccumulators &accumulators, const Camera &curr_camera) {
   // Select moment vectors by filtering based on the culled mask
 
   // Update parameters using the Adam optimizer step
-  adam_step(cuda.d_xyz_culled, cuda.d_grad_xyz, cuda.m_grad_xyz_culled, cuda.v_grad_xyz_culled,
-            config.base_lr * config.xyz_lr_multiplier, B1, B2, EPS, b1_t_corr, b2_t_corr, pass_data.num_culled * 3);
-  adam_step(cuda.d_rgb_culled, cuda.d_grad_rgb, cuda.m_grad_rgb_culled, cuda.v_grad_rgb_culled,
-            config.base_lr * config.rgb_lr_multiplier, B1, B2, EPS, b1_t_corr, b2_t_corr, pass_data.num_culled * 3);
-  adam_step(cuda.d_opacity_culled, cuda.d_grad_opacity, cuda.m_grad_opacity_culled, cuda.v_grad_opacity_culled,
-            config.base_lr * config.opacity_lr_multiplier, B1, B2, EPS, b1_t_corr, b2_t_corr, pass_data.num_culled);
-  adam_step(cuda.d_scale_culled, cuda.d_grad_scale, cuda.m_grad_scale_culled, cuda.v_grad_scale_culled,
-            config.base_lr * config.scale_lr_multiplier, B1, B2, EPS, b1_t_corr, b2_t_corr, pass_data.num_culled * 3);
-  adam_step(cuda.d_quaternion_culled, cuda.d_grad_quaternion, cuda.m_grad_quaternion_culled,
-            cuda.v_grad_quaternion_culled, config.base_lr * config.quat_lr_multiplier, B1, B2, EPS, b1_t_corr,
-            b2_t_corr, pass_data.num_culled * 4);
 
   // Scatter the updated moment vectors back to the full tensors
 
   // Scatter the updated parameters back to the full tensors
 
   // Update Spherical Harmonics (SH) parameters if they are being used
-  const int num_sh_coef = (l_max + 1) * (l_max + 1) - 1;
-  if (num_sh_coef > 0) {
-    filter_moment_vectors(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.m_grad_sh, cuda.v_grad_sh,
-                          cuda.m_grad_sh_culled, cuda.v_grad_sh_culled);
-    adam_step(cuda.d_sh_culled, cuda.d_grad_sh, cuda.m_grad_sh_culled, cuda.v_grad_sh_culled,
-              config.base_lr * config.sh_lr_multiplier, B1, B2, EPS, b1_t_corr, b2_t_corr,
-              pass_data.num_culled * num_sh_coef * 3);
-    scatter_params(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.m_grad_sh_culled, cuda.m_grad_sh);
-    scatter_params(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.v_grad_sh_culled, cuda.v_grad_sh);
-    scatter_params(num_gaussians, num_sh_coef * 3, cuda.d_mask, cuda.d_sh_culled, cuda.d_sh);
-  }
 
   // Update gradient accumulators
 }
@@ -271,12 +260,16 @@ void Trainer::train() {
   // Copy Gaussian data from host to device
   try {
     // Note the path to the device vectors is now cuda.gaussians.d_...
-    thrust::copy(gaussians.xyz.data(), gaussians.xyz.data() + num_gaussians * 3, cuda.gaussians.d_xyz.begin());
-    thrust::copy(gaussians.rgb.data(), gaussians.rgb.data() + num_gaussians * 3, cuda.gaussians.d_rgb.begin());
-    thrust::copy(gaussians.opacity.data(), gaussians.opacity.data() + num_gaussians, cuda.gaussians.d_opacity.begin());
-    thrust::copy(gaussians.scale.data(), gaussians.scale.data() + num_gaussians * 3, cuda.gaussians.d_scale.begin());
-    thrust::copy(gaussians.quaternion.data(), gaussians.quaternion.data() + num_gaussians * 4,
-                 cuda.gaussians.d_quaternion.begin());
+    const float *h_xyz = reinterpret_cast<float *>(gaussians.xyz.data());
+    const float *h_rgb = reinterpret_cast<float *>(gaussians.rgb.data());
+    const float *h_op = reinterpret_cast<float *>(gaussians.opacity.data());
+    const float *h_scale = reinterpret_cast<float *>(gaussians.scale.data());
+    const float *h_quat = reinterpret_cast<float *>(gaussians.quaternion.data());
+    thrust::copy(h_xyz, h_xyz + num_gaussians * 3, cuda.gaussians.d_xyz.begin());
+    thrust::copy(h_rgb, h_rgb + num_gaussians * 3, cuda.gaussians.d_rgb.begin());
+    thrust::copy(h_op, h_op + num_gaussians, cuda.gaussians.d_opacity.begin());
+    thrust::copy(h_scale, h_scale + num_gaussians * 3, cuda.gaussians.d_scale.begin());
+    thrust::copy(h_quat, h_quat + num_gaussians * 4, cuda.gaussians.d_quaternion.begin());
 
   } catch (const std::exception &e) {
     fprintf(stderr, "Error copying data to device: %s\n", e.what());
@@ -334,43 +327,36 @@ void Trainer::train() {
 
     // Add SH bands
     if (iter % config.add_sh_band_interval == 0 && iter >= config.add_sh_band_interval)
-      add_sh_band(cuda, pass_data);
+      add_sh_band(cuda.gaussians);
 
     // --- FORWARD PASS via RASTERIZE MODULE ---
-    rasterize_image(num_gaussians, curr_camera, config, cuda, pass_data, bg_color, l_max);
+    rasterize_image(num_gaussians, curr_camera, config, cuda.camera, cuda.gaussians, pass_data, bg_color, l_max);
 
     if (pass_data.num_culled == 0) {
       std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;
-      cleanup_iteration_buffers(pass_data);
       continue;
     }
 
-    if (iter % 500 == 0)
-      save_image(std::format("rendered_image_{}.png", iter), pass_data.d_image_buffer, curr_camera.width,
-                 curr_camera.height);
-
     // --- BACKWARD PASS ---
-    float loss = backward_pass(curr_image, curr_camera, cuda, pass_data, bg_color);
+    float loss =
+        backward_pass(curr_image, curr_camera, cuda.gradients, pass_data, cuda.gaussians, cuda.camera, bg_color);
     std::cout << "LOSS TOTAL " << loss << std::endl;
 
     // --- OPTIMIZER STEP ---
-    optimizer_step(cuda, pass_data, curr_camera);
+    optimizer_step(cuda.optimizer, cuda.gaussians, cuda.gradients, cuda.accumulators, curr_camera);
 
     // --- ADAPTIVE DENSITY ---
     if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&
         iter < config.adaptive_control_end) {
-      adaptive_density_step(cuda);
-      reset_grad_accum(cuda);
+      adaptive_density_step(cuda.gaussians, cuda.accumulators);
+      reset_grad_accum(cuda.accumulators);
     }
 
     if (iter > config.reset_opacity_start && iter % config.reset_opacity_interval == 0 &&
         iter < config.reset_opacity_end) {
-      reset_opacity(cuda);
-      reset_grad_accum(cuda);
+      reset_opacity(cuda.gaussians);
+      reset_grad_accum(cuda.accumulators);
     }
-
-    // Free temporary buffers for this iteration
-    cleanup_iteration_buffers(pass_data);
 
     // Increment iteration
     iter++;

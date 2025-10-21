@@ -3,10 +3,9 @@
 #pragma once
 
 #include "dataloader/colmap.hpp"
+#include <Eigen/Dense>
 #include <optional>
 #include <vector>
-
-#include <Eigen/Dense>
 
 /**
  * @class Gaussians

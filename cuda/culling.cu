@@ -1,5 +1,5 @@
 #include "checks.cuh"
-#include "gsplat/cuda_forward.cuh"
+#include "gsplat/cuda_forward.hpp"
 #include <cassert>
 #include <cub/cub.cuh>
 #include <math_constants.h>

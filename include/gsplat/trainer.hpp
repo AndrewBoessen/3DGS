@@ -1,13 +1,11 @@
-// trainer.cuh
+// trainer.hpp
 
 #pragma once
 
 #include "dataloader/colmap.hpp"
-#include "gsplat/cuda_data.cuh"
+#include "gsplat/cuda_data.hpp"
 #include "gsplat/gaussian.hpp"
 #include "gsplat/utils.hpp"
-#include <Eigen/Dense>
-#include <opencv2/opencv.hpp>
 #include <unordered_map>
 #include <vector>
 

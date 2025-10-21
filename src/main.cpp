@@ -1,6 +1,6 @@
 #include "dataloader/colmap.hpp"
 #include "gsplat/gaussian.hpp"
-#include "gsplat/trainer.cuh"
+#include "gsplat/trainer.hpp"
 #include "gsplat/utils.hpp"
 #include <iostream>
 #include <stdexcept>
@@ -86,11 +86,6 @@ int main(int argc, char *argv[]) {
   // Initialize Gaussians with the loaded 3D points
   gaussians = Gaussians::Initialize(points);
   std::cout << "Successfully initialized " << gaussians.xyz.size() << " Gaussians." << std::endl;
-
-  Trainer trainer = Trainer(config, gaussians, images, cameras);
-
-  trainer.test_train_split();
-  trainer.train();
 
   return 0; // Success
 }

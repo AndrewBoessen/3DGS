@@ -1,7 +1,7 @@
 // render_backward.cu
 
 #include "checks.cuh"
-#include "gsplat/cuda_backward.cuh"
+#include "gsplat/cuda_backward.hpp"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 

@@ -1,4 +1,4 @@
-// cuda_functions.cuh
+// cuda_functions.hpp
 
 #pragma once
 
