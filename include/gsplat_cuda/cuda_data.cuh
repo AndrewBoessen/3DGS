@@ -1,4 +1,4 @@
-// cuda_data.hpp
+// cuda_data.cuh
 
 #pragma once
 

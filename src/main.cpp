@@ -1,10 +1,11 @@
 #include "dataloader/colmap.hpp"
 #include "gsplat/gaussian.hpp"
+#include "gsplat/trainer.hpp"
 #include "gsplat/utils.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <utility> // Required for std::move
+#include <utility>
 
 int main(int argc, char *argv[]) {
   // Check for the correct number of command-line arguments.

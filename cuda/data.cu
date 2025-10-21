@@ -1,6 +1,7 @@
 // data.cu
 
 #include "gsplat_cuda/cuda_data.cuh"
+
 #include <exception>
 #include <stdlib.h>
 #include <thrust/device_vector.h>

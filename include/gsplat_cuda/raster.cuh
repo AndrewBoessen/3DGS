@@ -1,4 +1,4 @@
-// raster.hpp
+// raster.cuh
 
 #pragma once
 

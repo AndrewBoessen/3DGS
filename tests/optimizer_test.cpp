@@ -71,7 +71,7 @@ protected:
     cudaFree(d_steps);
 
     // Free host memory
-    delete[] d_steps;
+    delete[] h_steps;
     delete[] h_params;
     delete[] h_param_grads;
     delete[] h_exp_avg;
