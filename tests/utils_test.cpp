@@ -52,12 +52,9 @@ protected:
         << "adaptive_control_end: 20000\n"
         << "adaptive_control_interval: 100\n"
         << "max_gaussians: 1000000\n"
+        << "max_scale: 0.005\n"
         << "delete_opacity_threshold: 0.005\n"
         << "clone_scale_threshold: 0.01\n"
-        << "use_fractional_densification: true\n"
-        << "use_adaptive_fractional_densification: true\n"
-        << "uv_grad_percentile: 0.5\n"
-        << "scale_norm_percentile: 0.5\n"
         << "uv_grad_threshold: 0.0002\n"
         << "split_scale_factor: 1.5\n"
         << "num_split_samples: 2\n";

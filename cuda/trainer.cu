@@ -8,33 +8,21 @@
 #include "gsplat_cuda/cuda_forward.cuh"
 #include "gsplat_cuda/optimizer.cuh"
 #include "gsplat_cuda/raster.cuh"
+#include "thrust/detail/raw_pointer_cast.h"
 
 #include <Eigen/Dense>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <opencv2/opencv.hpp>
 #include <random>
 #include <stdexcept>
+#include <thrust/count.h>
 #include <thrust/device_vector.h>
 #include <thrust/functional.h>
 #include <thrust/host_vector.h>
 #include <thrust/transform.h>
-
-// Local helper struct (can remain in .cu)
-struct SHIndexMapper {
-  const int old_coeffs_per_gaussian;
-  const int new_coeffs_per_gaussian;
-
-  SHIndexMapper(int old_coeffs, int new_coeffs)
-      : old_coeffs_per_gaussian(old_coeffs), new_coeffs_per_gaussian(new_coeffs) {}
-
-  __host__ __device__ int operator()(int src_idx) const {
-    int gaussian_idx = src_idx / old_coeffs_per_gaussian;
-    int coeff_idx_in_gaussian = src_idx % old_coeffs_per_gaussian;
-    return gaussian_idx * new_coeffs_per_gaussian + coeff_idx_in_gaussian;
-  }
-};
 
 /**
  * @brief Private implementation (PImpl) for the Trainer class.
@@ -115,7 +103,7 @@ void TrainerImpl::test_train_split() {
 }
 
 void TrainerImpl::reset_grad_accum() {
-  thrust::fill_n(cuda.accumulators.d_uv_grad_accum.begin(), num_gaussians * 2, 0.0f);
+  thrust::fill_n(cuda.accumulators.d_uv_grad_accum.begin(), num_gaussians, 0.0f);
   thrust::fill_n(cuda.accumulators.d_xyz_grad_accum.begin(), num_gaussians * 3, 0.0f);
   thrust::fill_n(cuda.accumulators.d_grad_accum_dur.begin(), num_gaussians, 0);
 }
@@ -126,6 +114,20 @@ void TrainerImpl::reset_opacity() {
 
   thrust::fill_n(cuda.gaussians.d_opacity.begin(), num_gaussians, new_opc);
 }
+
+struct SHIndexMapper {
+  const int old_coeffs_per_gaussian;
+  const int new_coeffs_per_gaussian;
+
+  SHIndexMapper(int old_coeffs, int new_coeffs)
+      : old_coeffs_per_gaussian(old_coeffs), new_coeffs_per_gaussian(new_coeffs) {}
+
+  __host__ __device__ int operator()(int src_idx) const {
+    int gaussian_idx = src_idx / old_coeffs_per_gaussian;
+    int coeff_idx_in_gaussian = src_idx % old_coeffs_per_gaussian;
+    return gaussian_idx * new_coeffs_per_gaussian + coeff_idx_in_gaussian;
+  }
+};
 
 void TrainerImpl::add_sh_band() {
   if (l_max >= config.max_sh_band)
@@ -165,10 +167,168 @@ void TrainerImpl::add_sh_band() {
   l_max++;
 }
 
+// Computes the L2 norm of the average 2D gradient.
+struct ComputeAvgGrad {
+  __host__ __device__ float operator()(const thrust::tuple<float, int> &t) const {
+    float grad_sum = thrust::get<0>(t);
+    int duration = thrust::get<1>(t);
+
+    if (duration == 0)
+      return 0.0f;
+    return grad_sum / (float)duration;
+  }
+};
+
+// Identifies Gaussians to be pruned based on low opacity or large scale.
+struct IdentifyPrune {
+  const float op_threshold;
+  const float scale_max;
+
+  IdentifyPrune(float ot, float sm) : op_threshold(ot), scale_max(sm) {}
+
+  __host__ __device__ bool operator()(const thrust::tuple<float, float3> &t) const {
+    float opacity_logit = thrust::get<0>(t);
+    float3 scale_logit = thrust::get<1>(t);
+
+    // Prune if opacity is too low
+    if (opacity_logit < op_threshold)
+      return true;
+
+    float max_scale = fmaxf(expf(scale_logit.x), fmaxf(expf(scale_logit.y), expf(scale_logit.z)));
+    // Prune if scale is too large
+    if (max_scale > scale_max)
+      return true;
+
+    return false;
+  }
+};
+
+// Identifies Gaussians to be cloned based on high gradient.
+struct IdentifyClone {
+  const float grad_threshold;
+  const float scale_threshold;
+  IdentifyClone(float gt, float st) : grad_threshold(gt), scale_threshold(st) {}
+
+  __host__ __device__ bool operator()(const thrust::tuple<float, float3, bool> &t) const {
+    float avg_grad = thrust::get<0>(t);
+    float3 scale_logit = thrust::get<1>(t);
+    bool is_pruned = thrust::get<2>(t);
+
+    float max_scale = fmaxf(expf(scale_logit.x), fmaxf(expf(scale_logit.y), expf(scale_logit.z)));
+    if (is_pruned)
+      return false;
+    return avg_grad > grad_threshold && max_scale <= scale_threshold;
+  }
+};
+
+// Identifies Gaussians to be split based on high gradient.
+struct IdentifySplit {
+  const float grad_threshold;
+  const float scale_threshold;
+  IdentifySplit(float gt, float st) : grad_threshold(gt), scale_threshold(st) {}
+
+  __host__ __device__ bool operator()(const thrust::tuple<float, float3, bool> &t) const {
+    float avg_grad = thrust::get<0>(t);
+    float3 scale_logit = thrust::get<1>(t);
+    bool is_pruned = thrust::get<2>(t);
+
+    float max_scale = fmaxf(expf(scale_logit.x), fmaxf(expf(scale_logit.y), expf(scale_logit.z)));
+    if (is_pruned)
+      return false;
+    return avg_grad > grad_threshold && max_scale > scale_threshold;
+  }
+};
+
+// Combines prune, clone, and split masks into a single removal mask.
+struct CombineMasks {
+  __host__ __device__ bool operator()(const thrust::tuple<bool, bool, bool> &t) const {
+    return thrust::get<0>(t) || // is_pruned
+           thrust::get<1>(t) || // is_cloned
+           thrust::get<2>(t);   // is_split
+  }
+};
+
 void TrainerImpl::adaptive_density_step() {
-  // Uses member 'cuda'
-  // adaptive_density_step(cuda.gaussians, cuda.accumulators);
-  // (Logic would be implemented here)
+  // --- 1. Calculate Average Gradient Norms ---
+  thrust::device_vector<float> d_avg_uv_grad_norm(num_gaussians);
+
+  // --- 2. Identify Gaussians to Prune ---
+  // Inverse sigmoid: log(p / (1-p))
+  const float op_threshold = logf(config.delete_opacity_threshold) - logf(1.0f - config.delete_opacity_threshold);
+  const float scale_max = config.max_scale;
+
+  // Get a pointer to the scale data
+  thrust::device_vector<bool> d_prune_mask(num_gaussians);
+
+  int num_to_prune = thrust::count(d_prune_mask.begin(), d_prune_mask.end(), true);
+
+  // --- 3. Identify Gaussians to Clone ---
+  thrust::device_vector<bool> d_clone_mask(num_gaussians);
+
+  int num_to_clone = thrust::count(d_clone_mask.begin(), d_clone_mask.end(), true);
+
+  // --- 4. Identify Gaussians to Split ---
+  thrust::device_vector<bool> d_split_mask(num_gaussians);
+
+  int num_to_split = thrust::count(d_split_mask.begin(), d_split_mask.end(), true);
+
+  // --- 5. Check Capacity ---
+  int num_to_remove = num_to_prune + num_to_clone + num_to_split;
+  int num_to_add = (num_to_clone + num_to_split) * 2;
+  int new_num_gaussians = num_gaussians - num_to_remove + num_to_add;
+
+  if (new_num_gaussians > config.max_gaussians) {
+    std::cerr << "WARNING: Adaptive density step would exceed max_gaussians (" << new_num_gaussians << " > "
+              << config.max_gaussians << "). Skipping." << std::endl;
+    // TODO: A more robust strategy would be to prune anyway, and then fill
+    // remaining capacity with the highest-gradient clones/splits.
+    return;
+  }
+
+  if (num_to_add == 0 && num_to_prune == 0) {
+    return; // Nothing to do
+  }
+
+  std::cout << "ADAPTIVE DENSITY: Pruning " << num_to_prune << ", Cloning " << num_to_clone << ", Splitting "
+            << num_to_split << ". (Net change: " << (new_num_gaussians - num_gaussians) << ")" << std::endl;
+
+  // --- 6. Generate New Gaussian Parameters (Kernels) ---
+  const int num_sh_coeffs = (l_max > 0) ? ((l_max + 1) * (l_max + 1) - 1) : 0;
+
+  // Allocate temp device memory for new Gaussians
+  thrust::device_vector<float> d_new_clone_xyz(num_to_clone * 2 * 3);
+  thrust::device_vector<float> d_new_clone_rgb(num_to_clone * 2 * 3);
+  thrust::device_vector<float> d_new_clone_opacity(num_to_clone * 2 * 1);
+  thrust::device_vector<float> d_new_clone_scale(num_to_clone * 2 * 3);
+  thrust::device_vector<float> d_new_clone_quat(num_to_clone * 2 * 4);
+  thrust::device_vector<float> d_new_clone_sh(num_to_clone * 2 * num_sh_coeffs * 3);
+
+  thrust::device_vector<float> d_new_split_xyz(num_to_split * 2 * 3);
+  thrust::device_vector<float> d_new_split_rgb(num_to_split * 2 * 3);
+  thrust::device_vector<float> d_new_split_opacity(num_to_split * 2 * 1);
+  thrust::device_vector<float> d_new_split_scale(num_to_split * 2 * 3);
+  thrust::device_vector<float> d_new_split_quat(num_to_split * 2 * 4);
+  thrust::device_vector<float> d_new_split_sh(num_to_split * 2 * num_sh_coeffs * 3);
+
+  if (num_to_clone > 0) {
+    // TODO: Launch kernel_clone_gaussians<<<...>>>
+  }
+
+  if (num_to_split > 0) {
+    // TODO: Launch kernel_split_gaussians<<<...>>>
+  }
+
+  // --- 7. Get mask of all gaussians to remove ---
+  thrust::device_vector<bool> d_remove_mask(num_gaussians);
+
+  // --- 8, 9, 10. Compact existing vectors and append new data ---
+
+  // --- 11. Update total Gaussian count ---
+
+  if (num_gaussians != new_num_gaussians) {
+    std::cerr << "FATAL ERROR: Gaussian count mismatch in adaptive density!" << std::endl;
+    exit(EXIT_FAILURE);
+  }
 }
 
 float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_camera, ForwardPassData &pass_data,
@@ -251,6 +411,11 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
   return loss;
 }
 
+// A functor to compute the norm of a 2D gradient
+struct PositionalGradientNorm {
+  __host__ __device__ float operator()(const float2 &grad) const { return sqrtf(grad.x * grad.x + grad.y * grad.y); }
+};
+
 void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_camera) {
   auto d_xyz = compact_masked_array<3>(cuda.gaussians.d_xyz, pass_data.d_mask, pass_data.num_culled);
   auto d_rgb = compact_masked_array<3>(cuda.gaussians.d_rgb, pass_data.d_mask, pass_data.num_culled);
@@ -313,9 +478,61 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
 
   if (l_max > 0) {
     // SH logic would go here
+    thrust::device_vector<float> d_sh;
+    thrust::device_vector<float> d_m_sh;
+    thrust::device_vector<float> d_v_sh;
+    switch (l_max) {
+    case 0:
+      break;
+    case 1:
+      d_sh = compact_masked_array<9>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
+      d_m_sh = compact_masked_array<9>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      d_v_sh = compact_masked_array<9>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
+
+      adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
+                thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
+                config.base_lr * config.sh_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+                pass_data.num_culled, 9);
+
+      scatter_masked_array<9>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
+      scatter_masked_array<9>(d_v_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
+      scatter_masked_array<9>(d_sh, pass_data.d_mask, cuda.gaussians.d_sh);
+    case 2:
+      d_sh = compact_masked_array<24>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
+      d_m_sh = compact_masked_array<24>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      d_v_sh = compact_masked_array<24>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
+                thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
+                config.base_lr * config.sh_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+                pass_data.num_culled, 24);
+
+      scatter_masked_array<24>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
+      scatter_masked_array<24>(d_v_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
+      scatter_masked_array<24>(d_sh, pass_data.d_mask, cuda.gaussians.d_sh);
+    case 3:
+      d_sh = compact_masked_array<45>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
+      d_m_sh = compact_masked_array<45>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      d_v_sh = compact_masked_array<45>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
+                thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
+                config.base_lr * config.sh_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+                pass_data.num_culled, 45);
+      scatter_masked_array<45>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
+      scatter_masked_array<45>(d_v_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
+      scatter_masked_array<45>(d_sh, pass_data.d_mask, cuda.gaussians.d_sh);
+    default:
+      fprintf(stderr, "Error SH band is invalid\n");
+      exit(EXIT_FAILURE);
+    }
   }
 
-  scatter_add_masked_array<2>(cuda.gradients.d_grad_uv, pass_data.d_mask, cuda.accumulators.d_uv_grad_accum);
+  // Update gradient accumulators after step
+  thrust::device_vector<float> d_uv_grad_norms(pass_data.num_culled * 2);
+  thrust::transform(reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())),
+                    reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())) +
+                        pass_data.num_culled,
+                    d_uv_grad_norms.begin(), PositionalGradientNorm());
+  scatter_add_masked_array<1>(d_uv_grad_norms, pass_data.d_mask, cuda.accumulators.d_uv_grad_accum);
   scatter_add_masked_array<3>(cuda.gradients.d_grad_xyz, pass_data.d_mask, cuda.accumulators.d_xyz_grad_accum);
   thrust::device_vector<int> d_int_mask(pass_data.d_mask.size());
   thrust::copy(pass_data.d_mask.begin(), pass_data.d_mask.end(), d_int_mask.begin());

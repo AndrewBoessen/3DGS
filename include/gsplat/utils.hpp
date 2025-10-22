@@ -64,11 +64,8 @@ struct ConfigParameters {
   int adaptive_control_interval;
   int max_gaussians;
   double delete_opacity_threshold;
+  double max_scale;
   double clone_scale_threshold;
-  bool use_fractional_densification;
-  bool use_adaptive_fractional_densification;
-  double uv_grad_percentile;
-  double scale_norm_percentile;
   double uv_grad_threshold;
   double split_scale_factor;
   int num_split_samples;

@@ -67,7 +67,7 @@ GaussianGradients::GaussianGradients(size_t max_gaussians) {
 GradientAccumulators::GradientAccumulators(size_t max_gaussians) {
   try {
     d_xyz_grad_accum.resize(max_gaussians * 3);
-    d_uv_grad_accum.resize(max_gaussians * 2);
+    d_uv_grad_accum.resize(max_gaussians);
     d_grad_accum_dur.resize(max_gaussians);
   } catch (const std::exception &e) {
     fprintf(stderr, "CUDA Memory Allocation Error (GradientAccumulators): %s\n", e.what());

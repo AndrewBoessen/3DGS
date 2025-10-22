@@ -24,7 +24,7 @@ test_split_ratio: 8
 use_background: true
 use_background_end: 6600
 reset_opacity_interval: 3001
-reset_opacity_value: 0.2
+reset_opacity_value: 0.01
 reset_opacity_start: 1050
 reset_opacity_end: 6500
 use_sh_precompute: true
@@ -37,12 +37,8 @@ adaptive_control_start: 750
 adaptive_control_end: 6500
 adaptive_control_interval: 100
 max_gaussians: 4250000
-delete_opacity_threshold: 0.01
+delete_opacity_threshold: 0.005
 clone_scale_threshold: 0.01
-use_fractional_densification: true
-use_adaptive_fractional_densification: true
-uv_grad_percentile: 0.96
-scale_norm_percentile: 0.99
 uv_grad_threshold: 0.0002
 split_scale_factor: 1.6
 num_split_samples: 2
