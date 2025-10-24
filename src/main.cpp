@@ -87,5 +87,11 @@ int main(int argc, char *argv[]) {
   gaussians = Gaussians::Initialize(points);
   std::cout << "Successfully initialized " << gaussians.xyz.size() << " Gaussians." << std::endl;
 
+  // Trainer
+  Trainer trainer(config, gaussians, images, cameras);
+
+  trainer.test_train_split();
+  trainer.train();
+
   return 0; // Success
 }

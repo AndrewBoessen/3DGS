@@ -37,6 +37,7 @@ adaptive_control_start: 750
 adaptive_control_end: 6500
 adaptive_control_interval: 100
 max_gaussians: 4250000
+max_scale: 0.5
 delete_opacity_threshold: 0.005
 clone_scale_threshold: 0.01
 uv_grad_threshold: 0.0002
