@@ -166,7 +166,7 @@ void scatter_masked_array(const thrust::device_vector<T> &d_compacted, const thr
 
     auto indices = thrust::make_counting_iterator(0);
 
-    thrust::copy_if(indices, indices + d_destination.size(), d_mask.begin(), d_scatter_map.begin(), is_true());
+    thrust::copy_if(indices, indices + d_mask.size(), d_mask.begin(), d_scatter_map.begin(), is_true());
     thrust::scatter(d_compacted.begin(), d_compacted.end(), d_scatter_map.begin(), d_destination.begin());
 
   } else {
@@ -234,7 +234,7 @@ void scatter_add_masked_array(const thrust::device_vector<T> &d_compacted,
   if (STRIDE == 1) {
     auto indices = thrust::make_counting_iterator(0);
 
-    thrust::copy_if(indices, indices + d_destination.size(), d_mask.begin(), d_scatter_map.begin(), is_true());
+    thrust::copy_if(indices, indices + d_mask.size(), d_mask.begin(), d_scatter_map.begin(), is_true());
 
   } else {
     size_t num_blocks = d_mask.size();

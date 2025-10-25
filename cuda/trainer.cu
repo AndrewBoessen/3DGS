@@ -270,8 +270,11 @@ void TrainerImpl::adaptive_density_step() {
 
   thrust::device_vector<float> d_scale_max(num_gaussians);
 
-  auto scale_iter_start = thrust::make_zip_iterator(thrust::make_tuple(
-      cuda.gaussians.d_scale.begin(), cuda.gaussians.d_scale.begin() + 1, cuda.gaussians.d_scale.begin() + 2));
+  auto s1_it = thrust::make_strided_iterator(cuda.gaussians.d_scale.begin(), 3);
+  auto s2_it = thrust::make_strided_iterator(cuda.gaussians.d_scale.begin() + 1, 3);
+  auto s3_it = thrust::make_strided_iterator(cuda.gaussians.d_scale.begin() + 2, 3);
+
+  auto scale_iter_start = thrust::make_zip_iterator(thrust::make_tuple(s1_it, s2_it, s3_it));
   auto scale_iter_end = scale_iter_start + num_gaussians;
 
   thrust::transform(scale_iter_start, scale_iter_end, d_scale_max.begin(), ComputeScaleMax());
@@ -523,7 +526,7 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
     case 1:
       d_sh = compact_masked_array<9>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
       d_m_sh = compact_masked_array<9>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
-      d_v_sh = compact_masked_array<9>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      d_v_sh = compact_masked_array<9>(cuda.optimizer.v_grad_sh, pass_data.d_mask, pass_data.num_culled);
 
       adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
                 thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
@@ -531,32 +534,32 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
                 pass_data.num_culled, 9);
 
       scatter_masked_array<9>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
-      scatter_masked_array<9>(d_v_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
+      scatter_masked_array<9>(d_v_sh, pass_data.d_mask, cuda.optimizer.v_grad_sh);
       scatter_masked_array<9>(d_sh, pass_data.d_mask, cuda.gaussians.d_sh);
       break;
     case 2:
       d_sh = compact_masked_array<24>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
       d_m_sh = compact_masked_array<24>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
-      d_v_sh = compact_masked_array<24>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      d_v_sh = compact_masked_array<24>(cuda.optimizer.v_grad_sh, pass_data.d_mask, pass_data.num_culled);
       adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
                 thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
                 config.base_lr * config.sh_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
                 pass_data.num_culled, 24);
 
       scatter_masked_array<24>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
-      scatter_masked_array<24>(d_v_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
+      scatter_masked_array<24>(d_v_sh, pass_data.d_mask, cuda.optimizer.v_grad_sh);
       scatter_masked_array<24>(d_sh, pass_data.d_mask, cuda.gaussians.d_sh);
       break;
     case 3:
       d_sh = compact_masked_array<45>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
       d_m_sh = compact_masked_array<45>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
-      d_v_sh = compact_masked_array<45>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      d_v_sh = compact_masked_array<45>(cuda.optimizer.v_grad_sh, pass_data.d_mask, pass_data.num_culled);
       adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
                 thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
                 config.base_lr * config.sh_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
                 pass_data.num_culled, 45);
       scatter_masked_array<45>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
-      scatter_masked_array<45>(d_v_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
+      scatter_masked_array<45>(d_v_sh, pass_data.d_mask, cuda.optimizer.v_grad_sh);
       scatter_masked_array<45>(d_sh, pass_data.d_mask, cuda.gaussians.d_sh);
       break;
     default:
