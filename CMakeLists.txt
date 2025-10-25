@@ -59,7 +59,7 @@ target_include_directories(gsplat
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp OpenMP::OpenMP_CXX Eigen3::Eigen nanoflann::nanoflann ${OpenCV_LIBS})
+target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp OpenMP::OpenMP_CXX Eigen3::Eigen nanoflann::nanoflann ${OpenCV_LIBS} CCCL::CCCL)
 
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION

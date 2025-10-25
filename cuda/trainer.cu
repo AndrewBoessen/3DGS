@@ -533,6 +533,7 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
       scatter_masked_array<9>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
       scatter_masked_array<9>(d_v_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
       scatter_masked_array<9>(d_sh, pass_data.d_mask, cuda.gaussians.d_sh);
+      break;
     case 2:
       d_sh = compact_masked_array<24>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
       d_m_sh = compact_masked_array<24>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
@@ -545,6 +546,7 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
       scatter_masked_array<24>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
       scatter_masked_array<24>(d_v_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
       scatter_masked_array<24>(d_sh, pass_data.d_mask, cuda.gaussians.d_sh);
+      break;
     case 3:
       d_sh = compact_masked_array<45>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
       d_m_sh = compact_masked_array<45>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
@@ -556,6 +558,7 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
       scatter_masked_array<45>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
       scatter_masked_array<45>(d_v_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
       scatter_masked_array<45>(d_sh, pass_data.d_mask, cuda.gaussians.d_sh);
+      break;
     default:
       fprintf(stderr, "Error SH band is invalid\n");
       exit(EXIT_FAILURE);
@@ -570,9 +573,8 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
                     d_uv_grad_norms.begin(), PositionalGradientNorm());
   scatter_add_masked_array<1>(d_uv_grad_norms, pass_data.d_mask, cuda.accumulators.d_uv_grad_accum);
   scatter_add_masked_array<3>(cuda.gradients.d_grad_xyz, pass_data.d_mask, cuda.accumulators.d_xyz_grad_accum);
-  thrust::device_vector<int> d_int_mask(pass_data.d_mask.size());
-  thrust::copy(pass_data.d_mask.begin(), pass_data.d_mask.end(), d_int_mask.begin());
-  scatter_add_masked_array<1>(d_int_mask, pass_data.d_mask, cuda.accumulators.d_grad_accum_dur);
+  thrust::device_vector<int> d_ones(pass_data.num_culled, 1);
+  scatter_add_masked_array<1>(d_ones, pass_data.d_mask, cuda.accumulators.d_grad_accum_dur);
 }
 
 void TrainerImpl::train() {

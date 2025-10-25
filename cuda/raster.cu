@@ -15,6 +15,10 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
 
   // Initialize mask
   pass_data.d_mask.resize(num_gaussians);
+  // Initialize xyz_c
+  pass_data.d_xyz_c.resize(num_gaussians * 3);
+  // Initialize uv
+  pass_data.d_uv.resize(num_gaussians * 2);
 
   // Step 1: Projections and Culling
   camera_extrinsic_projection(thrust::raw_pointer_cast(gaussians.d_xyz.data()),
@@ -28,6 +32,7 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
                  thrust::raw_pointer_cast(pass_data.d_mask.data()));
 
   pass_data.num_culled = thrust::count(pass_data.d_mask.begin(), pass_data.d_mask.end(), true);
+  printf("NUM AFTER CULL %d\n", pass_data.num_culled);
 
   if (pass_data.num_culled == 0) {
     fprintf(stderr, "Error no Gaussians in view for image\n");
@@ -41,10 +46,13 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
     break;
   case 1:
     d_sh_selected = compact_masked_array<9>(gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
+    break;
   case 2:
     d_sh_selected = compact_masked_array<24>(gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
+    break;
   case 3:
     d_sh_selected = compact_masked_array<45>(gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
+    break;
   default:
     fprintf(stderr, "Error SH band is invalid\n");
     exit(EXIT_FAILURE);
@@ -91,6 +99,7 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
                            thrust::raw_pointer_cast(pass_data.d_conic.data()), n_tiles_x, n_tiles_y, config.mh_dist,
                            pass_data.num_culled, sorted_gaussian_size, nullptr, nullptr);
 
+  printf("NUM PAIRS %d\n", sorted_gaussian_size);
   pass_data.d_splat_start_end_idx_by_tile_idx.resize(n_tiles + 1);
   pass_data.d_sorted_gaussians.resize(sorted_gaussian_size);
 

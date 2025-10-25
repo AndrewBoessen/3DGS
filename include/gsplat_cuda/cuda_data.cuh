@@ -87,6 +87,10 @@ struct ForwardPassData {
   thrust::device_vector<int> d_splats_per_pixel;
 };
 
+struct is_true {
+  __host__ __device__ bool operator()(const bool x) { return x; }
+};
+
 template <int STRIDE> struct strided_index_functor {
   __host__ __device__ int operator()(int i) const { return i / STRIDE; }
 };
@@ -107,7 +111,7 @@ thrust::device_vector<T> compact_masked_array(const thrust::device_vector<T> &d_
   thrust::device_vector<T> d_selected(num_culled * STRIDE);
 
   if (STRIDE == 1) {
-    thrust::copy_if(d_source.begin(), d_source.end(), d_mask.begin(), d_selected.begin());
+    thrust::copy_if(d_source.begin(), d_source.begin() + d_mask.size(), d_mask.begin(), d_selected.begin(), is_true());
   } else {
     // Create the strided stencil iterators
     auto count_it = thrust::make_counting_iterator(0);
@@ -115,7 +119,8 @@ thrust::device_vector<T> compact_masked_array(const thrust::device_vector<T> &d_
     auto stencil = thrust::make_permutation_iterator(d_mask.begin(), idx_map);
 
     // Perform the copy using the strided stencil
-    thrust::copy_if(d_source.begin(), d_source.end(), stencil, d_selected.begin());
+    thrust::copy_if(d_source.begin(), d_source.begin() + d_mask.size() * STRIDE, stencil, d_selected.begin(),
+                    is_true());
   }
 
   return d_selected;
@@ -161,7 +166,7 @@ void scatter_masked_array(const thrust::device_vector<T> &d_compacted, const thr
 
     auto indices = thrust::make_counting_iterator(0);
 
-    thrust::copy_if(indices, indices + d_destination.size(), d_mask.begin(), d_scatter_map.begin());
+    thrust::copy_if(indices, indices + d_destination.size(), d_mask.begin(), d_scatter_map.begin(), is_true());
     thrust::scatter(d_compacted.begin(), d_compacted.end(), d_scatter_map.begin(), d_destination.begin());
 
   } else {
@@ -172,7 +177,8 @@ void scatter_masked_array(const thrust::device_vector<T> &d_compacted, const thr
     thrust::device_vector<int> d_scatter_block_indices(num_culled_blocks);
     auto block_indices = thrust::make_counting_iterator(0);
 
-    thrust::copy_if(block_indices, block_indices + num_blocks, d_mask.begin(), d_scatter_block_indices.begin());
+    thrust::copy_if(block_indices, block_indices + num_blocks, d_mask.begin(), d_scatter_block_indices.begin(),
+                    is_true());
     thrust::device_vector<int> d_scatter_map(num_culled_elements);
 
     auto source_indices = thrust::make_counting_iterator(0);
@@ -228,7 +234,7 @@ void scatter_add_masked_array(const thrust::device_vector<T> &d_compacted,
   if (STRIDE == 1) {
     auto indices = thrust::make_counting_iterator(0);
 
-    thrust::copy_if(indices, indices + d_destination.size(), d_mask.begin(), d_scatter_map.begin());
+    thrust::copy_if(indices, indices + d_destination.size(), d_mask.begin(), d_scatter_map.begin(), is_true());
 
   } else {
     size_t num_blocks = d_mask.size();
@@ -237,7 +243,8 @@ void scatter_add_masked_array(const thrust::device_vector<T> &d_compacted,
     thrust::device_vector<int> d_scatter_block_indices(num_culled_blocks);
     auto block_indices = thrust::make_counting_iterator(0);
 
-    thrust::copy_if(block_indices, block_indices + num_blocks, d_mask.begin(), d_scatter_block_indices.begin());
+    thrust::copy_if(block_indices, block_indices + num_blocks, d_mask.begin(), d_scatter_block_indices.begin(),
+                    is_true());
     auto source_indices = thrust::make_counting_iterator(0);
 
     auto map_it = thrust::make_transform_iterator(
@@ -253,5 +260,6 @@ void scatter_add_masked_array(const thrust::device_vector<T> &d_compacted,
 
   scatter_add_functor<T> functor(p_compacted, p_map, p_dest);
 
-  thrust::for_each(thrust::make_counting_iterator(0), thrust::make_counting_iterator(num_culled_elements), functor);
+  thrust::for_each(thrust::make_counting_iterator<size_t>(0), thrust::make_counting_iterator(num_culled_elements),
+                   functor);
 }
