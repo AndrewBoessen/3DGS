@@ -187,7 +187,7 @@ struct ComputeScaleMax {
     float s2 = thrust::get<1>(t);
     float s3 = thrust::get<2>(t);
 
-    return fmaxf(s1, fmaxf(s2, s3));
+    return fmaxf(expf(s1), fmaxf(expf(s2), expf(s3)));
   }
 };
 
@@ -295,7 +295,7 @@ void TrainerImpl::adaptive_density_step() {
 
   // --- 3. Identify Gaussians to Clone ---
   auto densify_iter_start = thrust::make_zip_iterator(
-      thrust::make_tuple(cuda.accumulators.d_uv_grad_accum.begin(), d_scale_max.begin(), d_prune_mask.begin()));
+      thrust::make_tuple(d_avg_uv_grad_norm.begin(), d_scale_max.begin(), d_prune_mask.begin()));
   auto densify_iter_end = densify_iter_start + num_gaussians;
 
   thrust::device_vector<bool> d_clone_mask(num_gaussians);
@@ -453,7 +453,15 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
 
 // A functor to compute the norm of a 2D gradient
 struct PositionalGradientNorm {
-  __host__ __device__ float operator()(const float2 &grad) const { return sqrtf(grad.x * grad.x + grad.y * grad.y); }
+  const float height;
+  const float width;
+
+  PositionalGradientNorm(float h, float w) : height(h), width(w) {}
+  __host__ __device__ float operator()(const float2 &grad) const {
+    const float u = height * grad.x;
+    const float v = width * grad.y;
+    return sqrtf(u * u + v * v);
+  }
 };
 
 void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_camera) {
@@ -582,7 +590,7 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
   thrust::transform(reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())),
                     reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())) +
                         pass_data.num_culled,
-                    d_uv_grad_norms.begin(), PositionalGradientNorm());
+                    d_uv_grad_norms.begin(), PositionalGradientNorm(curr_camera.params[0], curr_camera.params[1]));
   thrust::transform(d_uv_accum_compact.begin(), d_uv_accum_compact.end(), d_uv_grad_norms.begin(),
                     d_uv_accum_compact.begin(), thrust::plus<float>());
 
