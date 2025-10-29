@@ -37,6 +37,23 @@ OptimizerParameters::OptimizerParameters(size_t max_gaussians) {
     v_grad_opacity.resize(max_gaussians);
     v_grad_scale.resize(max_gaussians * 3);
     v_grad_quaternion.resize(max_gaussians * 4);
+
+    // Intialize states
+    thrust::fill(d_training_steps.begin(), d_training_steps.end(), 1);
+
+    thrust::fill(m_grad_xyz.begin(), m_grad_xyz.end(), 0.0f);
+    thrust::fill(m_grad_rgb.begin(), m_grad_rgb.end(), 0.0f);
+    thrust::fill(m_grad_sh.begin(), m_grad_sh.end(), 0.0f);
+    thrust::fill(m_grad_opacity.begin(), m_grad_opacity.end(), 0.0f);
+    thrust::fill(m_grad_scale.begin(), m_grad_scale.end(), 0.0f);
+    thrust::fill(m_grad_quaternion.begin(), m_grad_quaternion.end(), 0.0f);
+
+    thrust::fill(v_grad_xyz.begin(), v_grad_xyz.end(), 0.0f);
+    thrust::fill(v_grad_rgb.begin(), v_grad_rgb.end(), 0.0f);
+    thrust::fill(v_grad_sh.begin(), v_grad_sh.end(), 0.0f);
+    thrust::fill(v_grad_opacity.begin(), v_grad_opacity.end(), 0.0f);
+    thrust::fill(v_grad_scale.begin(), v_grad_scale.end(), 0.0f);
+    thrust::fill(v_grad_quaternion.begin(), v_grad_quaternion.end(), 0.0f);
   } catch (const std::exception &e) {
     fprintf(stderr, "CUDA Memory Allocation Error (OptimizerParameters): %s\n", e.what());
     exit(EXIT_FAILURE);
@@ -69,6 +86,11 @@ GradientAccumulators::GradientAccumulators(size_t max_gaussians) {
     d_xyz_grad_accum.resize(max_gaussians * 3);
     d_uv_grad_accum.resize(max_gaussians);
     d_grad_accum_dur.resize(max_gaussians);
+
+    // Zero out accumulators
+    thrust::fill(d_xyz_grad_accum.begin(), d_xyz_grad_accum.end(), 0.0f);
+    thrust::fill(d_uv_grad_accum.begin(), d_uv_grad_accum.end(), 0.0f);
+    thrust::fill(d_grad_accum_dur.begin(), d_grad_accum_dur.end(), 0);
   } catch (const std::exception &e) {
     fprintf(stderr, "CUDA Memory Allocation Error (GradientAccumulators): %s\n", e.what());
     exit(EXIT_FAILURE);

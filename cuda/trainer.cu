@@ -36,7 +36,7 @@ public:
   TrainerImpl(ConfigParameters config_in, Gaussians gaussians_in, std::unordered_map<int, Image> images_in,
               std::unordered_map<int, Camera> cameras_in)
       : config(std::move(config_in)), gaussians(std::move(gaussians_in)), images(std::move(images_in)),
-        cameras(std::move(cameras_in)), iter(0), l_max(0), num_gaussians(gaussians.xyz.size()),
+        cameras(std::move(cameras_in)), iter(0), l_max(0), num_gaussians(gaussians.size()),
         cuda(config.max_gaussians) // Initialize the CUDA data manager
   {}
 
@@ -392,7 +392,8 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
   rgb_gt_image.convertTo(float_gt_image, CV_32FC3, 1.0 / 255.0);
 
   thrust::device_vector<float> d_gt_image(height * width * 3);
-  thrust::copy(float_gt_image.data, float_gt_image.data + height * width * 3, d_gt_image.begin());
+  const float *h_gt_data = float_gt_image.ptr<float>(0);
+  thrust::copy(h_gt_data, h_gt_data + height * width * 3, d_gt_image.begin());
 
   thrust::device_vector<float> d_grad_image(height * width * 3);
   float loss =
@@ -569,15 +570,32 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
   }
 
   // Update gradient accumulators after step
+  // Compact
+  auto d_uv_accum_compact =
+      compact_masked_array<1>(cuda.accumulators.d_uv_grad_accum, pass_data.d_mask, pass_data.num_culled);
+  auto d_xyz_accum_compact =
+      compact_masked_array<3>(cuda.accumulators.d_xyz_grad_accum, pass_data.d_mask, pass_data.num_culled);
+  auto d_accum_dur_compact =
+      compact_masked_array<1>(cuda.accumulators.d_grad_accum_dur, pass_data.d_mask, pass_data.num_culled);
+  // Add
   thrust::device_vector<float> d_uv_grad_norms(pass_data.num_culled);
   thrust::transform(reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())),
                     reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())) +
                         pass_data.num_culled,
                     d_uv_grad_norms.begin(), PositionalGradientNorm());
-  scatter_add_masked_array<1>(d_uv_grad_norms, pass_data.d_mask, cuda.accumulators.d_uv_grad_accum);
-  scatter_add_masked_array<3>(cuda.gradients.d_grad_xyz, pass_data.d_mask, cuda.accumulators.d_xyz_grad_accum);
+  thrust::transform(d_uv_accum_compact.begin(), d_uv_accum_compact.end(), d_uv_grad_norms.begin(),
+                    d_uv_accum_compact.begin(), thrust::plus<float>());
+
+  thrust::transform(d_xyz_accum_compact.begin(), d_xyz_accum_compact.end(), cuda.gradients.d_grad_xyz.begin(),
+                    d_xyz_accum_compact.begin(), thrust::plus<float>());
+
   thrust::device_vector<int> d_ones(pass_data.num_culled, 1);
-  scatter_add_masked_array<1>(d_ones, pass_data.d_mask, cuda.accumulators.d_grad_accum_dur);
+  thrust::transform(d_accum_dur_compact.begin(), d_accum_dur_compact.end(), d_ones.begin(), d_accum_dur_compact.begin(),
+                    thrust::plus<int>());
+  // Scatter
+  scatter_masked_array<1>(d_uv_accum_compact, pass_data.d_mask, cuda.accumulators.d_uv_grad_accum);
+  scatter_masked_array<3>(d_xyz_accum_compact, pass_data.d_mask, cuda.accumulators.d_xyz_grad_accum);
+  scatter_masked_array<1>(d_accum_dur_compact, pass_data.d_mask, cuda.accumulators.d_grad_accum_dur);
 }
 
 void TrainerImpl::train() {
@@ -596,7 +614,6 @@ void TrainerImpl::train() {
     thrust::copy(h_op, h_op + num_gaussians, cuda.gaussians.d_opacity.begin());
     thrust::copy(h_scale, h_scale + num_gaussians * 3, cuda.gaussians.d_scale.begin());
     thrust::copy(h_quat, h_quat + num_gaussians * 4, cuda.gaussians.d_quaternion.begin());
-
   } catch (const std::exception &e) {
     fprintf(stderr, "Error copying data to device: %s\n", e.what());
     exit(EXIT_FAILURE);
