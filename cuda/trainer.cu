@@ -8,8 +8,6 @@
 #include "gsplat_cuda/cuda_forward.cuh"
 #include "gsplat_cuda/optimizer.cuh"
 #include "gsplat_cuda/raster.cuh"
-#include "thrust/detail/raw_pointer_cast.h"
-#include "thrust/iterator/zip_iterator.h"
 
 #include <Eigen/Dense>
 #include <algorithm>
@@ -23,6 +21,7 @@
 #include <thrust/device_vector.h>
 #include <thrust/functional.h>
 #include <thrust/host_vector.h>
+#include <thrust/scan.h>
 #include <thrust/transform.h>
 
 /**
@@ -312,8 +311,8 @@ void TrainerImpl::adaptive_density_step() {
   int num_to_split = thrust::count(d_split_mask.begin(), d_split_mask.end(), true);
 
   // --- 5. Check Capacity ---
-  int num_to_remove = num_to_prune + num_to_clone + num_to_split;
-  int num_to_add = (num_to_clone + num_to_split) * 2;
+  int num_to_remove = num_to_prune + num_to_split;
+  int num_to_add = num_to_clone + num_to_split * 2;
   int new_num_gaussians = num_gaussians - num_to_remove + num_to_add;
 
   if (new_num_gaussians > config.max_gaussians) {
@@ -335,12 +334,12 @@ void TrainerImpl::adaptive_density_step() {
   const int num_sh_coeffs = (l_max > 0) ? ((l_max + 1) * (l_max + 1) - 1) : 0;
 
   // Allocate temp device memory for new Gaussians
-  thrust::device_vector<float> d_new_clone_xyz(num_to_clone * 2 * 3);
-  thrust::device_vector<float> d_new_clone_rgb(num_to_clone * 2 * 3);
-  thrust::device_vector<float> d_new_clone_opacity(num_to_clone * 2 * 1);
-  thrust::device_vector<float> d_new_clone_scale(num_to_clone * 2 * 3);
-  thrust::device_vector<float> d_new_clone_quat(num_to_clone * 2 * 4);
-  thrust::device_vector<float> d_new_clone_sh(num_to_clone * 2 * num_sh_coeffs * 3);
+  thrust::device_vector<float> d_new_clone_xyz(num_to_clone * 3);
+  thrust::device_vector<float> d_new_clone_rgb(num_to_clone * 3);
+  thrust::device_vector<float> d_new_clone_opacity(num_to_clone * 1);
+  thrust::device_vector<float> d_new_clone_scale(num_to_clone * 3);
+  thrust::device_vector<float> d_new_clone_quat(num_to_clone * 4);
+  thrust::device_vector<float> d_new_clone_sh(num_to_clone * num_sh_coeffs * 3);
 
   thrust::device_vector<float> d_new_split_xyz(num_to_split * 2 * 3);
   thrust::device_vector<float> d_new_split_rgb(num_to_split * 2 * 3);
@@ -350,10 +349,14 @@ void TrainerImpl::adaptive_density_step() {
   thrust::device_vector<float> d_new_split_sh(num_to_split * 2 * num_sh_coeffs * 3);
 
   if (num_to_clone > 0) {
+    thrust::device_vector<int> clone_write_ids(d_clone_mask.size());
+    thrust::exclusive_scan(d_clone_mask.begin(), d_clone_mask.end(), clone_write_ids.begin());
     // TODO: Launch kernel_clone_gaussians<<<...>>>
   }
 
   if (num_to_split > 0) {
+    thrust::device_vector<int> split_write_ids(d_clone_mask.size());
+    thrust::exclusive_scan(d_split_mask.begin(), d_split_mask.end(), split_write_ids.begin());
     // TODO: Launch kernel_split_gaussians<<<...>>>
   }
 
@@ -361,6 +364,7 @@ void TrainerImpl::adaptive_density_step() {
   thrust::device_vector<bool> d_remove_mask(num_gaussians);
 
   // --- 8, 9, 10. Compact existing vectors and append new data ---
+  // TODO: Keep ones not pruned, not split, and cloned
 
   // --- 11. Update total Gaussian count ---
 
