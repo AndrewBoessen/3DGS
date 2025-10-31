@@ -8,6 +8,7 @@
 #include "gsplat_cuda/cuda_forward.cuh"
 #include "gsplat_cuda/optimizer.cuh"
 #include "gsplat_cuda/raster.cuh"
+#include "thrust/iterator/zip_iterator.h"
 
 #include <Eigen/Dense>
 #include <algorithm>
@@ -247,12 +248,12 @@ struct IdentifySplit {
   }
 };
 
-// Combines prune, clone, and split masks into a single removal mask.
+// Combines prune and split masks into a single keep mask.
 struct CombineMasks {
   __host__ __device__ bool operator()(const thrust::tuple<bool, bool, bool> &t) const {
-    return thrust::get<0>(t) || // is_pruned
-           thrust::get<1>(t) || // is_cloned
-           thrust::get<2>(t);   // is_split
+    return !(thrust::get<0>(t) || // is_pruned
+             thrust::get<1>(t) || // is_split
+             thrust::get<2>(t));  // is_clone
   }
 };
 
@@ -334,12 +335,12 @@ void TrainerImpl::adaptive_density_step() {
   const int num_sh_coeffs = (l_max > 0) ? ((l_max + 1) * (l_max + 1) - 1) : 0;
 
   // Allocate temp device memory for new Gaussians
-  thrust::device_vector<float> d_new_clone_xyz(num_to_clone * 3);
-  thrust::device_vector<float> d_new_clone_rgb(num_to_clone * 3);
-  thrust::device_vector<float> d_new_clone_opacity(num_to_clone * 1);
-  thrust::device_vector<float> d_new_clone_scale(num_to_clone * 3);
-  thrust::device_vector<float> d_new_clone_quat(num_to_clone * 4);
-  thrust::device_vector<float> d_new_clone_sh(num_to_clone * num_sh_coeffs * 3);
+  thrust::device_vector<float> d_new_clone_xyz(num_to_clone * 2 * 3);
+  thrust::device_vector<float> d_new_clone_rgb(num_to_clone * 2 * 3);
+  thrust::device_vector<float> d_new_clone_opacity(num_to_clone * 2 * 1);
+  thrust::device_vector<float> d_new_clone_scale(num_to_clone * 2 * 3);
+  thrust::device_vector<float> d_new_clone_quat(num_to_clone * 2 * 4);
+  thrust::device_vector<float> d_new_clone_sh(num_to_clone * 2 * num_sh_coeffs * 3);
 
   thrust::device_vector<float> d_new_split_xyz(num_to_split * 2 * 3);
   thrust::device_vector<float> d_new_split_rgb(num_to_split * 2 * 3);
@@ -364,7 +365,126 @@ void TrainerImpl::adaptive_density_step() {
   thrust::device_vector<bool> d_remove_mask(num_gaussians);
 
   // --- 8, 9, 10. Compact existing vectors and append new data ---
-  // TODO: Keep ones not pruned, not split, and cloned
+  // - Compact all params in keep mask
+  // - Fill front with compact params
+  // - Append Clone and Split params to back
+  thrust::device_vector<bool> d_keep_mask(num_gaussians);
+  auto keep_mask_start =
+      thrust::make_zip_iterator(thrust::make_tuple(d_prune_mask.begin(), d_split_mask.begin(), d_clone_mask.begin()));
+  auto keep_mask_end = keep_mask_start + num_gaussians;
+  thrust::transform(keep_mask_start, keep_mask_end, d_keep_mask.begin(), CombineMasks());
+
+  const int keep_size = thrust::count(d_keep_mask.begin(), d_keep_mask.end(), true);
+
+  // Select keep params
+  auto keep_xyz = compact_masked_array<3>(cuda.gaussians.d_xyz, d_keep_mask, keep_size);
+  auto keep_rgb = compact_masked_array<3>(cuda.gaussians.d_rgb, d_keep_mask, keep_size);
+  auto keep_op = compact_masked_array<1>(cuda.gaussians.d_opacity, d_keep_mask, keep_size);
+  auto keep_scale = compact_masked_array<3>(cuda.gaussians.d_scale, d_keep_mask, keep_size);
+  auto keep_quat = compact_masked_array<4>(cuda.gaussians.d_quaternion, d_keep_mask, keep_size);
+
+  // Select keep optimizer states
+  auto keep_xyz_m = compact_masked_array<3>(cuda.optimizer.m_grad_xyz, d_keep_mask, keep_size);
+  auto keep_rgb_m = compact_masked_array<3>(cuda.optimizer.m_grad_rgb, d_keep_mask, keep_size);
+  auto keep_op_m = compact_masked_array<1>(cuda.optimizer.m_grad_opacity, d_keep_mask, keep_size);
+  auto keep_scale_m = compact_masked_array<3>(cuda.optimizer.m_grad_scale, d_keep_mask, keep_size);
+  auto keep_quat_m = compact_masked_array<4>(cuda.optimizer.m_grad_quaternion, d_keep_mask, keep_size);
+
+  auto keep_xyz_v = compact_masked_array<3>(cuda.optimizer.v_grad_xyz, d_keep_mask, keep_size);
+  auto keep_rgb_v = compact_masked_array<3>(cuda.optimizer.v_grad_rgb, d_keep_mask, keep_size);
+  auto keep_op_v = compact_masked_array<1>(cuda.optimizer.v_grad_opacity, d_keep_mask, keep_size);
+  auto keep_scale_v = compact_masked_array<3>(cuda.optimizer.v_grad_scale, d_keep_mask, keep_size);
+  auto keep_quat_v = compact_masked_array<4>(cuda.optimizer.v_grad_quaternion, d_keep_mask, keep_size);
+
+  // Select SH params and optimizer states
+  thrust::device_vector<float> keep_sh;
+  thrust::device_vector<float> keep_sh_m;
+  thrust::device_vector<float> keep_sh_v;
+  switch (l_max) {
+  case 0:
+    break;
+  case 1:
+    keep_sh = compact_masked_array<9>(cuda.gaussians.d_sh, d_keep_mask, keep_size);
+    keep_sh_m = compact_masked_array<9>(cuda.optimizer.m_grad_sh, d_keep_mask, keep_size);
+    keep_sh_v = compact_masked_array<9>(cuda.optimizer.v_grad_sh, d_keep_mask, keep_size);
+    break;
+  case 2:
+    keep_sh = compact_masked_array<24>(cuda.gaussians.d_sh, d_keep_mask, keep_size);
+    keep_sh_m = compact_masked_array<24>(cuda.optimizer.m_grad_sh, d_keep_mask, keep_size);
+    keep_sh_v = compact_masked_array<24>(cuda.optimizer.v_grad_sh, d_keep_mask, keep_size);
+    break;
+  case 3:
+    keep_sh = compact_masked_array<45>(cuda.gaussians.d_sh, d_keep_mask, keep_size);
+    keep_sh_m = compact_masked_array<45>(cuda.optimizer.m_grad_sh, d_keep_mask, keep_size);
+    keep_sh_v = compact_masked_array<45>(cuda.optimizer.v_grad_sh, d_keep_mask, keep_size);
+    break;
+  default:
+    fprintf(stderr, "Error SH band is invalid\n");
+    exit(EXIT_FAILURE);
+  }
+  // Zero out all optimizer states
+  thrust::fill(cuda.optimizer.m_grad_xyz.begin(), cuda.optimizer.m_grad_xyz.end(), 0.0f);
+  thrust::fill(cuda.optimizer.m_grad_rgb.begin(), cuda.optimizer.m_grad_rgb.end(), 0.0f);
+  thrust::fill(cuda.optimizer.m_grad_opacity.begin(), cuda.optimizer.m_grad_opacity.end(), 0.0f);
+  thrust::fill(cuda.optimizer.m_grad_scale.begin(), cuda.optimizer.m_grad_scale.end(), 0.0f);
+  thrust::fill(cuda.optimizer.m_grad_quaternion.begin(), cuda.optimizer.m_grad_quaternion.end(), 0.0f);
+  thrust::fill(cuda.optimizer.m_grad_sh.begin(), cuda.optimizer.m_grad_sh.end(), 0.0f);
+
+  thrust::fill(cuda.optimizer.v_grad_xyz.begin(), cuda.optimizer.v_grad_xyz.end(), 0.0f);
+  thrust::fill(cuda.optimizer.v_grad_rgb.begin(), cuda.optimizer.v_grad_rgb.end(), 0.0f);
+  thrust::fill(cuda.optimizer.v_grad_opacity.begin(), cuda.optimizer.v_grad_opacity.end(), 0.0f);
+  thrust::fill(cuda.optimizer.v_grad_scale.begin(), cuda.optimizer.v_grad_scale.end(), 0.0f);
+  thrust::fill(cuda.optimizer.v_grad_quaternion.begin(), cuda.optimizer.v_grad_quaternion.end(), 0.0f);
+  thrust::fill(cuda.optimizer.v_grad_sh.begin(), cuda.optimizer.v_grad_sh.end(), 0.0f);
+
+  // Fill with kept Gaussians
+  thrust::copy(keep_xyz.begin(), keep_xyz.end(), cuda.gaussians.d_xyz.begin());
+  thrust::copy(keep_rgb.begin(), keep_rgb.end(), cuda.gaussians.d_rgb.begin());
+  thrust::copy(keep_op.begin(), keep_op.end(), cuda.gaussians.d_opacity.begin());
+  thrust::copy(keep_scale.begin(), keep_scale.end(), cuda.gaussians.d_scale.begin());
+  thrust::copy(keep_quat.begin(), keep_quat.end(), cuda.gaussians.d_quaternion.begin());
+
+  thrust::copy(keep_xyz_m.begin(), keep_xyz_m.end(), cuda.optimizer.m_grad_xyz.begin());
+  thrust::copy(keep_rgb_m.begin(), keep_rgb_m.end(), cuda.optimizer.m_grad_rgb.begin());
+  thrust::copy(keep_op_m.begin(), keep_op_m.end(), cuda.optimizer.m_grad_opacity.begin());
+  thrust::copy(keep_scale_m.begin(), keep_scale_m.end(), cuda.optimizer.m_grad_scale.begin());
+  thrust::copy(keep_quat_m.begin(), keep_quat_m.end(), cuda.optimizer.m_grad_quaternion.begin());
+
+  thrust::copy(keep_xyz_v.begin(), keep_xyz_v.end(), cuda.optimizer.v_grad_xyz.begin());
+  thrust::copy(keep_rgb_v.begin(), keep_rgb_v.end(), cuda.optimizer.v_grad_rgb.begin());
+  thrust::copy(keep_op_v.begin(), keep_op_v.end(), cuda.optimizer.v_grad_opacity.begin());
+  thrust::copy(keep_scale_v.begin(), keep_scale_v.end(), cuda.optimizer.v_grad_scale.begin());
+  thrust::copy(keep_quat_v.begin(), keep_quat_v.end(), cuda.optimizer.v_grad_quaternion.begin());
+
+  if (l_max > 0) {
+    thrust::copy(keep_sh.begin(), keep_sh.end(), cuda.gaussians.d_sh.begin());
+    thrust::copy(keep_sh_m.begin(), keep_sh_m.end(), cuda.optimizer.m_grad_sh.begin());
+    thrust::copy(keep_sh_v.begin(), keep_sh_v.end(), cuda.optimizer.v_grad_sh.begin());
+  }
+
+  // Fill back with new cloned and split Gaussians
+  thrust::copy(d_new_clone_xyz.begin(), d_new_clone_xyz.end(), cuda.gaussians.d_xyz.begin() + keep_size * 3);
+  thrust::copy(d_new_clone_rgb.begin(), d_new_clone_rgb.end(), cuda.gaussians.d_rgb.begin() + keep_size * 3);
+  thrust::copy(d_new_clone_opacity.begin(), d_new_clone_opacity.end(), cuda.gaussians.d_opacity.begin() + keep_size);
+  thrust::copy(d_new_clone_scale.begin(), d_new_clone_scale.end(), cuda.gaussians.d_scale.begin() + keep_size * 3);
+  thrust::copy(d_new_clone_quat.begin(), d_new_clone_quat.end(), cuda.gaussians.d_quaternion.begin() + keep_size * 4);
+
+  thrust::copy(d_new_split_xyz.begin(), d_new_split_xyz.end(),
+               cuda.gaussians.d_xyz.begin() + (keep_size + num_to_clone * 2) * 3);
+  thrust::copy(d_new_split_rgb.begin(), d_new_split_rgb.end(),
+               cuda.gaussians.d_rgb.begin() + (keep_size + num_to_clone * 2) * 3);
+  thrust::copy(d_new_split_opacity.begin(), d_new_split_opacity.end(),
+               cuda.gaussians.d_opacity.begin() + (keep_size + num_to_clone * 2));
+  thrust::copy(d_new_split_scale.begin(), d_new_split_scale.end(),
+               cuda.gaussians.d_scale.begin() + (keep_size + num_to_clone * 2) * 3);
+  thrust::copy(d_new_split_quat.begin(), d_new_split_quat.end(),
+               cuda.gaussians.d_quaternion.begin() + (keep_size + num_to_clone * 2) * 4);
+
+  if (l_max > 0) {
+    thrust::copy(d_new_clone_sh.begin(), d_new_clone_sh.end(), cuda.gaussians.d_sh.begin() + keep_size * num_sh_coeffs);
+    thrust::copy(d_new_split_sh.begin(), d_new_split_sh.end(),
+                 cuda.gaussians.d_sh.begin() + (keep_size + num_to_clone * 2) * num_sh_coeffs);
+  }
 
   // --- 11. Update total Gaussian count ---
 

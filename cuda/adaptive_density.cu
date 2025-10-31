@@ -25,9 +25,9 @@ void __global__ clone_gaussians_kernel(const int N, const int num_sh_coef, const
   const bool is_cloned = mask[i];
 
   if (is_cloned) {
-    const int write_id = write_ids[i];
+    const int write_base = write_ids[i] * 2;
 
-    float3 xyz = {xyz_in[i * 3 + 0], xyz_in[i * 3 + 1], xyz_in[i * 3 + 2]};
+    const float3 xyz = {xyz_in[i * 3 + 0], xyz_in[i * 3 + 1], xyz_in[i * 3 + 2]};
     const float3 rgb = {rgb_in[i * 3 + 0], rgb_in[i * 3 + 1], rgb_in[i * 3 + 2]};
     const float op = op_in[i];
     const float3 scale = {scale_in[i * 3 + 0], scale_in[i * 3 + 1], scale_in[i * 3 + 2]};
@@ -38,38 +38,45 @@ void __global__ clone_gaussians_kernel(const int N, const int num_sh_coef, const
     const float3 xyz_grad_accum = {xyz_grad[i * 3 + 0] / accum_count, xyz_grad[i * 3 + 1] / accum_count,
                                    xyz_grad[i * 3 + 2] / accum_count};
 
-    xyz.x = xyz_grad_accum.x * 0.01f + xyz.x;
-    xyz.y = xyz_grad_accum.y * 0.01f + xyz.y;
-    xyz.z = xyz_grad_accum.z * 0.01f + xyz.z;
+    const float3 xyz_new = {xyz.x - xyz_grad_accum.x * 0.01f, xyz.y - xyz_grad_accum.y * 0.01f,
+                            xyz.z - xyz_grad_accum.z * 0.01f};
 
     // write cloned parameters
-    xyz_out[write_id * 3 + 0] = xyz.x;
-    xyz_out[write_id * 3 + 1] = xyz.y;
-    xyz_out[write_id * 3 + 2] = xyz.z;
+    for (int j = 0; j < 2; j++) {
+      if (j == 0) {
+        xyz_out[(write_base + j) * 3 + 0] = xyz_new.x;
+        xyz_out[(write_base + j) * 3 + 1] = xyz_new.y;
+        xyz_out[(write_base + j) * 3 + 2] = xyz_new.z;
+      } else {
+        xyz_out[(write_base + j) * 3 + 0] = xyz.x;
+        xyz_out[(write_base + j) * 3 + 1] = xyz.y;
+        xyz_out[(write_base + j) * 3 + 2] = xyz.z;
+      }
 
-    rgb_out[write_id * 3 + 0] = rgb.x;
-    rgb_out[write_id * 3 + 1] = rgb.y;
-    rgb_out[write_id * 3 + 2] = rgb.z;
+      rgb_out[(write_base + j) * 3 + 0] = rgb.x;
+      rgb_out[(write_base + j) * 3 + 1] = rgb.y;
+      rgb_out[(write_base + j) * 3 + 2] = rgb.z;
 
-    op_out[write_id] = op;
+      op_out[(write_base + j)] = op;
 
-    scale_out[write_id * 3 + 0] = scale.x;
-    scale_out[write_id * 3 + 1] = scale.y;
-    scale_out[write_id * 3 + 2] = scale.z;
+      scale_out[(write_base + j) * 3 + 0] = scale.x;
+      scale_out[(write_base + j) * 3 + 1] = scale.y;
+      scale_out[(write_base + j) * 3 + 2] = scale.z;
 
-    quat_out[write_id * 4 + 0] = quat.x;
-    quat_out[write_id * 4 + 1] = quat.y;
-    quat_out[write_id * 4 + 2] = quat.z;
-    quat_out[write_id * 4 + 3] = quat.w;
+      quat_out[(write_base + j) * 4 + 0] = quat.x;
+      quat_out[(write_base + j) * 4 + 1] = quat.y;
+      quat_out[(write_base + j) * 4 + 2] = quat.z;
+      quat_out[(write_base + j) * 4 + 3] = quat.w;
 
-    // handle SH coefficients
-    if (num_sh_coef > 0) {
-      for (int j = 0; j < num_sh_coef; j++) {
+      // handle SH coefficients
+      if (num_sh_coef > 0) {
+        for (int k = 0; k < num_sh_coef; k++) {
 #pragma unroll
-        for (int k = 0; k < 3; k++) {
-          const int sh_write_id = (write_id * num_sh_coef * 3) + (j * 3) + k;
-          const int sh_read_id = (i * num_sh_coef * 3) + (j * 3) + k;
-          sh_out[sh_write_id] = sh_in[sh_read_id];
+          for (int l = 0; l < 3; l++) {
+            const int sh_write_id = ((write_base + j) * num_sh_coef * 3) + (k * 3) + l;
+            const int sh_read_id = ((i + j) * num_sh_coef * 3) + (k * 3) + l;
+            sh_out[sh_write_id] = sh_in[sh_read_id];
+          }
         }
       }
     }
