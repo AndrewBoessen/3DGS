@@ -68,7 +68,6 @@ struct ConfigParameters {
   double clone_scale_threshold;
   double uv_grad_threshold;
   double split_scale_factor;
-  int num_split_samples;
 };
 
 /**

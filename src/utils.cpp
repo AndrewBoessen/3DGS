@@ -77,7 +77,6 @@ ConfigParameters parseConfig(const std::string &filename) {
     params.clone_scale_threshold = getNodeValue<float>(config, "clone_scale_threshold");
     params.uv_grad_threshold = getNodeValue<float>(config, "uv_grad_threshold");
     params.split_scale_factor = getNodeValue<float>(config, "split_scale_factor");
-    params.num_split_samples = getNodeValue<int>(config, "num_split_samples");
 
   } catch (const YAML::Exception &e) {
     // Re-throw as a standard exception for the caller to handle.

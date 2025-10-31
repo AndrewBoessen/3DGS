@@ -42,4 +42,3 @@ delete_opacity_threshold: 0.005
 clone_scale_threshold: 0.01
 uv_grad_threshold: 0.0002
 split_scale_factor: 1.6
-num_split_samples: 2

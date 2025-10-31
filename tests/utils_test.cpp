@@ -56,8 +56,7 @@ protected:
         << "delete_opacity_threshold: 0.005\n"
         << "clone_scale_threshold: 0.01\n"
         << "uv_grad_threshold: 0.0002\n"
-        << "split_scale_factor: 1.5\n"
-        << "num_split_samples: 2\n";
+        << "split_scale_factor: 1.5\n";
     out.close();
 
     // Create a YAML file that is missing a required key.

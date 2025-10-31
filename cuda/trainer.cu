@@ -351,13 +351,13 @@ void TrainerImpl::adaptive_density_step() {
   if (num_to_clone > 0) {
     thrust::device_vector<int> clone_write_ids(d_clone_mask.size());
     thrust::exclusive_scan(d_clone_mask.begin(), d_clone_mask.end(), clone_write_ids.begin());
-    // TODO: Launch kernel_clone_gaussians<<<...>>>
+    clone_gaussians(num_gaussians, num_sh_coeffs);
   }
 
   if (num_to_split > 0) {
     thrust::device_vector<int> split_write_ids(d_clone_mask.size());
     thrust::exclusive_scan(d_split_mask.begin(), d_split_mask.end(), split_write_ids.begin());
-    // TODO: Launch kernel_split_gaussians<<<...>>>
+    split_gaussians(num_gaussians, config.split_scale_factor, num_sh_coeffs);
   }
 
   // --- 7. Get mask of all gaussians to remove ---
