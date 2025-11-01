@@ -8,6 +8,7 @@
 #include "gsplat_cuda/cuda_forward.cuh"
 #include "gsplat_cuda/optimizer.cuh"
 #include "gsplat_cuda/raster.cuh"
+#include "thrust/detail/raw_pointer_cast.h"
 #include "thrust/iterator/zip_iterator.h"
 
 #include <Eigen/Dense>
@@ -352,13 +353,34 @@ void TrainerImpl::adaptive_density_step() {
   if (num_to_clone > 0) {
     thrust::device_vector<int> clone_write_ids(d_clone_mask.size());
     thrust::exclusive_scan(d_clone_mask.begin(), d_clone_mask.end(), clone_write_ids.begin());
-    clone_gaussians(num_gaussians, num_sh_coeffs);
+    clone_gaussians(
+        num_gaussians, num_sh_coeffs, thrust::raw_pointer_cast(d_clone_mask.data()),
+        thrust::raw_pointer_cast(clone_write_ids.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz.data()),
+        thrust::raw_pointer_cast(cuda.accumulators.d_grad_accum_dur.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_xyz.data()), thrust::raw_pointer_cast(cuda.gaussians.d_rgb.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_opacity.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_scale.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_quaternion.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_sh.data()), thrust::raw_pointer_cast(d_new_clone_xyz.data()),
+        thrust::raw_pointer_cast(d_new_clone_rgb.data()), thrust::raw_pointer_cast(d_new_clone_opacity.data()),
+        thrust::raw_pointer_cast(d_new_clone_scale.data()), thrust::raw_pointer_cast(d_new_clone_quat.data()),
+        thrust::raw_pointer_cast(d_new_clone_sh.data()));
   }
 
   if (num_to_split > 0) {
-    thrust::device_vector<int> split_write_ids(d_clone_mask.size());
+    thrust::device_vector<int> split_write_ids(d_split_mask.size());
     thrust::exclusive_scan(d_split_mask.begin(), d_split_mask.end(), split_write_ids.begin());
-    split_gaussians(num_gaussians, config.split_scale_factor, num_sh_coeffs);
+    split_gaussians(
+        num_gaussians, config.split_scale_factor, num_sh_coeffs, thrust::raw_pointer_cast(d_split_mask.data()),
+        thrust::raw_pointer_cast(split_write_ids.data()), thrust::raw_pointer_cast(cuda.gaussians.d_xyz.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_rgb.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_opacity.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_scale.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_quaternion.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_sh.data()), thrust::raw_pointer_cast(d_new_clone_xyz.data()),
+        thrust::raw_pointer_cast(d_new_clone_rgb.data()), thrust::raw_pointer_cast(d_new_clone_opacity.data()),
+        thrust::raw_pointer_cast(d_new_clone_scale.data()), thrust::raw_pointer_cast(d_new_clone_quat.data()),
+        thrust::raw_pointer_cast(d_new_clone_sh.data()));
   }
 
   // --- 7. Get mask of all gaussians to remove ---
