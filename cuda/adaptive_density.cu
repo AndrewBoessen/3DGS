@@ -35,8 +35,12 @@ void __global__ clone_gaussians_kernel(const int N, const int num_sh_coef, const
 
     // move cloned in xyz grad direction
     const int accum_count = accum_dur[i];
-    const float3 xyz_grad_accum = {xyz_grad[i * 3 + 0] / accum_count, xyz_grad[i * 3 + 1] / accum_count,
-                                   xyz_grad[i * 3 + 2] / accum_count};
+
+    float3 xyz_grad_accum = {0.0f, 0.0f, 0.0f};
+    if (accum_count > 0) {
+      xyz_grad_accum = {xyz_grad[i * 3 + 0] / accum_count, xyz_grad[i * 3 + 1] / accum_count,
+                        xyz_grad[i * 3 + 2] / accum_count};
+    }
 
     const float3 xyz_new = {xyz.x - xyz_grad_accum.x * 0.01f, xyz.y - xyz_grad_accum.y * 0.01f,
                             xyz.z - xyz_grad_accum.z * 0.01f};
@@ -74,7 +78,7 @@ void __global__ clone_gaussians_kernel(const int N, const int num_sh_coef, const
 #pragma unroll
           for (int l = 0; l < 3; l++) {
             const int sh_write_id = ((write_base + j) * num_sh_coef * 3) + (k * 3) + l;
-            const int sh_read_id = ((i + j) * num_sh_coef * 3) + (k * 3) + l;
+            const int sh_read_id = (i * num_sh_coef * 3) + (k * 3) + l;
             sh_out[sh_write_id] = sh_in[sh_read_id];
           }
         }
@@ -173,7 +177,7 @@ void __global__ split_gaussians_kernel(const int N, const float scale_factor, co
 #pragma unroll
           for (int l = 0; l < 3; l++) {
             const int sh_write_id = ((write_base + j) * num_sh_coef * 3) + (k * 3) + l;
-            const int sh_read_id = ((i + j) * num_sh_coef * 3) + (k * 3) + l;
+            const int sh_read_id = (i * num_sh_coef * 3) + (k * 3) + l;
             sh_out[sh_write_id] = sh_in[sh_read_id];
           }
         }

@@ -313,8 +313,8 @@ void TrainerImpl::adaptive_density_step() {
   int num_to_split = thrust::count(d_split_mask.begin(), d_split_mask.end(), true);
 
   // --- 5. Check Capacity ---
-  int num_to_remove = num_to_prune + num_to_split;
-  int num_to_add = num_to_clone + num_to_split * 2;
+  int num_to_remove = num_to_prune + num_to_split + num_to_clone;
+  int num_to_add = (num_to_clone * 2) + (num_to_split * 2);
   int new_num_gaussians = num_gaussians - num_to_remove + num_to_add;
 
   if (new_num_gaussians > config.max_gaussians) {
@@ -355,7 +355,8 @@ void TrainerImpl::adaptive_density_step() {
     thrust::exclusive_scan(d_clone_mask.begin(), d_clone_mask.end(), clone_write_ids.begin());
     clone_gaussians(
         num_gaussians, num_sh_coeffs, thrust::raw_pointer_cast(d_clone_mask.data()),
-        thrust::raw_pointer_cast(clone_write_ids.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz.data()),
+        thrust::raw_pointer_cast(clone_write_ids.data()),
+        thrust::raw_pointer_cast(cuda.accumulators.d_xyz_grad_accum.data()),
         thrust::raw_pointer_cast(cuda.accumulators.d_grad_accum_dur.data()),
         thrust::raw_pointer_cast(cuda.gaussians.d_xyz.data()), thrust::raw_pointer_cast(cuda.gaussians.d_rgb.data()),
         thrust::raw_pointer_cast(cuda.gaussians.d_opacity.data()),
@@ -377,10 +378,10 @@ void TrainerImpl::adaptive_density_step() {
         thrust::raw_pointer_cast(cuda.gaussians.d_opacity.data()),
         thrust::raw_pointer_cast(cuda.gaussians.d_scale.data()),
         thrust::raw_pointer_cast(cuda.gaussians.d_quaternion.data()),
-        thrust::raw_pointer_cast(cuda.gaussians.d_sh.data()), thrust::raw_pointer_cast(d_new_clone_xyz.data()),
-        thrust::raw_pointer_cast(d_new_clone_rgb.data()), thrust::raw_pointer_cast(d_new_clone_opacity.data()),
-        thrust::raw_pointer_cast(d_new_clone_scale.data()), thrust::raw_pointer_cast(d_new_clone_quat.data()),
-        thrust::raw_pointer_cast(d_new_clone_sh.data()));
+        thrust::raw_pointer_cast(cuda.gaussians.d_sh.data()), thrust::raw_pointer_cast(d_new_split_xyz.data()),
+        thrust::raw_pointer_cast(d_new_split_rgb.data()), thrust::raw_pointer_cast(d_new_split_opacity.data()),
+        thrust::raw_pointer_cast(d_new_split_scale.data()), thrust::raw_pointer_cast(d_new_split_quat.data()),
+        thrust::raw_pointer_cast(d_new_split_sh.data()));
   }
 
   // --- 7. Get mask of all gaussians to remove ---
@@ -417,6 +418,8 @@ void TrainerImpl::adaptive_density_step() {
   auto keep_op_v = compact_masked_array<1>(cuda.optimizer.v_grad_opacity, d_keep_mask, keep_size);
   auto keep_scale_v = compact_masked_array<3>(cuda.optimizer.v_grad_scale, d_keep_mask, keep_size);
   auto keep_quat_v = compact_masked_array<4>(cuda.optimizer.v_grad_quaternion, d_keep_mask, keep_size);
+
+  auto keep_training_steps = compact_masked_array<1>(cuda.optimizer.d_training_steps, d_keep_mask, keep_size);
 
   // Select SH params and optimizer states
   thrust::device_vector<float> keep_sh;
@@ -459,6 +462,9 @@ void TrainerImpl::adaptive_density_step() {
   thrust::fill(cuda.optimizer.v_grad_quaternion.begin(), cuda.optimizer.v_grad_quaternion.end(), 0.0f);
   thrust::fill(cuda.optimizer.v_grad_sh.begin(), cuda.optimizer.v_grad_sh.end(), 0.0f);
 
+  // Set step values
+  thrust::fill(cuda.optimizer.d_training_steps.begin() + keep_size, cuda.optimizer.d_training_steps.end(), 1);
+
   // Fill with kept Gaussians
   thrust::copy(keep_xyz.begin(), keep_xyz.end(), cuda.gaussians.d_xyz.begin());
   thrust::copy(keep_rgb.begin(), keep_rgb.end(), cuda.gaussians.d_rgb.begin());
@@ -477,6 +483,8 @@ void TrainerImpl::adaptive_density_step() {
   thrust::copy(keep_op_v.begin(), keep_op_v.end(), cuda.optimizer.v_grad_opacity.begin());
   thrust::copy(keep_scale_v.begin(), keep_scale_v.end(), cuda.optimizer.v_grad_scale.begin());
   thrust::copy(keep_quat_v.begin(), keep_quat_v.end(), cuda.optimizer.v_grad_quaternion.begin());
+
+  thrust::copy(keep_training_steps.begin(), keep_training_steps.end(), cuda.optimizer.d_training_steps.begin());
 
   if (l_max > 0) {
     thrust::copy(keep_sh.begin(), keep_sh.end(), cuda.gaussians.d_sh.begin());
@@ -503,12 +511,14 @@ void TrainerImpl::adaptive_density_step() {
                cuda.gaussians.d_quaternion.begin() + (keep_size + num_to_clone * 2) * 4);
 
   if (l_max > 0) {
-    thrust::copy(d_new_clone_sh.begin(), d_new_clone_sh.end(), cuda.gaussians.d_sh.begin() + keep_size * num_sh_coeffs);
+    thrust::copy(d_new_clone_sh.begin(), d_new_clone_sh.end(),
+                 cuda.gaussians.d_sh.begin() + keep_size * num_sh_coeffs * 3);
     thrust::copy(d_new_split_sh.begin(), d_new_split_sh.end(),
-                 cuda.gaussians.d_sh.begin() + (keep_size + num_to_clone * 2) * num_sh_coeffs);
+                 cuda.gaussians.d_sh.begin() + (keep_size + num_to_clone * 2) * num_sh_coeffs * 3);
   }
 
   // --- 11. Update total Gaussian count ---
+  num_gaussians = keep_size + (num_to_clone + num_to_split) * 2;
 
   if (num_gaussians != new_num_gaussians) {
     std::cerr << "FATAL ERROR: Gaussian count mismatch in adaptive density!" << std::endl;
