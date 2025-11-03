@@ -351,7 +351,7 @@ void TrainerImpl::adaptive_density_step() {
   thrust::device_vector<float> d_new_split_sh(num_to_split * 2 * num_sh_coeffs * 3);
 
   if (num_to_clone > 0) {
-    thrust::device_vector<int> clone_write_ids(d_clone_mask.size());
+    thrust::device_vector<int> clone_write_ids(num_gaussians);
     thrust::exclusive_scan(d_clone_mask.begin(), d_clone_mask.end(), clone_write_ids.begin());
     clone_gaussians(
         num_gaussians, num_sh_coeffs, thrust::raw_pointer_cast(d_clone_mask.data()),
@@ -369,7 +369,7 @@ void TrainerImpl::adaptive_density_step() {
   }
 
   if (num_to_split > 0) {
-    thrust::device_vector<int> split_write_ids(d_split_mask.size());
+    thrust::device_vector<int> split_write_ids(num_gaussians);
     thrust::exclusive_scan(d_split_mask.begin(), d_split_mask.end(), split_write_ids.begin());
     split_gaussians(
         num_gaussians, config.split_scale_factor, num_sh_coeffs, thrust::raw_pointer_cast(d_split_mask.data()),
