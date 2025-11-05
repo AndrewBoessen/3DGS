@@ -1,8 +1,10 @@
+// raster.cuh
+
 #pragma once
 
 #include "dataloader/colmap.hpp"
-#include "gsplat/cuda_data.hpp"
 #include "gsplat/utils.hpp"
+#include "gsplat_cuda/cuda_data.cuh"
 
 /**
  * @brief Rasterizes an image from a set of Gaussians using pre-allocated CUDA buffers.
@@ -17,4 +19,5 @@
  * @param[in]     l_max          The maximum band of SH coefficients
  */
 void rasterize_image(const int num_gaussians, const Camera &camera, const ConfigParameters &config,
-                     CudaDataManager &cuda, ForwardPassData &pass_data, const float bg_color, const int l_max);
+                     CameraParameters &camera_parameters, GaussianParameters &gaussians, ForwardPassData &pass_data,
+                     const float bg_color, const int l_max);

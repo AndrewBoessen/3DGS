@@ -1,6 +1,17 @@
-#include "gsplat/optimizer.hpp" // The header for the code we are testing
+#include "gsplat_cuda/optimizer.cuh" // The header for the code we are testing
 #include <cmath>
 #include <gtest/gtest.h> // Google Test framework
+
+// Macro for checking CUDA API calls for errors.
+#define CUDA_CHECK(err)                                                                                                \
+  do {                                                                                                                 \
+    cudaError_t err_ = (err);                                                                                          \
+    if (err_ != cudaSuccess) {                                                                                         \
+      fprintf(stderr, "CUDA error at %s:%d, error code: %d (%s)\n", __FILE__, __LINE__, err_,                          \
+              cudaGetErrorString(err_));                                                                               \
+      FAIL();                                                                                                          \
+    }                                                                                                                  \
+  } while (0)
 
 // A test fixture class for the Adam optimizer tests.
 // This class handles the setup and teardown of memory for each test.
@@ -24,6 +35,7 @@ protected:
     h_output_params = new float[N];
     h_output_exp_avg = new float[N];
     h_output_exp_avg_sq = new float[N];
+    h_steps = new int[N];
 
     // Initialize host data with some sample values
     for (int i = 0; i < N; ++i) {
@@ -31,19 +43,22 @@ protected:
       h_param_grads[i] = 0.1f * (i + 1);
       h_exp_avg[i] = 0.0f;
       h_exp_avg_sq[i] = 0.0f;
+      h_steps[i] = 1;
     }
 
     // Allocate device memory
-    CHECK_CUDA(cudaMalloc(&d_params, N * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_param_grads, N * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_exp_avg, N * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&d_exp_avg_sq, N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_params, N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_param_grads, N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_exp_avg, N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_exp_avg_sq, N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_steps, N * sizeof(int)));
 
     // Copy initial data from host to device
-    CHECK_CUDA(cudaMemcpy(d_params, h_params, N * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_param_grads, h_param_grads, N * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_exp_avg, h_exp_avg, N * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_exp_avg_sq, h_exp_avg_sq, N * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_params, h_params, N * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_param_grads, h_param_grads, N * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_exp_avg, h_exp_avg, N * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_exp_avg_sq, h_exp_avg_sq, N * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_steps, h_steps, N * sizeof(int), cudaMemcpyHostToDevice));
   }
 
   // This function is called after each test is run.
@@ -53,8 +68,10 @@ protected:
     cudaFree(d_param_grads);
     cudaFree(d_exp_avg);
     cudaFree(d_exp_avg_sq);
+    cudaFree(d_steps);
 
     // Free host memory
+    delete[] h_steps;
     delete[] h_params;
     delete[] h_param_grads;
     delete[] h_exp_avg;
@@ -80,27 +97,29 @@ protected:
   float *h_output_params;
   float *h_output_exp_avg;
   float *h_output_exp_avg_sq;
+  int *h_steps;
 
   // Device pointers
   float *d_params;
   float *d_param_grads;
   float *d_exp_avg;
   float *d_exp_avg_sq;
+  int *d_steps;
 };
 
 // Test case to verify the correctness of the Adam optimizer kernel.
 // It compares the GPU result with a CPU-based implementation.
 TEST_F(AdamOptimizerTest, Correctness) {
   // 1. Execute the adam_step CUDA kernel on the device
-  adam_step(d_params, d_param_grads, d_exp_avg, d_exp_avg_sq, lr, b1, b2, eps, 1.0f - b1, 1.0f - b2, N);
+  adam_step(d_params, d_param_grads, d_exp_avg, d_exp_avg_sq, lr, d_steps, b1, b2, eps, N, 1);
 
   // Ensure the kernel has finished execution before proceeding
-  CHECK_CUDA(cudaDeviceSynchronize());
+  CUDA_CHECK(cudaDeviceSynchronize());
 
   // 2. Copy the results from device memory back to host memory
-  CHECK_CUDA(cudaMemcpy(h_output_params, d_params, N * sizeof(float), cudaMemcpyDeviceToHost));
-  CHECK_CUDA(cudaMemcpy(h_output_exp_avg, d_exp_avg, N * sizeof(float), cudaMemcpyDeviceToHost));
-  CHECK_CUDA(cudaMemcpy(h_output_exp_avg_sq, d_exp_avg_sq, N * sizeof(float), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_output_params, d_params, N * sizeof(float), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_output_exp_avg, d_exp_avg, N * sizeof(float), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_output_exp_avg_sq, d_exp_avg_sq, N * sizeof(float), cudaMemcpyDeviceToHost));
 
   // 3. Calculate the expected results on the CPU
   for (int i = 0; i < N; ++i) {

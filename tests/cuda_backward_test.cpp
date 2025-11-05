@@ -4,7 +4,7 @@
 #include <iostream>
 #include <vector>
 
-#include "gsplat/cuda_backward.hpp"
+#include "gsplat_cuda/cuda_backward.cuh"
 
 // Macro for checking CUDA API calls for errors.
 #define CUDA_CHECK(err)                                                                                                \

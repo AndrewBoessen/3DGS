@@ -72,15 +72,11 @@ ConfigParameters parseConfig(const std::string &filename) {
     params.adaptive_control_end = getNodeValue<int>(config, "adaptive_control_end");
     params.adaptive_control_interval = getNodeValue<int>(config, "adaptive_control_interval");
     params.max_gaussians = getNodeValue<int>(config, "max_gaussians");
+    params.max_scale = getNodeValue<float>(config, "max_scale");
     params.delete_opacity_threshold = getNodeValue<float>(config, "delete_opacity_threshold");
     params.clone_scale_threshold = getNodeValue<float>(config, "clone_scale_threshold");
-    params.use_fractional_densification = getNodeValue<bool>(config, "use_fractional_densification");
-    params.use_adaptive_fractional_densification = getNodeValue<bool>(config, "use_adaptive_fractional_densification");
-    params.uv_grad_percentile = getNodeValue<float>(config, "uv_grad_percentile");
-    params.scale_norm_percentile = getNodeValue<float>(config, "scale_norm_percentile");
     params.uv_grad_threshold = getNodeValue<float>(config, "uv_grad_threshold");
     params.split_scale_factor = getNodeValue<float>(config, "split_scale_factor");
-    params.num_split_samples = getNodeValue<int>(config, "num_split_samples");
 
   } catch (const YAML::Exception &e) {
     // Re-throw as a standard exception for the caller to handle.

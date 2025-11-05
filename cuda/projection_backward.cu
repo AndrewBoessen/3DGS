@@ -1,7 +1,7 @@
 // projection_backward.cu
 
 #include "checks.cuh"
-#include "gsplat/cuda_backward.hpp"
+#include "gsplat_cuda/cuda_backward.cuh"
 
 __global__ void cam_intr_proj_backward_kernel(const float *__restrict__ xyz_c, const float *__restrict__ K,
                                               const float *__restrict__ uv_grad_out, const int N,

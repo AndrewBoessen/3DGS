@@ -1,0 +1,897 @@
+// trainer.cu
+
+#include "gsplat/trainer.hpp"
+
+#include "gsplat_cuda/adaptive_density.cuh"
+#include "gsplat_cuda/cuda_backward.cuh"
+#include "gsplat_cuda/cuda_data.cuh"
+#include "gsplat_cuda/cuda_forward.cuh"
+#include "gsplat_cuda/optimizer.cuh"
+#include "gsplat_cuda/raster.cuh"
+#include "thrust/detail/raw_pointer_cast.h"
+#include "thrust/iterator/zip_iterator.h"
+
+#include <Eigen/Dense>
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <iostream>
+#include <opencv2/opencv.hpp>
+#include <random>
+#include <stdexcept>
+#include <thrust/count.h>
+#include <thrust/device_vector.h>
+#include <thrust/functional.h>
+#include <thrust/host_vector.h>
+#include <thrust/scan.h>
+#include <thrust/transform.h>
+
+/**
+ * @brief Private implementation (PImpl) for the Trainer class.
+ *
+ * This class holds all the state and CUDA-specific data and logic.
+ */
+class TrainerImpl {
+public:
+  // --- Constructor ---
+  TrainerImpl(ConfigParameters config_in, Gaussians gaussians_in, std::unordered_map<int, Image> images_in,
+              std::unordered_map<int, Camera> cameras_in)
+      : config(std::move(config_in)), gaussians(std::move(gaussians_in)), images(std::move(images_in)),
+        cameras(std::move(cameras_in)), iter(0), l_max(0), num_gaussians(gaussians.size()),
+        cuda(config.max_gaussians) // Initialize the CUDA data manager
+  {}
+
+  // --- Public methods (called by Trainer) ---
+  void test_train_split();
+  void train();
+
+private:
+  // --- All original private members ---
+  ConfigParameters config;
+  Gaussians gaussians;
+  std::unordered_map<int, Image> images;
+  std::unordered_map<int, Camera> cameras;
+
+  std::vector<Image> test_images;
+  std::vector<Image> train_images;
+
+  int iter;
+  int l_max;
+  int num_gaussians;
+
+  // --- CUDA-specific data ---
+  CudaDataManager cuda;
+
+  void reset_grad_accum();
+  void reset_opacity();
+  float backward_pass(const Image &curr_image, const Camera &curr_camera, ForwardPassData &pass_data,
+                      const float bg_color);
+  void optimizer_step(ForwardPassData pass_data, const Camera &curr_camera);
+  void add_sh_band();
+  void adaptive_density_step();
+};
+
+// --- Implementation of TrainerImpl methods ---
+
+void TrainerImpl::test_train_split() {
+  const int split = config.test_split_ratio;
+
+  test_images.clear();
+  train_images.clear();
+
+  if (images.empty()) {
+    return;
+  }
+
+  std::vector<Image> all_images;
+  all_images.reserve(images.size());
+  for (const auto &pair : images) {
+    all_images.push_back(pair.second);
+  }
+
+  std::sort(all_images.begin(), all_images.end(), [](const Image &a, const Image &b) { return a.name < b.name; });
+
+  if (split <= 0) {
+    train_images = all_images;
+  } else {
+    for (size_t i = 0; i < all_images.size(); ++i) {
+      if (i % split == 0) {
+        test_images.push_back(all_images[i]);
+      } else {
+        train_images.push_back(all_images[i]);
+      }
+    }
+  }
+}
+
+void TrainerImpl::reset_grad_accum() {
+  thrust::fill_n(cuda.accumulators.d_uv_grad_accum.begin(), num_gaussians, 0.0f);
+  thrust::fill_n(cuda.accumulators.d_xyz_grad_accum.begin(), num_gaussians * 3, 0.0f);
+  thrust::fill_n(cuda.accumulators.d_grad_accum_dur.begin(), num_gaussians, 0);
+}
+
+void TrainerImpl::reset_opacity() {
+  const double opc = config.reset_opacity_value;
+  const float new_opc = log(opc) - log(1.0f - opc);
+
+  thrust::fill_n(cuda.gaussians.d_opacity.begin(), num_gaussians, new_opc);
+}
+
+struct SHIndexMapper {
+  const int old_coeffs_per_gaussian;
+  const int new_coeffs_per_gaussian;
+
+  SHIndexMapper(int old_coeffs, int new_coeffs)
+      : old_coeffs_per_gaussian(old_coeffs), new_coeffs_per_gaussian(new_coeffs) {}
+
+  __host__ __device__ int operator()(int src_idx) const {
+    int gaussian_idx = src_idx / old_coeffs_per_gaussian;
+    int coeff_idx_in_gaussian = src_idx % old_coeffs_per_gaussian;
+    return gaussian_idx * new_coeffs_per_gaussian + coeff_idx_in_gaussian;
+  }
+};
+
+void TrainerImpl::add_sh_band() {
+  if (l_max >= config.max_sh_band)
+    return;
+
+  if (l_max == 0) {
+    thrust::fill(cuda.gaussians.d_sh.begin(), cuda.gaussians.d_sh.end(), 0.0f);
+    l_max++;
+    return;
+  }
+  const int curr_param_count = (l_max + 1) * (l_max + 1) - 1;
+  const int new_param_count = (l_max + 2) * (l_max + 2) - 1;
+
+  const int old_coeffs_per_gaussian = curr_param_count * 3;
+  const int new_coeffs_per_gaussian = new_param_count * 3;
+
+  try {
+    thrust::device_vector<float> temp_sh(num_gaussians * old_coeffs_per_gaussian);
+    thrust::copy_n(cuda.gaussians.d_sh.begin(), temp_sh.size(), temp_sh.begin());
+
+    thrust::device_vector<int> destination_map(temp_sh.size());
+
+    SHIndexMapper mapper(old_coeffs_per_gaussian, new_coeffs_per_gaussian);
+
+    thrust::transform(thrust::counting_iterator<int>(0), thrust::counting_iterator<int>(temp_sh.size()),
+                      destination_map.begin(), mapper);
+
+    thrust::fill(cuda.gaussians.d_sh.begin(), cuda.gaussians.d_sh.end(), 0.0f);
+
+    thrust::scatter(temp_sh.begin(), temp_sh.end(), destination_map.begin(), cuda.gaussians.d_sh.begin());
+
+  } catch (const std::exception &e) {
+    fprintf(stderr, "Error during SH band expansion: %s\n", e.what());
+    exit(EXIT_FAILURE);
+  }
+
+  l_max++;
+}
+
+// Computes the L2 norm of the average 2D gradient.
+struct ComputeAvgGrad {
+  __host__ __device__ float operator()(const thrust::tuple<float, int> &t) const {
+    float grad_sum = thrust::get<0>(t);
+    int duration = thrust::get<1>(t);
+
+    if (duration == 0)
+      return 0.0f;
+    return grad_sum / (float)duration;
+  }
+};
+
+// Get max of scale parameters
+struct ComputeScaleMax {
+  __host__ __device__ float operator()(const thrust::tuple<float, float, float> &t) const {
+    float s1 = thrust::get<0>(t);
+    float s2 = thrust::get<1>(t);
+    float s3 = thrust::get<2>(t);
+
+    return fmaxf(expf(s1), fmaxf(expf(s2), expf(s3)));
+  }
+};
+
+// Identifies Gaussians to be pruned based on low opacity or large scale.
+struct IdentifyPrune {
+  const float op_threshold;
+  const float scale_max;
+
+  IdentifyPrune(float ot, float sm) : op_threshold(ot), scale_max(sm) {}
+
+  __host__ __device__ bool operator()(const thrust::tuple<float, float> &t) const {
+    float opacity_logit = thrust::get<0>(t);
+    float scale = thrust::get<1>(t);
+
+    // Prune if opacity is too low
+    if (opacity_logit < op_threshold)
+      return true;
+
+    // Prune if scale is too large
+    if (scale > scale_max)
+      return true;
+
+    return false;
+  }
+};
+
+// Identifies Gaussians to be cloned based on high gradient.
+struct IdentifyClone {
+  const float grad_threshold;
+  const float scale_threshold;
+  IdentifyClone(float gt, float st) : grad_threshold(gt), scale_threshold(st) {}
+
+  __host__ __device__ bool operator()(const thrust::tuple<float, float, bool> &t) const {
+    float avg_grad = thrust::get<0>(t);
+    float scale = thrust::get<1>(t);
+    bool is_pruned = thrust::get<2>(t);
+
+    if (is_pruned)
+      return false;
+    return avg_grad > grad_threshold && scale <= scale_threshold;
+  }
+};
+
+// Identifies Gaussians to be split based on high gradient.
+struct IdentifySplit {
+  const float grad_threshold;
+  const float scale_threshold;
+  IdentifySplit(float gt, float st) : grad_threshold(gt), scale_threshold(st) {}
+
+  __host__ __device__ bool operator()(const thrust::tuple<float, float, bool> &t) const {
+    float avg_grad = thrust::get<0>(t);
+    float scale = thrust::get<1>(t);
+    bool is_pruned = thrust::get<2>(t);
+
+    if (is_pruned)
+      return false;
+    return avg_grad > grad_threshold && scale > scale_threshold;
+  }
+};
+
+// Combines prune and split masks into a single keep mask.
+struct CombineMasks {
+  __host__ __device__ bool operator()(const thrust::tuple<bool, bool, bool> &t) const {
+    return !(thrust::get<0>(t) || // is_pruned
+             thrust::get<1>(t) || // is_split
+             thrust::get<2>(t));  // is_clone
+  }
+};
+
+struct BoolToInt {
+  __host__ __device__ int operator()(bool x) { return x ? 1 : 0; }
+};
+
+void TrainerImpl::adaptive_density_step() {
+  // --- 1. Calculate Average Gradient Norms and Scale Max---
+  thrust::device_vector<float> d_avg_uv_grad_norm(num_gaussians);
+
+  thrust::transform(
+      thrust::make_zip_iterator(
+          thrust::make_tuple(cuda.accumulators.d_uv_grad_accum.begin(), cuda.accumulators.d_grad_accum_dur.begin())),
+      thrust::make_zip_iterator(thrust::make_tuple(cuda.accumulators.d_uv_grad_accum.begin() + num_gaussians,
+                                                   cuda.accumulators.d_grad_accum_dur.begin() + num_gaussians)),
+      d_avg_uv_grad_norm.begin(), ComputeAvgGrad());
+
+  thrust::device_vector<float> d_scale_max(num_gaussians);
+
+  auto s1_it = thrust::make_strided_iterator(cuda.gaussians.d_scale.begin(), 3);
+  auto s2_it = thrust::make_strided_iterator(cuda.gaussians.d_scale.begin() + 1, 3);
+  auto s3_it = thrust::make_strided_iterator(cuda.gaussians.d_scale.begin() + 2, 3);
+
+  auto scale_iter_start = thrust::make_zip_iterator(thrust::make_tuple(s1_it, s2_it, s3_it));
+  auto scale_iter_end = scale_iter_start + num_gaussians;
+
+  thrust::transform(scale_iter_start, scale_iter_end, d_scale_max.begin(), ComputeScaleMax());
+
+  // --- 2. Identify Gaussians to Prune ---
+  // Inverse sigmoid: log(p / (1-p))
+  const float op_threshold = logf(config.delete_opacity_threshold) - logf(1.0f - config.delete_opacity_threshold);
+
+  auto prune_iter_start =
+      thrust::make_zip_iterator(thrust::make_tuple(cuda.gaussians.d_opacity.begin(), d_scale_max.begin()));
+  auto prune_iter_end = prune_iter_start + num_gaussians;
+
+  thrust::device_vector<bool> d_prune_mask(num_gaussians);
+  thrust::transform(prune_iter_start, prune_iter_end, d_prune_mask.begin(),
+                    IdentifyPrune(op_threshold, config.max_scale));
+
+  int num_to_prune = thrust::count(d_prune_mask.begin(), d_prune_mask.end(), true);
+
+  // --- 3. Identify Gaussians to Clone ---
+  auto densify_iter_start = thrust::make_zip_iterator(
+      thrust::make_tuple(d_avg_uv_grad_norm.begin(), d_scale_max.begin(), d_prune_mask.begin()));
+  auto densify_iter_end = densify_iter_start + num_gaussians;
+
+  thrust::device_vector<bool> d_clone_mask(num_gaussians);
+  thrust::transform(densify_iter_start, densify_iter_end, d_clone_mask.begin(),
+                    IdentifyClone(config.uv_grad_threshold, config.clone_scale_threshold));
+
+  int num_to_clone = thrust::count(d_clone_mask.begin(), d_clone_mask.end(), true);
+
+  // --- 4. Identify Gaussians to Split ---
+  thrust::device_vector<bool> d_split_mask(num_gaussians);
+  thrust::transform(densify_iter_start, densify_iter_end, d_split_mask.begin(),
+                    IdentifySplit(config.uv_grad_threshold, config.clone_scale_threshold));
+
+  int num_to_split = thrust::count(d_split_mask.begin(), d_split_mask.end(), true);
+
+  // --- 5. Check Capacity ---
+  int num_to_remove = num_to_prune + num_to_split + num_to_clone;
+  int num_to_add = (num_to_clone * 2) + (num_to_split * 2);
+  int new_num_gaussians = num_gaussians - num_to_remove + num_to_add;
+
+  if (new_num_gaussians > config.max_gaussians) {
+    std::cerr << "WARNING: Adaptive density step would exceed max_gaussians (" << new_num_gaussians << " > "
+              << config.max_gaussians << "). Skipping." << std::endl;
+    // TODO: A more robust strategy would be to prune anyway, and then fill
+    // remaining capacity with the highest-gradient clones/splits.
+    return;
+  }
+
+  if (num_to_add == 0 && num_to_prune == 0) {
+    return; // Nothing to do
+  }
+
+  std::cout << "ADAPTIVE DENSITY: Pruning " << num_to_prune << ", Cloning " << num_to_clone << ", Splitting "
+            << num_to_split << ". (Net change: " << (new_num_gaussians - num_gaussians) << ")" << std::endl;
+
+  // --- 6. Generate New Gaussian Parameters (Kernels) ---
+  const int num_sh_coeffs = (l_max > 0) ? ((l_max + 1) * (l_max + 1) - 1) : 0;
+
+  // Allocate temp device memory for new Gaussians
+  thrust::device_vector<float> d_new_clone_xyz(num_to_clone * 2 * 3);
+  thrust::device_vector<float> d_new_clone_rgb(num_to_clone * 2 * 3);
+  thrust::device_vector<float> d_new_clone_opacity(num_to_clone * 2 * 1);
+  thrust::device_vector<float> d_new_clone_scale(num_to_clone * 2 * 3);
+  thrust::device_vector<float> d_new_clone_quat(num_to_clone * 2 * 4);
+  thrust::device_vector<float> d_new_clone_sh(num_to_clone * 2 * num_sh_coeffs * 3);
+
+  thrust::device_vector<float> d_new_split_xyz(num_to_split * 2 * 3);
+  thrust::device_vector<float> d_new_split_rgb(num_to_split * 2 * 3);
+  thrust::device_vector<float> d_new_split_opacity(num_to_split * 2 * 1);
+  thrust::device_vector<float> d_new_split_scale(num_to_split * 2 * 3);
+  thrust::device_vector<float> d_new_split_quat(num_to_split * 2 * 4);
+  thrust::device_vector<float> d_new_split_sh(num_to_split * 2 * num_sh_coeffs * 3);
+
+  if (num_to_clone > 0) {
+    thrust::device_vector<int> clone_write_ids(num_gaussians);
+    auto clone_int_mask_start = thrust::make_transform_iterator(d_clone_mask.begin(), BoolToInt());
+    auto clone_int_mask_end = thrust::make_transform_iterator(d_clone_mask.end(), BoolToInt());
+    thrust::exclusive_scan(clone_int_mask_start, clone_int_mask_end, clone_write_ids.begin());
+    clone_gaussians(
+        num_gaussians, num_sh_coeffs, thrust::raw_pointer_cast(d_clone_mask.data()),
+        thrust::raw_pointer_cast(clone_write_ids.data()),
+        thrust::raw_pointer_cast(cuda.accumulators.d_xyz_grad_accum.data()),
+        thrust::raw_pointer_cast(cuda.accumulators.d_grad_accum_dur.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_xyz.data()), thrust::raw_pointer_cast(cuda.gaussians.d_rgb.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_opacity.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_scale.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_quaternion.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_sh.data()), thrust::raw_pointer_cast(d_new_clone_xyz.data()),
+        thrust::raw_pointer_cast(d_new_clone_rgb.data()), thrust::raw_pointer_cast(d_new_clone_opacity.data()),
+        thrust::raw_pointer_cast(d_new_clone_scale.data()), thrust::raw_pointer_cast(d_new_clone_quat.data()),
+        thrust::raw_pointer_cast(d_new_clone_sh.data()));
+  }
+
+  if (num_to_split > 0) {
+    thrust::device_vector<int> split_write_ids(num_gaussians);
+    auto split_int_mask_start = thrust::make_transform_iterator(d_split_mask.begin(), BoolToInt());
+    auto split_int_mask_end = thrust::make_transform_iterator(d_split_mask.end(), BoolToInt());
+    thrust::exclusive_scan(split_int_mask_start, split_int_mask_end, split_write_ids.begin());
+    split_gaussians(
+        num_gaussians, config.split_scale_factor, num_sh_coeffs, thrust::raw_pointer_cast(d_split_mask.data()),
+        thrust::raw_pointer_cast(split_write_ids.data()), thrust::raw_pointer_cast(cuda.gaussians.d_xyz.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_rgb.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_opacity.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_scale.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_quaternion.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_sh.data()), thrust::raw_pointer_cast(d_new_split_xyz.data()),
+        thrust::raw_pointer_cast(d_new_split_rgb.data()), thrust::raw_pointer_cast(d_new_split_opacity.data()),
+        thrust::raw_pointer_cast(d_new_split_scale.data()), thrust::raw_pointer_cast(d_new_split_quat.data()),
+        thrust::raw_pointer_cast(d_new_split_sh.data()));
+  }
+
+  // --- 7. Get mask of all gaussians to remove ---
+  thrust::device_vector<bool> d_remove_mask(num_gaussians);
+
+  // --- 8, 9, 10. Compact existing vectors and append new data ---
+  // - Compact all params in keep mask
+  // - Fill front with compact params
+  // - Append Clone and Split params to back
+  thrust::device_vector<bool> d_keep_mask(num_gaussians);
+  auto keep_mask_start =
+      thrust::make_zip_iterator(thrust::make_tuple(d_prune_mask.begin(), d_split_mask.begin(), d_clone_mask.begin()));
+  auto keep_mask_end = keep_mask_start + num_gaussians;
+  thrust::transform(keep_mask_start, keep_mask_end, d_keep_mask.begin(), CombineMasks());
+
+  const int keep_size = thrust::count(d_keep_mask.begin(), d_keep_mask.end(), true);
+
+  // Select keep params
+  auto keep_xyz = compact_masked_array<3>(cuda.gaussians.d_xyz, d_keep_mask, keep_size);
+  auto keep_rgb = compact_masked_array<3>(cuda.gaussians.d_rgb, d_keep_mask, keep_size);
+  auto keep_op = compact_masked_array<1>(cuda.gaussians.d_opacity, d_keep_mask, keep_size);
+  auto keep_scale = compact_masked_array<3>(cuda.gaussians.d_scale, d_keep_mask, keep_size);
+  auto keep_quat = compact_masked_array<4>(cuda.gaussians.d_quaternion, d_keep_mask, keep_size);
+
+  // Select keep optimizer states
+  auto keep_xyz_m = compact_masked_array<3>(cuda.optimizer.m_grad_xyz, d_keep_mask, keep_size);
+  auto keep_rgb_m = compact_masked_array<3>(cuda.optimizer.m_grad_rgb, d_keep_mask, keep_size);
+  auto keep_op_m = compact_masked_array<1>(cuda.optimizer.m_grad_opacity, d_keep_mask, keep_size);
+  auto keep_scale_m = compact_masked_array<3>(cuda.optimizer.m_grad_scale, d_keep_mask, keep_size);
+  auto keep_quat_m = compact_masked_array<4>(cuda.optimizer.m_grad_quaternion, d_keep_mask, keep_size);
+
+  auto keep_xyz_v = compact_masked_array<3>(cuda.optimizer.v_grad_xyz, d_keep_mask, keep_size);
+  auto keep_rgb_v = compact_masked_array<3>(cuda.optimizer.v_grad_rgb, d_keep_mask, keep_size);
+  auto keep_op_v = compact_masked_array<1>(cuda.optimizer.v_grad_opacity, d_keep_mask, keep_size);
+  auto keep_scale_v = compact_masked_array<3>(cuda.optimizer.v_grad_scale, d_keep_mask, keep_size);
+  auto keep_quat_v = compact_masked_array<4>(cuda.optimizer.v_grad_quaternion, d_keep_mask, keep_size);
+
+  auto keep_training_steps = compact_masked_array<1>(cuda.optimizer.d_training_steps, d_keep_mask, keep_size);
+
+  // Select SH params and optimizer states
+  thrust::device_vector<float> keep_sh;
+  thrust::device_vector<float> keep_sh_m;
+  thrust::device_vector<float> keep_sh_v;
+  switch (l_max) {
+  case 0:
+    break;
+  case 1:
+    keep_sh = compact_masked_array<9>(cuda.gaussians.d_sh, d_keep_mask, keep_size);
+    keep_sh_m = compact_masked_array<9>(cuda.optimizer.m_grad_sh, d_keep_mask, keep_size);
+    keep_sh_v = compact_masked_array<9>(cuda.optimizer.v_grad_sh, d_keep_mask, keep_size);
+    break;
+  case 2:
+    keep_sh = compact_masked_array<24>(cuda.gaussians.d_sh, d_keep_mask, keep_size);
+    keep_sh_m = compact_masked_array<24>(cuda.optimizer.m_grad_sh, d_keep_mask, keep_size);
+    keep_sh_v = compact_masked_array<24>(cuda.optimizer.v_grad_sh, d_keep_mask, keep_size);
+    break;
+  case 3:
+    keep_sh = compact_masked_array<45>(cuda.gaussians.d_sh, d_keep_mask, keep_size);
+    keep_sh_m = compact_masked_array<45>(cuda.optimizer.m_grad_sh, d_keep_mask, keep_size);
+    keep_sh_v = compact_masked_array<45>(cuda.optimizer.v_grad_sh, d_keep_mask, keep_size);
+    break;
+  default:
+    fprintf(stderr, "Error SH band is invalid\n");
+    exit(EXIT_FAILURE);
+  }
+  // Zero out all optimizer states
+  thrust::fill(cuda.optimizer.m_grad_xyz.begin(), cuda.optimizer.m_grad_xyz.end(), 0.0f);
+  thrust::fill(cuda.optimizer.m_grad_rgb.begin(), cuda.optimizer.m_grad_rgb.end(), 0.0f);
+  thrust::fill(cuda.optimizer.m_grad_opacity.begin(), cuda.optimizer.m_grad_opacity.end(), 0.0f);
+  thrust::fill(cuda.optimizer.m_grad_scale.begin(), cuda.optimizer.m_grad_scale.end(), 0.0f);
+  thrust::fill(cuda.optimizer.m_grad_quaternion.begin(), cuda.optimizer.m_grad_quaternion.end(), 0.0f);
+  thrust::fill(cuda.optimizer.m_grad_sh.begin(), cuda.optimizer.m_grad_sh.end(), 0.0f);
+
+  thrust::fill(cuda.optimizer.v_grad_xyz.begin(), cuda.optimizer.v_grad_xyz.end(), 0.0f);
+  thrust::fill(cuda.optimizer.v_grad_rgb.begin(), cuda.optimizer.v_grad_rgb.end(), 0.0f);
+  thrust::fill(cuda.optimizer.v_grad_opacity.begin(), cuda.optimizer.v_grad_opacity.end(), 0.0f);
+  thrust::fill(cuda.optimizer.v_grad_scale.begin(), cuda.optimizer.v_grad_scale.end(), 0.0f);
+  thrust::fill(cuda.optimizer.v_grad_quaternion.begin(), cuda.optimizer.v_grad_quaternion.end(), 0.0f);
+  thrust::fill(cuda.optimizer.v_grad_sh.begin(), cuda.optimizer.v_grad_sh.end(), 0.0f);
+
+  // Set step values
+  thrust::fill(cuda.optimizer.d_training_steps.begin() + keep_size, cuda.optimizer.d_training_steps.end(), 1);
+
+  // Fill with kept Gaussians
+  thrust::copy(keep_xyz.begin(), keep_xyz.end(), cuda.gaussians.d_xyz.begin());
+  thrust::copy(keep_rgb.begin(), keep_rgb.end(), cuda.gaussians.d_rgb.begin());
+  thrust::copy(keep_op.begin(), keep_op.end(), cuda.gaussians.d_opacity.begin());
+  thrust::copy(keep_scale.begin(), keep_scale.end(), cuda.gaussians.d_scale.begin());
+  thrust::copy(keep_quat.begin(), keep_quat.end(), cuda.gaussians.d_quaternion.begin());
+
+  thrust::copy(keep_xyz_m.begin(), keep_xyz_m.end(), cuda.optimizer.m_grad_xyz.begin());
+  thrust::copy(keep_rgb_m.begin(), keep_rgb_m.end(), cuda.optimizer.m_grad_rgb.begin());
+  thrust::copy(keep_op_m.begin(), keep_op_m.end(), cuda.optimizer.m_grad_opacity.begin());
+  thrust::copy(keep_scale_m.begin(), keep_scale_m.end(), cuda.optimizer.m_grad_scale.begin());
+  thrust::copy(keep_quat_m.begin(), keep_quat_m.end(), cuda.optimizer.m_grad_quaternion.begin());
+
+  thrust::copy(keep_xyz_v.begin(), keep_xyz_v.end(), cuda.optimizer.v_grad_xyz.begin());
+  thrust::copy(keep_rgb_v.begin(), keep_rgb_v.end(), cuda.optimizer.v_grad_rgb.begin());
+  thrust::copy(keep_op_v.begin(), keep_op_v.end(), cuda.optimizer.v_grad_opacity.begin());
+  thrust::copy(keep_scale_v.begin(), keep_scale_v.end(), cuda.optimizer.v_grad_scale.begin());
+  thrust::copy(keep_quat_v.begin(), keep_quat_v.end(), cuda.optimizer.v_grad_quaternion.begin());
+
+  thrust::copy(keep_training_steps.begin(), keep_training_steps.end(), cuda.optimizer.d_training_steps.begin());
+
+  if (l_max > 0) {
+    thrust::copy(keep_sh.begin(), keep_sh.end(), cuda.gaussians.d_sh.begin());
+    thrust::copy(keep_sh_m.begin(), keep_sh_m.end(), cuda.optimizer.m_grad_sh.begin());
+    thrust::copy(keep_sh_v.begin(), keep_sh_v.end(), cuda.optimizer.v_grad_sh.begin());
+  }
+
+  // Fill back with new cloned and split Gaussians
+  thrust::copy(d_new_clone_xyz.begin(), d_new_clone_xyz.end(), cuda.gaussians.d_xyz.begin() + keep_size * 3);
+  thrust::copy(d_new_clone_rgb.begin(), d_new_clone_rgb.end(), cuda.gaussians.d_rgb.begin() + keep_size * 3);
+  thrust::copy(d_new_clone_opacity.begin(), d_new_clone_opacity.end(), cuda.gaussians.d_opacity.begin() + keep_size);
+  thrust::copy(d_new_clone_scale.begin(), d_new_clone_scale.end(), cuda.gaussians.d_scale.begin() + keep_size * 3);
+  thrust::copy(d_new_clone_quat.begin(), d_new_clone_quat.end(), cuda.gaussians.d_quaternion.begin() + keep_size * 4);
+
+  thrust::copy(d_new_split_xyz.begin(), d_new_split_xyz.end(),
+               cuda.gaussians.d_xyz.begin() + (keep_size + num_to_clone * 2) * 3);
+  thrust::copy(d_new_split_rgb.begin(), d_new_split_rgb.end(),
+               cuda.gaussians.d_rgb.begin() + (keep_size + num_to_clone * 2) * 3);
+  thrust::copy(d_new_split_opacity.begin(), d_new_split_opacity.end(),
+               cuda.gaussians.d_opacity.begin() + (keep_size + num_to_clone * 2));
+  thrust::copy(d_new_split_scale.begin(), d_new_split_scale.end(),
+               cuda.gaussians.d_scale.begin() + (keep_size + num_to_clone * 2) * 3);
+  thrust::copy(d_new_split_quat.begin(), d_new_split_quat.end(),
+               cuda.gaussians.d_quaternion.begin() + (keep_size + num_to_clone * 2) * 4);
+
+  if (l_max > 0) {
+    thrust::copy(d_new_clone_sh.begin(), d_new_clone_sh.end(),
+                 cuda.gaussians.d_sh.begin() + keep_size * num_sh_coeffs * 3);
+    thrust::copy(d_new_split_sh.begin(), d_new_split_sh.end(),
+                 cuda.gaussians.d_sh.begin() + (keep_size + num_to_clone * 2) * num_sh_coeffs * 3);
+  }
+
+  // --- 11. Update total Gaussian count ---
+  num_gaussians = keep_size + (num_to_clone + num_to_split) * 2;
+
+  if (num_gaussians != new_num_gaussians) {
+    std::cerr << "FATAL ERROR: Gaussian count mismatch in adaptive density!" << std::endl;
+    exit(EXIT_FAILURE);
+  }
+}
+
+float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_camera, ForwardPassData &pass_data,
+                                 const float bg_color) {
+  const int width = (int)curr_camera.width;
+  const int height = (int)curr_camera.height;
+
+  cv::Mat bgr_gt_image = cv::imread(curr_image.name, cv::IMREAD_COLOR);
+
+  if (bgr_gt_image.empty()) {
+    throw std::runtime_error("Failed to load image: " + curr_image.name);
+  }
+  if (bgr_gt_image.cols != width || bgr_gt_image.rows != height) {
+    throw std::runtime_error("Image dimensions mismatch for " + curr_image.name + ". Expected " +
+                             std::to_string(width) + "x" + std::to_string(height) + ", but got " +
+                             std::to_string(bgr_gt_image.cols) + "x" + std::to_string(bgr_gt_image.rows));
+  }
+
+  cv::Mat rgb_gt_image;
+  cv::cvtColor(bgr_gt_image, rgb_gt_image, cv::COLOR_BGR2RGB);
+  cv::Mat float_gt_image;
+  rgb_gt_image.convertTo(float_gt_image, CV_32FC3, 1.0 / 255.0);
+
+  thrust::device_vector<float> d_gt_image(height * width * 3);
+  const float *h_gt_data = float_gt_image.ptr<float>(0);
+  thrust::copy(h_gt_data, h_gt_data + height * width * 3, d_gt_image.begin());
+
+  thrust::device_vector<float> d_grad_image(height * width * 3);
+  float loss =
+      fused_loss(thrust::raw_pointer_cast(pass_data.d_image_buffer.data()), thrust::raw_pointer_cast(d_gt_image.data()),
+                 height, width, 3, config.ssim_frac, thrust::raw_pointer_cast(d_grad_image.data()));
+
+  auto d_uv_selected = compact_masked_array<2>(pass_data.d_uv, pass_data.d_mask, pass_data.num_culled);
+  auto d_opacity_selected = compact_masked_array<1>(cuda.gaussians.d_opacity, pass_data.d_mask, pass_data.num_culled);
+  auto d_xyz_c_selected = compact_masked_array<3>(pass_data.d_xyz_c, pass_data.d_mask, pass_data.num_culled);
+  auto d_quaternion_selected =
+      compact_masked_array<4>(cuda.gaussians.d_quaternion, pass_data.d_mask, pass_data.num_culled);
+  auto d_scale_selected = compact_masked_array<3>(cuda.gaussians.d_scale, pass_data.d_mask, pass_data.num_culled);
+  auto d_xyz_selected = compact_masked_array<3>(cuda.gaussians.d_xyz, pass_data.d_mask, pass_data.num_culled);
+
+  render_image_backward(
+      thrust::raw_pointer_cast(d_uv_selected.data()), thrust::raw_pointer_cast(d_opacity_selected.data()),
+      thrust::raw_pointer_cast(pass_data.d_conic.data()), thrust::raw_pointer_cast(pass_data.d_precomputed_rgb.data()),
+      bg_color, thrust::raw_pointer_cast(pass_data.d_sorted_gaussians.data()),
+      thrust::raw_pointer_cast(pass_data.d_splat_start_end_idx_by_tile_idx.data()),
+      thrust::raw_pointer_cast(pass_data.d_splats_per_pixel.data()),
+      thrust::raw_pointer_cast(pass_data.d_weight_per_pixel.data()), thrust::raw_pointer_cast(d_grad_image.data()),
+      width, height, thrust::raw_pointer_cast(cuda.gradients.d_grad_precompute_rgb.data()),
+      thrust::raw_pointer_cast(cuda.gradients.d_grad_opacity.data()),
+      thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data()),
+      thrust::raw_pointer_cast(cuda.gradients.d_grad_conic.data()));
+
+  precompute_spherical_harmonics_backward(thrust::raw_pointer_cast(d_xyz_c_selected.data()),
+                                          thrust::raw_pointer_cast(cuda.gradients.d_grad_precompute_rgb.data()), l_max,
+                                          pass_data.num_culled,
+                                          thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
+                                          thrust::raw_pointer_cast(cuda.gradients.d_grad_rgb.data()));
+  compute_conic_backward(
+      thrust::raw_pointer_cast(pass_data.d_J.data()), thrust::raw_pointer_cast(pass_data.d_sigma.data()),
+      thrust::raw_pointer_cast(cuda.camera.d_T.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_conic.data()),
+      pass_data.num_culled, thrust::raw_pointer_cast(cuda.gradients.d_grad_J.data()),
+      thrust::raw_pointer_cast(cuda.gradients.d_grad_sigma.data()));
+  compute_projection_jacobian_backward(thrust::raw_pointer_cast(d_xyz_c_selected.data()),
+                                       thrust::raw_pointer_cast(cuda.camera.d_K.data()),
+                                       thrust::raw_pointer_cast(pass_data.d_J.data()), pass_data.num_culled,
+                                       thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz_c.data()));
+  compute_sigma_backward(thrust::raw_pointer_cast(d_quaternion_selected.data()),
+                         thrust::raw_pointer_cast(d_scale_selected.data()),
+                         thrust::raw_pointer_cast(cuda.gradients.d_grad_sigma.data()), pass_data.num_culled,
+                         thrust::raw_pointer_cast(cuda.gradients.d_grad_quaternion.data()),
+                         thrust::raw_pointer_cast(cuda.gradients.d_grad_scale.data()));
+  camera_intrinsic_projection_backward(thrust::raw_pointer_cast(d_xyz_c_selected.data()),
+                                       thrust::raw_pointer_cast(cuda.camera.d_K.data()),
+                                       thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data()), pass_data.num_culled,
+                                       thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz_c.data()));
+  camera_extrinsic_projection_backward(
+      thrust::raw_pointer_cast(d_xyz_selected.data()), thrust::raw_pointer_cast(cuda.camera.d_T.data()),
+      thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz_c.data()), pass_data.num_culled,
+      thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz.data()));
+
+  return loss;
+}
+
+// A functor to compute the norm of a 2D gradient
+struct PositionalGradientNorm {
+  const float height;
+  const float width;
+
+  PositionalGradientNorm(float h, float w) : height(h), width(w) {}
+  __host__ __device__ float operator()(const float2 &grad) const {
+    const float u = height * grad.x;
+    const float v = width * grad.y;
+    return sqrtf(u * u + v * v);
+  }
+};
+
+void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_camera) {
+  auto d_xyz = compact_masked_array<3>(cuda.gaussians.d_xyz, pass_data.d_mask, pass_data.num_culled);
+  auto d_rgb = compact_masked_array<3>(cuda.gaussians.d_rgb, pass_data.d_mask, pass_data.num_culled);
+  auto d_op = compact_masked_array<1>(cuda.gaussians.d_opacity, pass_data.d_mask, pass_data.num_culled);
+  auto d_scale = compact_masked_array<3>(cuda.gaussians.d_scale, pass_data.d_mask, pass_data.num_culled);
+  auto d_quat = compact_masked_array<4>(cuda.gaussians.d_quaternion, pass_data.d_mask, pass_data.num_culled);
+
+  auto d_m_xyz = compact_masked_array<3>(cuda.optimizer.m_grad_xyz, pass_data.d_mask, pass_data.num_culled);
+  auto d_m_rgb = compact_masked_array<3>(cuda.optimizer.m_grad_rgb, pass_data.d_mask, pass_data.num_culled);
+  auto d_m_op = compact_masked_array<1>(cuda.optimizer.m_grad_opacity, pass_data.d_mask, pass_data.num_culled);
+  auto d_m_scale = compact_masked_array<3>(cuda.optimizer.m_grad_scale, pass_data.d_mask, pass_data.num_culled);
+  auto d_m_quat = compact_masked_array<4>(cuda.optimizer.m_grad_quaternion, pass_data.d_mask, pass_data.num_culled);
+
+  auto d_v_xyz = compact_masked_array<3>(cuda.optimizer.v_grad_xyz, pass_data.d_mask, pass_data.num_culled);
+  auto d_v_rgb = compact_masked_array<3>(cuda.optimizer.v_grad_rgb, pass_data.d_mask, pass_data.num_culled);
+  auto d_v_op = compact_masked_array<1>(cuda.optimizer.v_grad_opacity, pass_data.d_mask, pass_data.num_culled);
+  auto d_v_scale = compact_masked_array<3>(cuda.optimizer.v_grad_scale, pass_data.d_mask, pass_data.num_culled);
+  auto d_v_quat = compact_masked_array<4>(cuda.optimizer.v_grad_quaternion, pass_data.d_mask, pass_data.num_culled);
+
+  auto d_steps = compact_masked_array<1>(cuda.optimizer.d_training_steps, pass_data.d_mask, pass_data.num_culled);
+
+  adam_step(thrust::raw_pointer_cast(d_xyz.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz.data()),
+            thrust::raw_pointer_cast(d_m_xyz.data()), thrust::raw_pointer_cast(d_v_xyz.data()),
+            config.base_lr * config.xyz_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+            pass_data.num_culled, 3);
+  adam_step(thrust::raw_pointer_cast(d_rgb.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_rgb.data()),
+            thrust::raw_pointer_cast(d_m_rgb.data()), thrust::raw_pointer_cast(d_v_rgb.data()),
+            config.base_lr * config.rgb_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+            pass_data.num_culled, 3);
+  adam_step(thrust::raw_pointer_cast(d_op.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_opacity.data()),
+            thrust::raw_pointer_cast(d_m_op.data()), thrust::raw_pointer_cast(d_v_op.data()),
+            config.base_lr * config.opacity_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+            pass_data.num_culled, 1);
+  adam_step(thrust::raw_pointer_cast(d_scale.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_scale.data()),
+            thrust::raw_pointer_cast(d_m_scale.data()), thrust::raw_pointer_cast(d_v_scale.data()),
+            config.base_lr * config.scale_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+            pass_data.num_culled, 3);
+  adam_step(thrust::raw_pointer_cast(d_quat.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_quaternion.data()),
+            thrust::raw_pointer_cast(d_m_quat.data()), thrust::raw_pointer_cast(d_v_quat.data()),
+            config.base_lr * config.quat_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+            pass_data.num_culled, 4);
+
+  scatter_masked_array<3>(d_m_xyz, pass_data.d_mask, cuda.optimizer.m_grad_xyz);
+  scatter_masked_array<3>(d_m_rgb, pass_data.d_mask, cuda.optimizer.m_grad_rgb);
+  scatter_masked_array<1>(d_m_op, pass_data.d_mask, cuda.optimizer.m_grad_opacity);
+  scatter_masked_array<3>(d_m_scale, pass_data.d_mask, cuda.optimizer.m_grad_scale);
+  scatter_masked_array<4>(d_m_quat, pass_data.d_mask, cuda.optimizer.m_grad_quaternion);
+
+  scatter_masked_array<3>(d_v_xyz, pass_data.d_mask, cuda.optimizer.v_grad_xyz);
+  scatter_masked_array<3>(d_v_rgb, pass_data.d_mask, cuda.optimizer.v_grad_rgb);
+  scatter_masked_array<1>(d_v_op, pass_data.d_mask, cuda.optimizer.v_grad_opacity);
+  scatter_masked_array<3>(d_v_scale, pass_data.d_mask, cuda.optimizer.v_grad_scale);
+  scatter_masked_array<4>(d_v_quat, pass_data.d_mask, cuda.optimizer.v_grad_quaternion);
+
+  scatter_masked_array<3>(d_xyz, pass_data.d_mask, cuda.gaussians.d_xyz);
+  scatter_masked_array<3>(d_rgb, pass_data.d_mask, cuda.gaussians.d_rgb);
+  scatter_masked_array<1>(d_op, pass_data.d_mask, cuda.gaussians.d_opacity);
+  scatter_masked_array<3>(d_scale, pass_data.d_mask, cuda.gaussians.d_scale);
+  scatter_masked_array<4>(d_quat, pass_data.d_mask, cuda.gaussians.d_quaternion);
+
+  if (l_max > 0) {
+    // SH logic would go here
+    thrust::device_vector<float> d_sh;
+    thrust::device_vector<float> d_m_sh;
+    thrust::device_vector<float> d_v_sh;
+    switch (l_max) {
+    case 0:
+      break;
+    case 1:
+      d_sh = compact_masked_array<9>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
+      d_m_sh = compact_masked_array<9>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      d_v_sh = compact_masked_array<9>(cuda.optimizer.v_grad_sh, pass_data.d_mask, pass_data.num_culled);
+
+      adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
+                thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
+                config.base_lr * config.sh_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+                pass_data.num_culled, 9);
+
+      scatter_masked_array<9>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
+      scatter_masked_array<9>(d_v_sh, pass_data.d_mask, cuda.optimizer.v_grad_sh);
+      scatter_masked_array<9>(d_sh, pass_data.d_mask, cuda.gaussians.d_sh);
+      break;
+    case 2:
+      d_sh = compact_masked_array<24>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
+      d_m_sh = compact_masked_array<24>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      d_v_sh = compact_masked_array<24>(cuda.optimizer.v_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
+                thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
+                config.base_lr * config.sh_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+                pass_data.num_culled, 24);
+
+      scatter_masked_array<24>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
+      scatter_masked_array<24>(d_v_sh, pass_data.d_mask, cuda.optimizer.v_grad_sh);
+      scatter_masked_array<24>(d_sh, pass_data.d_mask, cuda.gaussians.d_sh);
+      break;
+    case 3:
+      d_sh = compact_masked_array<45>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
+      d_m_sh = compact_masked_array<45>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      d_v_sh = compact_masked_array<45>(cuda.optimizer.v_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
+                thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
+                config.base_lr * config.sh_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
+                pass_data.num_culled, 45);
+      scatter_masked_array<45>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
+      scatter_masked_array<45>(d_v_sh, pass_data.d_mask, cuda.optimizer.v_grad_sh);
+      scatter_masked_array<45>(d_sh, pass_data.d_mask, cuda.gaussians.d_sh);
+      break;
+    default:
+      fprintf(stderr, "Error SH band is invalid\n");
+      exit(EXIT_FAILURE);
+    }
+  }
+
+  // Update gradient accumulators after step
+  // Compact
+  auto d_uv_accum_compact =
+      compact_masked_array<1>(cuda.accumulators.d_uv_grad_accum, pass_data.d_mask, pass_data.num_culled);
+  auto d_xyz_accum_compact =
+      compact_masked_array<3>(cuda.accumulators.d_xyz_grad_accum, pass_data.d_mask, pass_data.num_culled);
+  auto d_accum_dur_compact =
+      compact_masked_array<1>(cuda.accumulators.d_grad_accum_dur, pass_data.d_mask, pass_data.num_culled);
+  // Add
+  thrust::device_vector<float> d_uv_grad_norms(pass_data.num_culled);
+  thrust::transform(reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())),
+                    reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())) +
+                        pass_data.num_culled,
+                    d_uv_grad_norms.begin(), PositionalGradientNorm(curr_camera.params[0], curr_camera.params[1]));
+  thrust::transform(d_uv_accum_compact.begin(), d_uv_accum_compact.end(), d_uv_grad_norms.begin(),
+                    d_uv_accum_compact.begin(), thrust::plus<float>());
+
+  thrust::transform(d_xyz_accum_compact.begin(), d_xyz_accum_compact.end(), cuda.gradients.d_grad_xyz.begin(),
+                    d_xyz_accum_compact.begin(), thrust::plus<float>());
+
+  thrust::device_vector<int> d_ones(pass_data.num_culled, 1);
+  thrust::transform(d_accum_dur_compact.begin(), d_accum_dur_compact.end(), d_ones.begin(), d_accum_dur_compact.begin(),
+                    thrust::plus<int>());
+  // Scatter
+  scatter_masked_array<1>(d_uv_accum_compact, pass_data.d_mask, cuda.accumulators.d_uv_grad_accum);
+  scatter_masked_array<3>(d_xyz_accum_compact, pass_data.d_mask, cuda.accumulators.d_xyz_grad_accum);
+  scatter_masked_array<1>(d_accum_dur_compact, pass_data.d_mask, cuda.accumulators.d_grad_accum_dur);
+}
+
+void TrainerImpl::train() {
+  // Call the Impl member function
+  reset_grad_accum();
+
+  // Copy Gaussian data from host (member 'gaussians') to device (member 'cuda.gaussians')
+  try {
+    const float *h_xyz = reinterpret_cast<float *>(gaussians.xyz.data());
+    const float *h_rgb = reinterpret_cast<float *>(gaussians.rgb.data());
+    const float *h_op = reinterpret_cast<float *>(gaussians.opacity.data());
+    const float *h_scale = reinterpret_cast<float *>(gaussians.scale.data());
+    const float *h_quat = reinterpret_cast<float *>(gaussians.quaternion.data());
+    thrust::copy(h_xyz, h_xyz + num_gaussians * 3, cuda.gaussians.d_xyz.begin());
+    thrust::copy(h_rgb, h_rgb + num_gaussians * 3, cuda.gaussians.d_rgb.begin());
+    thrust::copy(h_op, h_op + num_gaussians, cuda.gaussians.d_opacity.begin());
+    thrust::copy(h_scale, h_scale + num_gaussians * 3, cuda.gaussians.d_scale.begin());
+    thrust::copy(h_quat, h_quat + num_gaussians * 4, cuda.gaussians.d_quaternion.begin());
+  } catch (const std::exception &e) {
+    fprintf(stderr, "Error copying data to device: %s\n", e.what());
+    exit(EXIT_FAILURE);
+  }
+
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<> distr(0, train_images.size() - 1);
+
+  // TRAINING LOOP
+  while (iter < config.num_iters) {
+    std::cout << "ITER " << iter << std::endl;
+    std::cout << "NUM GAUSSIANS " << num_gaussians << std::endl;
+    ForwardPassData pass_data;
+
+    Image curr_image = train_images[distr(gen)];
+    Camera curr_camera = cameras[curr_image.camera_id];
+
+    // Prepare and copy camera parameters to device (member 'cuda.camera')
+    float h_K[9] = {(float)curr_camera.params[0],
+                    0.f,
+                    (float)curr_camera.params[2],
+                    0.f,
+                    (float)curr_camera.params[1],
+                    (float)curr_camera.params[3],
+                    0.f,
+                    0.f,
+                    1.f};
+    Eigen::Matrix3d rot_mat_d = curr_image.QvecToRotMat();
+    Eigen::Vector3d t_vec_d = curr_image.tvec;
+    float h_T[12];
+    for (int i = 0; i < 3; ++i) {
+      for (int j = 0; j < 3; ++j)
+        h_T[i * 4 + j] = (float)rot_mat_d(i, j);
+      h_T[i * 4 + 3] = (float)t_vec_d(i);
+    }
+    try {
+      thrust::copy(h_K, h_K + 9, cuda.camera.d_K.begin());
+      thrust::copy(h_T, h_T + 12, cuda.camera.d_T.begin());
+    } catch (const std::exception &e) {
+      fprintf(stderr, "Error copying camera data to device: %s\n", e.what());
+      exit(EXIT_FAILURE);
+    }
+
+    float bg_color = 0.0f;
+    if (config.use_background)
+      bg_color = (iter % 255) / 255.0f;
+
+    // Call Impl member function
+    if (iter % config.add_sh_band_interval == 0 && iter >= config.add_sh_band_interval)
+      add_sh_band();
+
+    // --- FORWARD PASS via RASTERIZE MODULE ---
+    // Uses member 'cuda'
+    rasterize_image(num_gaussians, curr_camera, config, cuda.camera, cuda.gaussians, pass_data, bg_color, l_max);
+
+    if (pass_data.num_culled == 0) {
+      std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;
+      continue;
+    }
+
+    // --- BACKWARD PASS ---
+    // Call Impl member function
+    float loss = backward_pass(curr_image, curr_camera, pass_data, bg_color);
+    std::cout << "LOSS TOTAL " << loss << std::endl;
+
+    // --- OPTIMIZER STEP ---
+    // Call Impl member function
+    optimizer_step(pass_data, curr_camera);
+
+    // --- ADAPTIVE DENSITY ---
+    if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&
+        iter < config.adaptive_control_end) {
+      adaptive_density_step();
+      reset_grad_accum();
+    }
+
+    if (iter > config.reset_opacity_start && iter % config.reset_opacity_interval == 0 &&
+        iter < config.reset_opacity_end) {
+      reset_opacity();
+      reset_grad_accum();
+    }
+
+    iter++;
+  }
+}
+
+// --- Implementation of Public Trainer Methods ---
+// These methods simply delegate to the pImpl object.
+
+Trainer::Trainer()
+    : pImpl(std::make_unique<TrainerImpl>(ConfigParameters{}, Gaussians{}, std::unordered_map<int, Image>{},
+                                          std::unordered_map<int, Camera>{})) {}
+
+Trainer::Trainer(ConfigParameters config, Gaussians gaussians, std::unordered_map<int, Image> images,
+                 std::unordered_map<int, Camera> cameras)
+    : pImpl(std::make_unique<TrainerImpl>(std::move(config), std::move(gaussians), std::move(images),
+                                          std::move(cameras))) {}
+
+// Define the destructor and move operations.
+Trainer::~Trainer() = default;
+Trainer::Trainer(Trainer &&) noexcept = default;
+Trainer &Trainer::operator=(Trainer &&) noexcept = default;
+
+// --- Public API Delegation ---
+
+void Trainer::test_train_split() { pImpl->test_train_split(); }
+
+void Trainer::train() { pImpl->train(); }

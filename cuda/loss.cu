@@ -1,7 +1,8 @@
 // loss.cu
 
 #include "checks.cuh"
-#include "gsplat/cuda_forward.hpp"
+#include "gsplat_cuda/cuda_forward.cuh"
+#include <thrust/device_vector.h>
 
 // Define constants for SSIM calculation.
 namespace SSIMConstants {
@@ -39,6 +40,7 @@ __global__ void fused_loss_kernel(const float *__restrict__ image, const float *
     return;
   }
   const int idx = y * cols + x;
+  const float grad_scale = 1.0f / (float)(rows * cols);
 
   float pixel_l1_loss = 0.0f;
   float pixel_ssim_loss = 0.0f;
@@ -56,7 +58,7 @@ __global__ void fused_loss_kernel(const float *__restrict__ image, const float *
       float grad_l1 = (pred > gt) ? 1.0f : -1.0f;
       if (pred == gt)
         grad_l1 = 0.0f;
-      image_grad[channel_idx] = (1.0f - ssim_weight) * grad_l1;
+      image_grad[channel_idx] = (1.0f - ssim_weight) * grad_l1 * grad_scale;
     } else {
       image_grad[channel_idx] = 0.0f;
     }
@@ -135,7 +137,7 @@ __global__ void fused_loss_kernel(const float *__restrict__ image, const float *
       float d_ssim = (dN * ssim_den - ssim_num * dD) / (ssim_den * ssim_den);
 
       // Add weighted SSIM gradient part. Grad of loss (1-SSIM) is -d_ssim.
-      image_grad[central_idx] -= ssim_weight * 0.5f * d_ssim;
+      image_grad[central_idx] -= ssim_weight * 0.5f * d_ssim * grad_scale;
     }
     avg_ssim /= 3.0f;
     pixel_ssim_loss = (1.0f - avg_ssim) / 2.0f;
@@ -171,20 +173,15 @@ float fused_loss(const float *predicted_data, const float *gt_data, int rows, in
   dim3 gridDim((cols + blockDim.x - 1) / blockDim.x, (rows + blockDim.y - 1) / blockDim.y);
 
   // --- Allocate memory for total loss on device ---
-  float *d_total_loss;
-  CHECK_CUDA(cudaMalloc(&d_total_loss, sizeof(float)));
-  CHECK_CUDA(cudaMemset(d_total_loss, 0, sizeof(float)));
+  thrust::device_vector<float> d_total_loss(1, 0.0f);
 
   size_t shared_mem_size = blockDim.x * blockDim.y * sizeof(float);
 
-  fused_loss_kernel<<<gridDim, blockDim, shared_mem_size, stream>>>(predicted_data, gt_data, rows, cols, ssim_weight,
-                                                                    image_grad, d_total_loss);
+  fused_loss_kernel<<<gridDim, blockDim, shared_mem_size, stream>>>(
+      predicted_data, gt_data, rows, cols, ssim_weight, image_grad, thrust::raw_pointer_cast(d_total_loss.data()));
 
   // --- Copy result back to host ---
-  float h_total_loss = 0.0f;
-  CHECK_CUDA(cudaMemcpy(&h_total_loss, d_total_loss, sizeof(float), cudaMemcpyDeviceToHost));
-
-  CHECK_CUDA(cudaFree(d_total_loss));
+  float h_total_loss = d_total_loss[0];
 
   // Return the mean loss per pixel
   return h_total_loss / (rows * cols);

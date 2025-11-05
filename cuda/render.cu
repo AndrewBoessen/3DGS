@@ -1,7 +1,7 @@
 // render.cu
 
 #include "checks.cuh"
-#include "gsplat/cuda_forward.hpp"
+#include "gsplat_cuda/cuda_forward.cuh"
 
 constexpr int BATCH_SIZE = 256;
 
@@ -105,10 +105,6 @@ __global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *
 
         // Alpha blending: C_out = α * C_in + (1 - α) * C_bg
         const float weight = alpha * (1.0f - alpha_accum);
-        if (weight <= 1e-4f) {
-          num_splats++;
-          continue; // Skip negligible contributions
-        }
 
         const int base_rgb_id = i * 3;
         accumulated_rgb.x += _rgb[base_rgb_id + 0] * weight;

@@ -3,21 +3,23 @@
 cmake_minimum_required(VERSION 3.20)
 project(GuassianSplattingProject LANGUAGES CXX CUDA)
 
+set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_INCLUDES OFF)
+set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_OBJECTS OFF)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_ARCHITECTURES native)
-
 # ===================================================================
 # DEPENDENCIES
 # ===================================================================
-# Find CUDA Toolkit and its libraries (cuBLAS, etc.)
-find_package(CUDAToolkit REQUIRED)
 # Find OpenMP for sphericart parallelization
 find_package(OpenMP REQUIRED)
 # Find OpenCV for image procesing
 find_package(OpenCV REQUIRED)
+
+# CUDA CCCL
+add_subdirectory(submodules/cccl)
 
 # Eigen (header-only)
 add_subdirectory(submodules/eigen)
@@ -46,24 +48,41 @@ target_link_libraries(dataloader PUBLIC Eigen3::Eigen)
 # ===================================================================
 # GSPLAT LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat src/utils.cpp src/data.cpp src/gaussian.cpp src/raster.cpp src/trainer.cpp)
+add_library(gsplat
+              cuda/data.cu
+              cuda/raster.cu
+              cuda/trainer.cu
+              src/utils.cpp
+              src/gaussian.cpp)
 
 target_include_directories(gsplat
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp OpenMP::OpenMP_CXX Eigen3::Eigen nanoflann::nanoflann ${OpenCV_LIBS})
+target_link_libraries(gsplat PUBLIC dataloader gsplat_cuda yaml-cpp OpenMP::OpenMP_CXX Eigen3::Eigen nanoflann::nanoflann ${OpenCV_LIBS} CCCL::CCCL)
 
 # ===================================================================
 # GSPLAT CUDA LIBRARY DEFINITION
 # ===================================================================
-add_library(gsplat_cuda cuda/gaussian.cu cuda/projection.cu cuda/culling.cu cuda/spherical_harmonics.cu cuda/render.cu cuda/loss.cu cuda/projection_backward.cu cuda/gaussian_backward.cu cuda/spherical_harmonics_backward.cu cuda/render_backward.cu cuda/optimizer.cu cuda/adaptive_density.cu)
+add_library(gsplat_cuda
+              cuda/gaussian.cu
+              cuda/projection.cu
+              cuda/culling.cu
+              cuda/spherical_harmonics.cu
+              cuda/render.cu
+              cuda/loss.cu
+              cuda/projection_backward.cu
+              cuda/gaussian_backward.cu
+              cuda/spherical_harmonics_backward.cu
+              cuda/render_backward.cu
+              cuda/optimizer.cu
+              cuda/adaptive_density.cu)
 
 target_include_directories(gsplat_cuda
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat_cuda PUBLIC sphericart)
+target_link_libraries(gsplat_cuda PUBLIC sphericart CCCL::CCCL)
 
 # ===================================================================
 # MAIN EXECUTABLE

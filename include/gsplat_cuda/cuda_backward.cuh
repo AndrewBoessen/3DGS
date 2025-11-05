@@ -7,16 +7,6 @@
 
 inline constexpr int TILE_SIZE_BWD = 16;
 
-// Macro for checking CUDA API calls for errors.
-#define CHECK_CUDA(call)                                                                                               \
-  do {                                                                                                                 \
-    cudaError_t err = call;                                                                                            \
-    if (err != cudaSuccess) {                                                                                          \
-      fprintf(stderr, "CUDA Error in %s at line %d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err));               \
-      exit(EXIT_FAILURE);                                                                                              \
-    }                                                                                                                  \
-  } while (0)
-
 /**
  * @brief Compute gradients for the camera intrinsic projection.
  * @param[in]  xyz_c          A device pointer to 3D points in camera coordinates.

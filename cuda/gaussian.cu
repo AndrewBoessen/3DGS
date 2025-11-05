@@ -1,7 +1,7 @@
 // gaussian.cu
 
 #include "checks.cuh"
-#include "gsplat/cuda_forward.hpp"
+#include "gsplat_cuda/cuda_forward.cuh"
 
 __global__ void compute_sigma_fused_kernel(const float *__restrict__ quaternion, const float *__restrict__ scale,
                                            const int N, float *__restrict__ sigma) {

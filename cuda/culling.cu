@@ -1,23 +1,15 @@
 #include "checks.cuh"
-#include "gsplat/cuda_forward.hpp"
+#include "gsplat_cuda/cuda_forward.cuh"
+#include <cassert>
 #include <cub/cub.cuh>
 #include <math_constants.h>
-
-// Kernel to set every element of a float array to a specific value
-__global__ void set_value_kernel(float *arr, float value, int n) {
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-  // A safety check to prevent writing out of bounds
-  if (idx < n) {
-    arr[idx] = value;
-  }
-}
-
-void set_values(const int size, float *vals, const float val) {
-  const int threads = 256;
-  const int blocks = (size + threads - 1) / threads;
-  set_value_kernel<<<blocks, threads>>>(vals, val, size);
-}
+#include <thrust/copy.h>
+#include <thrust/device_vector.h>
+#include <thrust/extrema.h>
+#include <thrust/functional.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/reduce.h>
+#include <thrust/transform.h>
 
 __device__ __forceinline__ bool z_distance_culling(const float z, const float near_thresh, const float far_thresh) {
   return z >= near_thresh && z <= far_thresh;
@@ -180,7 +172,7 @@ __device__ __forceinline__ int warpSum(unsigned mask, int val) {
 
 __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float *__restrict__ conic,
                                       const float mh_dist, const int n_tiles_x, const int n_tiles_y, const int N,
-                                      int *buffer_bytes, int2 *pairs, int *global_index) {
+                                      int *buffer_size, int2 *pairs, int *global_index) {
   const int gaussian_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
   // mask active threads for warpSum
@@ -198,7 +190,6 @@ __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float
   float obb[8];
   const int radius_tiles = compute_obb(u, v, a, b, c, mh_dist, obb);
 
-  // BUG Check the bounds on this
   const int projected_tile_x = floorf(u / 16.0f);
   const int start_tile_x = max(0, projected_tile_x - radius_tiles);
   const int end_tile_x = min(n_tiles_x, projected_tile_x + radius_tiles + 1);
@@ -216,7 +207,7 @@ __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float
     const int lane_id = gaussian_idx & 0x1f;
     const int warp_sum = warpSum(active_mask, num_pairs_for_thread);
     if (lane_id == 0) {
-      atomicAdd(buffer_bytes, warp_sum * sizeof(int));
+      atomicAdd(buffer_size, warp_sum);
     }
   } else {
     // Write pairs to buffer
@@ -235,7 +226,7 @@ __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float
 __global__ void generate_splats_kernel(const float *__restrict__ uvs, const float *__restrict__ xyz_camera_frame,
                                        const float *__restrict__ conic, const int2 *__restrict__ pairs,
                                        const float mh_dist, const int num_pairs, const int num_tiles_x,
-                                       const int num_tiles_y, float *max_z, int *gaussian_idx_by_splat_idx,
+                                       const int num_tiles_y, const float max_z, int *gaussian_idx_by_splat_idx,
                                        double *sort_keys, int *global_splat_counter) {
   int pair_id = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -265,7 +256,7 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
   const int tile_y = tile_idx / num_tiles_x;
 
   double tile_idx_key_multiplier = 0.0;
-  tile_idx_key_multiplier = *max_z + 1.0f;
+  tile_idx_key_multiplier = max_z + 1.0f;
 
   float tile_bounds[4];
   tile_bounds[0] = __int2float_rn(tile_x) * 16.0f;
@@ -287,9 +278,9 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
 }
 
 __global__ void find_tile_boundaries_kernel(const double *__restrict__ sorted_keys, const int num_splats,
-                                            const int num_tiles, const float *max_z,
+                                            const int num_tiles, const float max_z,
                                             int *__restrict__ splat_start_end_idx_by_tile_idx) {
-  const double tile_idx_key_multiplier = (double)*max_z + 1.0;
+  const double tile_idx_key_multiplier = (double)max_z + 1.0;
 
   int splat_idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (splat_idx >= num_splats) {
@@ -346,241 +337,17 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
                                                              height, mask);
 }
 
-__global__ void scatter_add_gradients_kernel(const float *d_grad_uv_culled, const float *d_grad_xyz_culled,
-                                             const bool *d_mask, const int *d_culled_count_prefix_sum,
-                                             int num_gaussians, float *d_uv_grad_accum_full,
-                                             float *d_xyz_grad_accum_full, int *d_grad_accum_dur_full) {
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= num_gaussians)
-    return;
-
-  if (d_mask[idx]) {
-    int culled_idx = d_culled_count_prefix_sum[idx];
-
-    atomicAdd(&d_uv_grad_accum_full[idx * 2 + 0], d_grad_uv_culled[culled_idx * 2 + 0]);
-    atomicAdd(&d_uv_grad_accum_full[idx * 2 + 1], d_grad_uv_culled[culled_idx * 2 + 1]);
-
-    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 0], d_grad_xyz_culled[culled_idx * 3 + 0]);
-    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 1], d_grad_xyz_culled[culled_idx * 3 + 1]);
-    atomicAdd(&d_xyz_grad_accum_full[idx * 3 + 2], d_grad_xyz_culled[culled_idx * 3 + 2]);
-
-    atomicAdd(&d_grad_accum_dur_full[idx], 1);
+// Helper functor for strided copy (xyz -> z)
+struct copy_z_functor {
+  const float *m_xyz;
+  copy_z_functor(const float *xyz) : m_xyz(xyz) {}
+  __host__ __device__ float operator()(int i) const {
+    return m_xyz[i * 3 + 2]; // Get the z-component
   }
-}
-
-__global__ void scatter_groups_kernel(const float *input, const bool *mask, const int *scan_out, const int N,
-                                      float *output, int S) {
-  int gid = blockIdx.x * blockDim.x + threadIdx.x;
-  if (gid >= N) {
-    return;
-  }
-  if (mask[gid]) {
-    int in_group = scan_out[gid];
-    for (int j = 0; j < S; ++j) {
-      output[gid * S + j] = input[in_group * S + j];
-    }
-  }
-}
-
-__global__ void select_groups_kernel(const float *input, const bool *mask, const int *scan_out, const int N,
-                                     float *output, int S) {
-  int gid = blockIdx.x * blockDim.x + threadIdx.x; // group id
-  if (gid >= N)
-    return;
-  if (mask[gid]) {
-    int out_group = scan_out[gid];
-    for (int j = 0; j < S; ++j) {
-      output[out_group * S + j] = input[gid * S + j];
-    }
-  }
-}
-
-__global__ void getTotalSum(const int *mask_sum, const bool *d_mask, int *d_num_culled, int N) {
-  if (N > 0) {
-    // The total sum = exclusive_scan_result[N-1] + input[N-1]
-    *d_num_culled = mask_sum[N - 1] + static_cast<int>(d_mask[N - 1]);
-  } else {
-    *d_num_culled = 0;
-  }
-}
-
-void filter_moment_vectors(const int N, const int S, const bool *d_mask, const float *d_m, const float *d_v,
-                           float *d_m_culled, float *d_v_culled, cudaStream_t stream) {
-  int *mask_sum;
-  CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
-  void *d_temp_storage = nullptr;
-  size_t temp_storage_bytes = 0;
-
-  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
-  // Allocate temporary storage
-  cudaMalloc(&d_temp_storage, temp_storage_bytes);
-
-  // Run exclusive prefix sum
-  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
-
-  const int threads_per_block = 256;
-  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
-
-  // Apply mask
-  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_m, d_mask, mask_sum, N, d_m_culled, S);
-  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_v, d_mask, mask_sum, N, d_v_culled, S);
-
-  // Free the temporary storage.
-  CHECK_CUDA(cudaFree(d_temp_storage));
-  CHECK_CUDA(cudaFree(mask_sum));
-}
-
-void filter_strided_vector(const int N, const int S, const bool *d_mask, const float *d_v, float *d_v_culled,
-                           cudaStream_t stream) {
-  int *mask_sum;
-  CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
-  void *d_temp_storage = nullptr;
-  size_t temp_storage_bytes = 0;
-
-  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
-  // Allocate temporary storage
-  cudaMalloc(&d_temp_storage, temp_storage_bytes);
-
-  // Run exclusive prefix sum
-  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
-
-  const int threads_per_block = 256;
-  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
-
-  // Apply mask
-  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_v, d_mask, mask_sum, N, d_v_culled, S);
-
-  // Free the temporary storage.
-  CHECK_CUDA(cudaFree(d_temp_storage));
-  CHECK_CUDA(cudaFree(mask_sum));
-}
-
-int mask_sum(const int N, const bool *d_mask) {
-  int *d_out = nullptr;
-  void *d_temp_storage = nullptr;
-
-  // Allocate device memory
-  CHECK_CUDA(cudaMalloc(&d_out, sizeof(int)));
-
-  // Determine temporary storage size
-  size_t temp_storage_bytes = 0;
-  cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_mask, d_out, N);
-
-  // Allocate temporary storage
-  CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes));
-
-  // Perform the sum reduction
-  cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_mask, d_out, N);
-
-  // Copy result back to host
-  int h_out;
-  CHECK_CUDA(cudaMemcpy(&h_out, d_out, sizeof(int), cudaMemcpyDeviceToHost));
-
-  CHECK_CUDA(cudaFree(d_temp_storage));
-  CHECK_CUDA(cudaFree(d_out));
-  return h_out;
-}
-
-void accumulate_gradients(const int N, const bool *d_mask, const float *d_grad_xyz, const float *d_grad_uv,
-                          float *d_xyz_grad_accum, float *d_uv_grad_acuum, int *d_grad_accum_dur, cudaStream_t stream) {
-  int *mask_sum;
-  CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
-  void *d_temp_storage = nullptr;
-  size_t temp_storage_bytes = 0;
-
-  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
-  // Allocate temporary storage
-  cudaMalloc(&d_temp_storage, temp_storage_bytes);
-
-  // Run exclusive prefix sum
-  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
-
-  const int threads_per_block = 256;
-  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
-
-  scatter_add_gradients_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
-      d_grad_uv, d_grad_xyz, d_mask, mask_sum, N, d_uv_grad_acuum, d_xyz_grad_accum, d_grad_accum_dur);
-
-  // Free the temporary storage.
-  CHECK_CUDA(cudaFree(d_temp_storage));
-  CHECK_CUDA(cudaFree(mask_sum));
-}
-
-void scatter_params(const int N, const int S, const bool *d_mask, const float *selected_params, float *scattered_params,
-                    cudaStream_t stream) {
-  int *mask_sum;
-  CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
-  void *d_temp_storage = nullptr;
-  size_t temp_storage_bytes = 0;
-
-  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
-  // Allocate temporary storage
-  cudaMalloc(&d_temp_storage, temp_storage_bytes);
-
-  // Run exclusive prefix sum
-  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
-
-  const int threads_per_block = 256;
-  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
-
-  scatter_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(selected_params, d_mask, mask_sum, N,
-                                                                      scattered_params, S);
-
-  // Free the temporary storage.
-  CHECK_CUDA(cudaFree(d_temp_storage));
-  CHECK_CUDA(cudaFree(mask_sum));
-}
-
-void filter_gaussians_by_mask(const int N, const int num_sh_coef, const bool *d_mask, const float *d_xyz,
-                              const float *d_rgb, const float *d_sh, const float *d_opacity, const float *d_scale,
-                              const float *d_quaternion, const float *d_uv, const float *d_xyz_c, float *d_xyz_culled,
-                              float *d_rgb_culled, float *d_sh_culled, float *d_opacity_culled, float *d_scale_culled,
-                              float *d_quaternion_culled, float *d_uv_culled, float *d_xyz_c_culled, int *h_num_culled,
-                              cudaStream_t stream) {
-  int *mask_sum;
-  CHECK_CUDA(cudaMalloc(&mask_sum, N * sizeof(int)));
-
-  void *d_temp_storage = nullptr;
-  size_t temp_storage_bytes = 0;
-
-  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
-  // Allocate temporary storage
-  cudaMalloc(&d_temp_storage, temp_storage_bytes);
-
-  // Run exclusive prefix sum
-  cub::DeviceScan::ExclusiveSum(d_temp_storage, temp_storage_bytes, d_mask, mask_sum, N);
-
-  // Copy sum to host
-  int *d_num_culled_temp;
-  CHECK_CUDA(cudaMalloc(&d_num_culled_temp, sizeof(int)));
-  getTotalSum<<<1, 1, 0, stream>>>(mask_sum, d_mask, d_num_culled_temp, N);
-  CHECK_CUDA(cudaMemcpyAsync(h_num_culled, d_num_culled_temp, sizeof(int), cudaMemcpyDeviceToHost, stream));
-  CHECK_CUDA(cudaFree(d_num_culled_temp));
-
-  const int threads_per_block = 256;
-  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
-
-  // Apply mask to all arrays
-  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_xyz, d_mask, mask_sum, N, d_xyz_culled, 3);
-  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_rgb, d_mask, mask_sum, N, d_rgb_culled, 3);
-  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_opacity, d_mask, mask_sum, N, d_opacity_culled,
-                                                                     1);
-  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_scale, d_mask, mask_sum, N, d_scale_culled, 3);
-  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_quaternion, d_mask, mask_sum, N,
-                                                                     d_quaternion_culled, 4);
-  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_uv, d_mask, mask_sum, N, d_uv_culled, 2);
-  select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_xyz_c, d_mask, mask_sum, N, d_xyz_c_culled, 3);
-  if (num_sh_coef > 0)
-    select_groups_kernel<<<num_blocks, threads_per_block, 0, stream>>>(d_sh, d_mask, mask_sum, N, d_sh_culled,
-                                                                       num_sh_coef * 3);
-
-  // Free the temporary storage.
-  CHECK_CUDA(cudaFree(d_temp_storage));
-  CHECK_CUDA(cudaFree(mask_sum));
-}
+};
 
 void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *conic, const int n_tiles_x,
-                              const int n_tiles_y, const float mh_dist, const int N, size_t &sorted_gaussian_bytes,
+                              const int n_tiles_y, const float mh_dist, const int N, size_t &sorted_gaussian_size,
                               int *sorted_gaussians, int *splat_start_end_idx_by_tile_idx, cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(uv);
   ASSERT_DEVICE_POINTER(xyz);
@@ -591,94 +358,82 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
   const int num_tiles = n_tiles_x * n_tiles_y;
 
-  int *d_buffer_index;
-  CHECK_CUDA(cudaMalloc(&d_buffer_index, sizeof(int)));
-  CHECK_CUDA(cudaMemset(d_buffer_index, 0, sizeof(int)));
-
-  int *d_buffer_bytes;
-  CHECK_CUDA(cudaMalloc(&d_buffer_bytes, sizeof(int)));
-  CHECK_CUDA(cudaMemset(d_buffer_bytes, 0, sizeof(int)));
-
   // get required size for output array
   if (sorted_gaussians == nullptr) {
-    coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N,
-                                                             d_buffer_bytes, nullptr, d_buffer_index);
+    // Use device_vectors for atomic counters. Initialize to 0.
+    thrust::device_vector<int> d_buffer_size(1, 0);
 
-    // update host bytes counter
-    int temp_bytes = 0;
-    CHECK_CUDA(cudaMemcpy(&temp_bytes, d_buffer_bytes, sizeof(int), cudaMemcpyDeviceToHost));
-    sorted_gaussian_bytes = temp_bytes;
+    coarse_binning_kernel<<<num_blocks, threads_per_block>>>(
+        uv, conic, mh_dist, n_tiles_x, n_tiles_y, N, thrust::raw_pointer_cast(d_buffer_size.data()), nullptr, nullptr);
+    sorted_gaussian_size = d_buffer_size[0];
 
-    // free memory before return
-    CHECK_CUDA(cudaFree(d_buffer_bytes));
-    CHECK_CUDA(cudaFree(d_buffer_index));
     return;
   }
-  // store pairs of guassians and tiles
-  int2 *d_pairs;
-  CHECK_CUDA(cudaMalloc(&d_pairs, sorted_gaussian_bytes * 2));
 
-  coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N, d_buffer_bytes,
-                                                           d_pairs, d_buffer_index);
+  // --- Main execution path ---
 
-  // get max z depth for key multiplier
-  float *d_max_z;
-  CHECK_CUDA(cudaMalloc(&d_max_z, sizeof(float)));
+  // Use device_vectors for atomic counters, initialized to 0
+  thrust::device_vector<int> d_buffer_index(1, 0);
+
+  // store pairs of gaussians and tiles
+  thrust::device_vector<int2> d_pairs(sorted_gaussian_size);
+
+  coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N, nullptr,
+                                                           thrust::raw_pointer_cast(d_pairs.data()),
+                                                           thrust::raw_pointer_cast(d_buffer_index.data()));
+  assert(d_buffer_index[0] == sorted_gaussian_size);
 
   // Copy z values to new array
-  float *z_vals;
-  CHECK_CUDA(cudaMalloc(&z_vals, N * sizeof(float)));
-  CHECK_CUDA(cudaMemcpy2D(z_vals, 1 * sizeof(float), xyz + 2, 3 * sizeof(float), 1 * sizeof(float), N,
-                          cudaMemcpyDeviceToDevice));
+  thrust::device_vector<float> z_vals(N);
 
-  void *max_reduce_buffer = nullptr;
-  size_t max_reduce_buffer_bytes = 0;
+  // Use thrust::transform for the strided copy (replaces cudaMemcpy2D)
+  // This executes on the device using the default stream, matching original async behavior
+  thrust::transform(thrust::device, thrust::make_counting_iterator(0), thrust::make_counting_iterator(N),
+                    z_vals.begin(), copy_z_functor(xyz));
 
-  cub::DeviceReduce::Max(max_reduce_buffer, max_reduce_buffer_bytes, z_vals, d_max_z, N);
-  CHECK_CUDA(cudaMalloc(&max_reduce_buffer, max_reduce_buffer_bytes));
-  cub::DeviceReduce::Max(max_reduce_buffer, max_reduce_buffer_bytes, z_vals, d_max_z, N);
+  // Use thrust::max_element to find max Z value (replaces CUB::DeviceReduce)
+  // This is a device-side operation
+  auto max_iter = thrust::max_element(thrust::device, z_vals.begin(), z_vals.end());
+  // Copy the single max value to d_max_z
+  const float max_z = max_iter[0];
 
-  CHECK_CUDA(cudaFree(z_vals));
-  CHECK_CUDA(cudaFree(max_reduce_buffer));
+  // Get num_pairs from device
+  int num_pairs = d_buffer_index[0]; // Device-to-host copy
 
-  int num_pairs;
-  CHECK_CUDA(cudaMemcpy(&num_pairs, d_buffer_index, sizeof(int), cudaMemcpyDeviceToHost));
-  double *d_sort_keys;
-  CHECK_CUDA(cudaMalloc(&d_sort_keys, num_pairs * sizeof(double)));
-  int *d_global_splat_counter;
-  CHECK_CUDA(cudaMalloc(&d_global_splat_counter, sizeof(int)));
-  CHECK_CUDA(cudaMemset(d_global_splat_counter, 0, sizeof(int)));
+  thrust::device_vector<double> d_sort_keys(num_pairs);
+  thrust::device_vector<int> d_global_splat_counter(1, 0); // Initialize to 0
 
   const int num_blocks_pairs = (num_pairs + threads_per_block - 1) / threads_per_block;
   generate_splats_kernel<<<num_blocks_pairs, threads_per_block, 0, stream>>>(
-      uv, xyz, conic, d_pairs, mh_dist, num_pairs, n_tiles_x, n_tiles_y, d_max_z, sorted_gaussians, d_sort_keys,
-      d_global_splat_counter);
+      uv, xyz, conic, thrust::raw_pointer_cast(d_pairs.data()), mh_dist, num_pairs, n_tiles_x, n_tiles_y, max_z,
+      sorted_gaussians, // Pass through the raw pointer from caller
+      thrust::raw_pointer_cast(d_sort_keys.data()), thrust::raw_pointer_cast(d_global_splat_counter.data()));
 
-  int num_splats;
-  CHECK_CUDA(cudaMemcpy(&num_splats, d_global_splat_counter, sizeof(int), cudaMemcpyDeviceToHost));
+  int num_splats = d_global_splat_counter[0]; // Device-to-host copy
 
   {
-    void *d_temp_storage = nullptr;
+    // Use device_vector for CUB temporary storage
     size_t temp_storage_bytes = 0;
-    // Sort keys and apply the same permutation to the gaussian indices (in d_sorted_gaussians)
-    cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, d_sort_keys, d_sort_keys, sorted_gaussians,
-                                    sorted_gaussians, num_splats, 0, sizeof(double) * 8, stream);
-    CHECK_CUDA(cudaMalloc(&d_temp_storage, temp_storage_bytes));
-    cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, d_sort_keys, d_sort_keys, sorted_gaussians,
-                                    sorted_gaussians, num_splats, 0, sizeof(double) * 8, stream);
-    CHECK_CUDA(cudaFree(d_temp_storage));
-  }
 
-  CHECK_CUDA(cudaMemset(splat_start_end_idx_by_tile_idx, 0, (num_tiles + 1) * sizeof(int)));
+    // First call to get storage size
+    cub::DeviceRadixSort::SortPairs(nullptr, temp_storage_bytes,
+                                    thrust::raw_pointer_cast(d_sort_keys.data()), // keys_in
+                                    thrust::raw_pointer_cast(d_sort_keys.data()), // keys_out
+                                    sorted_gaussians,                             // values_in
+                                    sorted_gaussians,                             // values_out
+                                    num_splats, 0, sizeof(double) * 8, stream);
+
+    // Allocate temp storage using device_vector
+    thrust::device_vector<char> d_temp_storage(temp_storage_bytes);
+
+    // Second call to perform sort
+    cub::DeviceRadixSort::SortPairs(thrust::raw_pointer_cast(d_temp_storage.data()), // Pass raw pointer
+                                    temp_storage_bytes, thrust::raw_pointer_cast(d_sort_keys.data()),
+                                    thrust::raw_pointer_cast(d_sort_keys.data()), sorted_gaussians, sorted_gaussians,
+                                    num_splats, 0, sizeof(double) * 8, stream);
+  }
 
   const int boundary_blocks = (num_splats + threads_per_block - 1) / threads_per_block;
   find_tile_boundaries_kernel<<<boundary_blocks, threads_per_block, 0, stream>>>(
-      d_sort_keys, num_splats, num_tiles, d_max_z, splat_start_end_idx_by_tile_idx);
-
-  CHECK_CUDA(cudaFree(d_max_z));
-  CHECK_CUDA(cudaFree(d_sort_keys));
-  CHECK_CUDA(cudaFree(d_buffer_bytes));
-  CHECK_CUDA(cudaFree(d_buffer_index));
-  CHECK_CUDA(cudaFree(d_pairs));
-  CHECK_CUDA(cudaFree(d_global_splat_counter));
+      thrust::raw_pointer_cast(d_sort_keys.data()), num_splats, num_tiles, max_z, splat_start_end_idx_by_tile_idx);
 }

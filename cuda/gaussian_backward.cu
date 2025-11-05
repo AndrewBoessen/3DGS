@@ -1,7 +1,7 @@
 // projection_backward.cu
 
 #include "checks.cuh"
-#include "gsplat/cuda_backward.hpp"
+#include "gsplat_cuda/cuda_backward.cuh"
 
 __global__ void compute_proj_jacobian_backward_kernel(const float *__restrict__ xyz_c, const float *__restrict__ K,
                                                       const float *__restrict__ J_grad_out, const int N,

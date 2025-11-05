@@ -5,7 +5,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <utility> // Required for std::move
+#include <utility>
 
 int main(int argc, char *argv[]) {
   // Check for the correct number of command-line arguments.
@@ -87,7 +87,8 @@ int main(int argc, char *argv[]) {
   gaussians = Gaussians::Initialize(points);
   std::cout << "Successfully initialized " << gaussians.xyz.size() << " Gaussians." << std::endl;
 
-  Trainer trainer = Trainer(config, gaussians, images, cameras);
+  // Trainer
+  Trainer trainer(config, gaussians, images, cameras);
 
   trainer.test_train_split();
   trainer.train();
