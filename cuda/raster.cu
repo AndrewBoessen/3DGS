@@ -32,7 +32,6 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
                  thrust::raw_pointer_cast(pass_data.d_mask.data()));
 
   pass_data.num_culled = thrust::count(pass_data.d_mask.begin(), pass_data.d_mask.end(), true);
-  printf("NUM AFTER CULL %d\n", pass_data.num_culled);
 
   if (pass_data.num_culled == 0) {
     fprintf(stderr, "Error no Gaussians in view for image\n");
@@ -99,7 +98,6 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
                            thrust::raw_pointer_cast(pass_data.d_conic.data()), n_tiles_x, n_tiles_y, config.mh_dist,
                            pass_data.num_culled, sorted_gaussian_size, nullptr, nullptr);
 
-  printf("NUM PAIRS %d\n", sorted_gaussian_size);
   pass_data.d_splat_start_end_idx_by_tile_idx.resize(n_tiles + 1);
   pass_data.d_sorted_gaussians.resize(sorted_gaussian_size);
 

@@ -19,7 +19,7 @@ __global__ void adam_kernel(const int N, const int S, float *__restrict__ param,
   register_exp_avg = b1 * register_exp_avg + (1.0f - b1) * register_param_grad;
   register_exp_avg_sq = b2 * register_exp_avg_sq + (1.0f - b2) * register_param_grad * register_param_grad;
   // Compute bias-corrected estimates using pre-calculated values
-  const float step_num = steps[step_idx];
+  const int step_num = steps[step_idx];
   float m_hat = register_exp_avg / (1.0f - pow(b1, step_num));
   float v_hat = register_exp_avg_sq / (1.0f - pow(b2, step_num));
   float step = -lr * m_hat / (sqrt(v_hat) + eps);
@@ -27,7 +27,6 @@ __global__ void adam_kernel(const int N, const int S, float *__restrict__ param,
   param[p_idx] += step;
   exp_avg[p_idx] = register_exp_avg;
   exp_avg_sq[p_idx] = register_exp_avg_sq;
-  steps[step_idx]++;
 };
 
 void adam_step(float *params, float *const param_grads, float *exp_avg, float *exp_avg_sq, const float lr, int *steps,

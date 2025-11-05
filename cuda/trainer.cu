@@ -617,13 +617,9 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
 
 // A functor to compute the norm of a 2D gradient
 struct PositionalGradientNorm {
-  const float height;
-  const float width;
-
-  PositionalGradientNorm(float h, float w) : height(h), width(w) {}
   __host__ __device__ float operator()(const float2 &grad) const {
-    const float u = height * grad.x;
-    const float v = width * grad.y;
+    const float u = grad.x;
+    const float v = grad.y;
     return sqrtf(u * u + v * v);
   }
 };
@@ -669,6 +665,11 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
             thrust::raw_pointer_cast(d_m_quat.data()), thrust::raw_pointer_cast(d_v_quat.data()),
             config.base_lr * config.quat_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
             pass_data.num_culled, 4);
+
+  thrust::transform(d_steps.begin(), d_steps.end(), thrust::make_constant_iterator(1), d_steps.begin(),
+                    thrust::plus<int>());
+
+  scatter_masked_array<1>(d_steps, pass_data.d_mask, cuda.optimizer.d_training_steps);
 
   scatter_masked_array<3>(d_m_xyz, pass_data.d_mask, cuda.optimizer.m_grad_xyz);
   scatter_masked_array<3>(d_m_rgb, pass_data.d_mask, cuda.optimizer.m_grad_rgb);
@@ -754,7 +755,7 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
   thrust::transform(reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())),
                     reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())) +
                         pass_data.num_culled,
-                    d_uv_grad_norms.begin(), PositionalGradientNorm(curr_camera.params[0], curr_camera.params[1]));
+                    d_uv_grad_norms.begin(), PositionalGradientNorm());
   thrust::transform(d_uv_accum_compact.begin(), d_uv_accum_compact.end(), d_uv_grad_norms.begin(),
                     d_uv_accum_compact.begin(), thrust::plus<float>());
 
@@ -797,8 +798,6 @@ void TrainerImpl::train() {
 
   // TRAINING LOOP
   while (iter < config.num_iters) {
-    std::cout << "ITER " << iter << std::endl;
-    std::cout << "NUM GAUSSIANS " << num_gaussians << std::endl;
     ForwardPassData pass_data;
 
     Image curr_image = train_images[distr(gen)];
@@ -850,11 +849,27 @@ void TrainerImpl::train() {
     // --- BACKWARD PASS ---
     // Call Impl member function
     float loss = backward_pass(curr_image, curr_camera, pass_data, bg_color);
-    std::cout << "LOSS TOTAL " << loss << std::endl;
 
     // --- OPTIMIZER STEP ---
     // Call Impl member function
     optimizer_step(pass_data, curr_camera);
+
+    // --- SAVE RENDERED IMAGE (if at interval) ---
+    if (iter % 100 == 0) {
+      const int width = (int)curr_camera.width;
+      const int height = (int)curr_camera.height;
+      std::vector<float> h_image_buffer(width * height * 3);
+      thrust::copy(pass_data.d_image_buffer.begin(), pass_data.d_image_buffer.end(), h_image_buffer.begin());
+
+      cv::Mat rendered_image(height, width, CV_32FC3, h_image_buffer.data());
+      cv::Mat rendered_image_8u;
+      rendered_image.convertTo(rendered_image_8u, CV_8UC3, 255.0);
+      cv::cvtColor(rendered_image_8u, rendered_image_8u, cv::COLOR_RGB2BGR);
+
+      std::string filename = "rendered_image_" + std::to_string(iter) + ".png";
+      cv::imwrite(filename, rendered_image_8u);
+      std::cout << "Saved rendered image to " << filename << std::endl;
+    }
 
     // --- ADAPTIVE DENSITY ---
     if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&
@@ -867,6 +882,13 @@ void TrainerImpl::train() {
         iter < config.reset_opacity_end) {
       reset_opacity();
       reset_grad_accum();
+    }
+
+    // Log status
+    if (iter % 50 == 0) {
+      std::cout << "ITER " << iter << std::endl;
+      std::cout << "NUM GAUSSIANS " << num_gaussians << std::endl;
+      std::cout << "LOSS TOTAL " << loss << std::endl;
     }
 
     iter++;
