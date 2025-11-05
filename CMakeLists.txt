@@ -131,5 +131,5 @@ add_gtest_executable(cuda_backward_tests tests/cuda_backward_test.cpp gsplat_cud
 # --- CUDA Optimizer Tests ---
 add_gtest_executable(cuda_optimizer_tests tests/optimizer_test.cpp gsplat_cuda)
 
-## --- Adaptive Density Tests ---
-#add_gtest_executable(adaptive_density_tests tests/adaptive_density_test.cpp gsplat_cuda)
+# --- Adaptive Density Tests ---
+add_gtest_executable(adaptive_density_tests tests/adaptive_density_test.cpp gsplat_cuda)
