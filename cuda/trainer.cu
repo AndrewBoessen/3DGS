@@ -258,6 +258,10 @@ struct CombineMasks {
   }
 };
 
+struct BoolToInt {
+  __host__ __device__ int operator()(bool x) { return x ? 1 : 0; }
+};
+
 void TrainerImpl::adaptive_density_step() {
   // --- 1. Calculate Average Gradient Norms and Scale Max---
   thrust::device_vector<float> d_avg_uv_grad_norm(num_gaussians);
@@ -352,7 +356,9 @@ void TrainerImpl::adaptive_density_step() {
 
   if (num_to_clone > 0) {
     thrust::device_vector<int> clone_write_ids(num_gaussians);
-    thrust::exclusive_scan(d_clone_mask.begin(), d_clone_mask.end(), clone_write_ids.begin());
+    auto clone_int_mask_start = thrust::make_transform_iterator(d_clone_mask.begin(), BoolToInt());
+    auto clone_int_mask_end = thrust::make_transform_iterator(d_clone_mask.end(), BoolToInt());
+    thrust::exclusive_scan(clone_int_mask_start, clone_int_mask_end, clone_write_ids.begin());
     clone_gaussians(
         num_gaussians, num_sh_coeffs, thrust::raw_pointer_cast(d_clone_mask.data()),
         thrust::raw_pointer_cast(clone_write_ids.data()),
@@ -370,7 +376,9 @@ void TrainerImpl::adaptive_density_step() {
 
   if (num_to_split > 0) {
     thrust::device_vector<int> split_write_ids(num_gaussians);
-    thrust::exclusive_scan(d_split_mask.begin(), d_split_mask.end(), split_write_ids.begin());
+    auto split_int_mask_start = thrust::make_transform_iterator(d_split_mask.begin(), BoolToInt());
+    auto split_int_mask_end = thrust::make_transform_iterator(d_split_mask.end(), BoolToInt());
+    thrust::exclusive_scan(split_int_mask_start, split_int_mask_end, split_write_ids.begin());
     split_gaussians(
         num_gaussians, config.split_scale_factor, num_sh_coeffs, thrust::raw_pointer_cast(d_split_mask.data()),
         thrust::raw_pointer_cast(split_write_ids.data()), thrust::raw_pointer_cast(cuda.gaussians.d_xyz.data()),
