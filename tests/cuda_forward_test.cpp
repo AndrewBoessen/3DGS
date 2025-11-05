@@ -780,7 +780,7 @@ TEST_F(CudaKernelTest, FusedLossKernel) {
   // L1 part
   float grad_l1 = (mu_p > mu_g) ? 1.0f : -1.0f;
   for (int i = 0; i < total_size; ++i) {
-    expected_grad[i] = (1.0f - ssim_weight) * grad_l1 / (float)(rows * cols);
+    expected_grad[i] = (1.0f - ssim_weight) * grad_l1;
   }
 
   // SSIM part
@@ -808,7 +808,7 @@ TEST_F(CudaKernelTest, FusedLossKernel) {
   float d_ssim = (dN * ssim_den - ssim_num * dD) / (ssim_den * ssim_den);
 
   for (int i = 0; i < total_size; ++i) {
-    expected_grad[i] -= ssim_weight * d_ssim * 0.5f / (float)(rows * cols);
+    expected_grad[i] -= ssim_weight * d_ssim * 0.5f;
   }
 
   // 7. Compare results

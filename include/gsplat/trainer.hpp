@@ -68,9 +68,6 @@ private:
   /// @brief A vector of images designated for the training set.
   std::vector<Image> train_images;
 
-  /// @brief The scene extent
-  float extent = 0.0f;
-
   /// @brief The current training iteration
   int iter = 0;
   /// @brief The current spherical_harmonics band
@@ -115,7 +112,6 @@ private:
    * @param[in] curr_camera Current camera parameters
    * @param[in,out] cuda Device data to store gradients in
    * @param[in,out] pass_data Forward pass temporary buffers
-   * @param[in]     bg_color  Backgroud color to use
    * @return Loss value
    */
   float backward_pass(const Image &curr_image, const Camera &curr_camera, CudaDataManager &cuda,
@@ -125,9 +121,11 @@ private:
    * @brief Perform optimizer step to update Gaussian parameters
    * @param[in,out] cuda Device data to store gradients and parameters
    * @param[in,out] pass_data Current pass data
-   * @param[in] curr_camera Current camera parameters
+   * @param[in] iter The iteration number
+   * @param[in] num_gaussians Total number of trainable Gaussians
+   * @param[in] num_sh_coef The number of spherical harmonics coefficients
    */
-  void optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data, const Camera &curr_camera);
+  void optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data);
 
   /**
    * @brief Increases the spherical harmonics (SH) degree for all Gaussians.

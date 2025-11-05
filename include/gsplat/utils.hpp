@@ -15,30 +15,30 @@ struct ConfigParameters {
   int downsample_factor;
   int print_interval;
   int num_iters;
-  float ssim_frac;
+  double ssim_frac;
   int test_eval_interval;
   int test_split_ratio;
 
   // Initial Gaussian properties
-  float initial_opacity;
+  double initial_opacity;
   int initial_scale_num_neighbors;
-  float initial_scale_factor;
-  float max_initial_scale;
+  double initial_scale_factor;
+  double max_initial_scale;
 
   // Rendering thresholds
-  float near_thresh;
-  float far_thresh;
-  float mh_dist;
+  double near_thresh;
+  double far_thresh;
+  double mh_dist;
   int cull_mask_padding;
 
   // Learning rates
-  float base_lr;
-  float xyz_lr_multiplier;
-  float quat_lr_multiplier;
-  float scale_lr_multiplier;
-  float opacity_lr_multiplier;
-  float rgb_lr_multiplier;
-  float sh_lr_multiplier;
+  double base_lr;
+  double xyz_lr_multiplier;
+  double quat_lr_multiplier;
+  double scale_lr_multiplier;
+  double opacity_lr_multiplier;
+  double rgb_lr_multiplier;
+  double sh_lr_multiplier;
 
   // Background settings
   bool use_background;
@@ -46,7 +46,7 @@ struct ConfigParameters {
 
   // Opacity reset settings
   int reset_opacity_interval;
-  float reset_opacity_value;
+  double reset_opacity_value;
   int reset_opacity_start;
   int reset_opacity_end;
 
@@ -63,10 +63,14 @@ struct ConfigParameters {
   int adaptive_control_end;
   int adaptive_control_interval;
   int max_gaussians;
-  float delete_opacity_threshold;
-  float uv_grad_threshold;
-  float percent_dense;
-  float split_scale_factor;
+  double delete_opacity_threshold;
+  double clone_scale_threshold;
+  bool use_fractional_densification;
+  bool use_adaptive_fractional_densification;
+  double uv_grad_percentile;
+  double scale_norm_percentile;
+  double uv_grad_threshold;
+  double split_scale_factor;
   int num_split_samples;
 };
 

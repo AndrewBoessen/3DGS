@@ -108,7 +108,7 @@ __global__ void render_tiles_backward_kernel(
         const float c = _conic[i * 3 + 2];
 
         const float det = a * c - b * b;
-        const float reciprocal_det = __frcp_rn(det + 1e-9f);
+        const float reciprocal_det = __frcp_rn(det + 1e-6);
         const float mh_sq = (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff) * reciprocal_det;
 
         float g = 0.0f;
@@ -117,55 +117,59 @@ __global__ void render_tiles_backward_kernel(
         }
 
         // effective opacity
-        float alpha = fminf(0.9999f, _opacity[i] * g);
+        float alpha = fminf(0.999f, _opacity[i] * g);
 
-        // alpha reciprical
-        float ra = __frcp_rn(1.0f - alpha);
-        T *= ra;
+        // Gaussian does not contribute to image
+        if (alpha >= 0.004) {
 
-        const float fac = alpha * T;
+          // alpha reciprical
+          float ra = __frcp_rn(1.0f - alpha + 1e-6f);
+          T *= ra;
+
+          const float fac = alpha * T;
 
 #pragma unroll
-        for (int j = 0; j < 3; j++)
-          grad_rgb_local[j] = fac * grad_image_local[j];
+          for (int j = 0; j < 3; j++)
+            grad_rgb_local[j] = fac * grad_image_local[j];
 
-        float grad_alpha = 0.0f;
+          float grad_alpha = 0.0f;
 #pragma unroll
-        for (int j = 0; j < 3; j++)
-          grad_alpha += (_rgb[i * 3 + j] * T - color_accum[j] * ra) * grad_image_local[j];
+          for (int j = 0; j < 3; j++)
+            grad_alpha += (_rgb[i * 3 + j] * T - color_accum[j] * ra) * grad_image_local[j];
 
-        // opacity grad
-        grad_opa = grad_alpha * g;
-        // sigmoid gradient
-        grad_opa *= _opacity[i] * (1.0f - _opacity[i]);
+          // opacity grad
+          grad_opa = grad_alpha * g;
+          // sigmoid gradient
+          grad_opa *= _opacity[i] * (1.0f - _opacity[i]);
 
-        // gradient of gaussian probability
-        const float grad_g = grad_alpha * _opacity[i];
-        const float grad_mh = grad_g * (-0.5f * g);
+          // gradient of gaussian probability
+          const float grad_g = grad_alpha * _opacity[i];
+          const float grad_mh = grad_g * (-0.5f * g);
 
-        const float grad_u_mean_component = (2.0f * b * v_diff - 2.0f * c * u_diff) * reciprocal_det;
-        const float grad_v_mean_component = (2.0f * b * u_diff - 2.0f * a * v_diff) * reciprocal_det;
+          const float grad_u_mean_component = (2.0f * b * v_diff - 2.0f * c * u_diff) * reciprocal_det;
+          const float grad_v_mean_component = (2.0f * b * u_diff - 2.0f * a * v_diff) * reciprocal_det;
 
-        // UV gradients
-        grad_u = grad_mh * grad_u_mean_component;
-        grad_v = grad_mh * grad_v_mean_component;
+          // UV gradients
+          grad_u = grad_mh * grad_u_mean_component;
+          grad_v = grad_mh * grad_v_mean_component;
 
-        // Partial derivative of m^2 w.r.t. 'a'
-        const float d_mh_sq_d_a = ((v_diff * v_diff) - mh_sq * c) * reciprocal_det;
-        grad_conic_splat[0] = grad_mh * d_mh_sq_d_a;
+          // Partial derivative of m^2 w.r.t. 'a'
+          const float d_mh_sq_d_a = ((v_diff * v_diff) - mh_sq * c) * reciprocal_det;
+          grad_conic_splat[0] = grad_mh * d_mh_sq_d_a;
 
-        // Partial derivative of m^2 w.r.t. 'b'
-        const float d_mh_sq_d_b = (-2.0f * u_diff * v_diff + mh_sq * 2.0f * b) * reciprocal_det;
-        grad_conic_splat[1] = grad_mh * d_mh_sq_d_b;
+          // Partial derivative of m^2 w.r.t. 'b'
+          const float d_mh_sq_d_b = (-2.0f * u_diff * v_diff + mh_sq * 2.0f * b) * reciprocal_det;
+          grad_conic_splat[1] = grad_mh * d_mh_sq_d_b;
 
-        // Partial derivative of m^2 w.r.t. 'c'
-        const float d_mh_sq_d_c = ((u_diff * u_diff) - mh_sq * a) * reciprocal_det;
-        grad_conic_splat[2] = grad_mh * d_mh_sq_d_c;
+          // Partial derivative of m^2 w.r.t. 'c'
+          const float d_mh_sq_d_c = ((u_diff * u_diff) - mh_sq * a) * reciprocal_det;
+          grad_conic_splat[2] = grad_mh * d_mh_sq_d_c;
 
-        // Update color accum
+          // Update color accum
 #pragma unroll
-        for (int j = 0; j < 3; j++)
-          color_accum[j] += _rgb[i * 3 + j] * fac;
+          for (int j = 0; j < 3; j++)
+            color_accum[j] += _rgb[i * 3 + j] * fac;
+        }
       }
 
       tile_thread_group.sync();

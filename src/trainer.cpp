@@ -70,7 +70,7 @@ void Trainer::test_train_split() {
 
 void Trainer::reset_grad_accum(CudaDataManager &cuda) {
   CHECK_CUDA(cudaMemset(cuda.d_xyz_grad_accum, 0.0f, config.max_gaussians * 3 * sizeof(float)));
-  CHECK_CUDA(cudaMemset(cuda.d_uv_grad_accum, 0.0f, config.max_gaussians * sizeof(float)));
+  CHECK_CUDA(cudaMemset(cuda.d_uv_grad_accum, 0.0f, config.max_gaussians * 2 * sizeof(float)));
   CHECK_CUDA(cudaMemset(cuda.d_grad_accum_dur, 0, config.max_gaussians * sizeof(int)));
 }
 
@@ -129,14 +129,18 @@ void Trainer::add_sh_band(CudaDataManager &cuda, ForwardPassData &pass_data) {
 void Trainer::adaptive_density_step(CudaDataManager &cuda) {
   const int num_sh_coef = (l_max + 1) * (l_max + 1) - 1;
   const int total_size = adaptive_density(
-      num_gaussians, iter, num_sh_coef, config.max_gaussians, config.use_delete, config.use_clone, config.use_split,
-      config.delete_opacity_threshold, config.uv_grad_threshold, extent, config.percent_dense, config.num_split_samples,
-      config.split_scale_factor, cuda.d_uv_grad_accum, cuda.d_grad_accum_dur, cuda.d_scale, cuda.d_mask,
-      cuda.d_xyz_grad_accum, cuda.d_xyz, cuda.d_rgb, cuda.d_sh, cuda.d_opacity, cuda.d_quaternion, cuda.m_grad_xyz,
-      cuda.v_grad_xyz, cuda.m_grad_rgb, cuda.v_grad_rgb, cuda.m_grad_opacity, cuda.v_grad_opacity, cuda.m_grad_scale,
-      cuda.v_grad_scale, cuda.m_grad_quaternion, cuda.v_grad_quaternion, cuda.m_grad_sh, cuda.v_grad_sh);
+      num_gaussians, iter, num_sh_coef, config.use_adaptive_fractional_densification, config.adaptive_control_end,
+      config.adaptive_control_start, config.uv_grad_threshold, config.use_fractional_densification,
+      config.uv_grad_percentile, config.scale_norm_percentile, config.max_gaussians, config.use_delete,
+      config.use_clone, config.use_split, config.delete_opacity_threshold, config.clone_scale_threshold,
+      config.num_split_samples, config.split_scale_factor, cuda.d_uv_grad_accum, cuda.d_grad_accum_dur, cuda.d_scale,
+      cuda.d_mask, cuda.d_xyz_grad_accum, cuda.d_xyz, cuda.d_rgb, cuda.d_sh, cuda.d_opacity, cuda.d_quaternion,
+      cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_rgb, cuda.v_grad_rgb, cuda.m_grad_opacity, cuda.v_grad_opacity,
+      cuda.m_grad_scale, cuda.v_grad_scale, cuda.m_grad_quaternion, cuda.v_grad_quaternion, cuda.m_grad_sh,
+      cuda.v_grad_sh);
 
   int new_gaussian_size = mask_sum(total_size, cuda.d_mask);
+  printf("MASK SUM %d\n", new_gaussian_size);
 
   // --- FILTER PHASE ---
 
@@ -282,7 +286,7 @@ float Trainer::backward_pass(const Image &curr_image, const Camera &curr_camera,
   return loss;
 }
 
-void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data, const Camera &curr_camera) {
+void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_data) {
   // Select moment vectors by filtering based on the culled mask
   filter_moment_vectors(num_gaussians, 3, cuda.d_mask, cuda.m_grad_xyz, cuda.v_grad_xyz, cuda.m_grad_xyz_culled,
                         cuda.v_grad_xyz_culled);
@@ -345,8 +349,8 @@ void Trainer::optimizer_step(CudaDataManager &cuda, const ForwardPassData &pass_
   }
 
   // Update gradient accumulators
-  accumulate_gradients(num_gaussians, curr_camera.params[0], curr_camera.params[1], cuda.d_mask, cuda.d_grad_xyz,
-                       cuda.d_grad_uv, cuda.d_xyz_grad_accum, cuda.d_uv_grad_accum, cuda.d_grad_accum_dur);
+  accumulate_gradients(num_gaussians, cuda.d_mask, cuda.d_grad_xyz, cuda.d_grad_uv, cuda.d_xyz_grad_accum,
+                       cuda.d_uv_grad_accum, cuda.d_grad_accum_dur);
 }
 
 void Trainer::cleanup_iteration_buffers(ForwardPassData &pass_data) {
@@ -364,10 +368,6 @@ void Trainer::cleanup_iteration_buffers(ForwardPassData &pass_data) {
 void Trainer::train() {
   // Setup: Initialize CUDA data manager and data splits
   CudaDataManager cuda(config.max_gaussians);
-
-  // Find scene extent
-  extent = 1.1f * computeMaxDiagonal(images);
-  std::cout << "SCENE EXTENT " << extent << std::endl;
 
   reset_grad_accum(cuda);
 
@@ -456,7 +456,7 @@ void Trainer::train() {
     std::cout << "LOSS TOTAL " << loss << std::endl;
 
     // --- OPTIMIZER STEP ---
-    optimizer_step(cuda, pass_data, curr_camera);
+    optimizer_step(cuda, pass_data);
 
     // --- ADAPTIVE DENSITY ---
     if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&

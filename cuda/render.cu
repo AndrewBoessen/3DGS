@@ -101,10 +101,14 @@ __global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *
         // Apply sigmoid to opacity
         float opa = __frcp_rn(1.0f + __expf(-_opacity[i]));
         // Calculate alpha based on opacity and Gaussian falloff
-        const float alpha = fminf(0.9999f, opa * __expf(-0.5f * mh_sq));
+        const float alpha = opa * __expf(-0.5f * mh_sq);
 
         // Alpha blending: C_out = α * C_in + (1 - α) * C_bg
         const float weight = alpha * (1.0f - alpha_accum);
+        if (weight <= 1e-4f) {
+          num_splats++;
+          continue; // Skip negligible contributions
+        }
 
         const int base_rgb_id = i * 3;
         accumulated_rgb.x += _rgb[base_rgb_id + 0] * weight;
