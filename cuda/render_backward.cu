@@ -123,7 +123,7 @@ __global__ void render_tiles_backward_kernel(
         if (alpha >= 0.0f) {
 
           // alpha reciprical
-          float ra = __frcp_rn(1.0f - alpha + 1e-6f);
+          float ra = __frcp_rn(1.0f - alpha);
           T *= ra;
 
           const float fac = alpha * T;

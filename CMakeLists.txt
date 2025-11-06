@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_ARCHITECTURES native)
+#set(CMAKE_CUDA_FLAGS_DEBUG "-g -G")
 # ===================================================================
 # DEPENDENCIES
 # ===================================================================

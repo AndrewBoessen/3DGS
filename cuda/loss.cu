@@ -40,7 +40,7 @@ __global__ void fused_loss_kernel(const float *__restrict__ image, const float *
     return;
   }
   const int idx = y * cols + x;
-  const float grad_scale = 1.0f / (float)(rows * cols);
+  const float grad_scale = __frcp_rn((float)(rows * cols));
 
   float pixel_l1_loss = 0.0f;
   float pixel_ssim_loss = 0.0f;

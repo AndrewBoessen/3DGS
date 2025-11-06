@@ -9,6 +9,7 @@
 #include "gsplat_cuda/optimizer.cuh"
 #include "gsplat_cuda/raster.cuh"
 #include "thrust/detail/raw_pointer_cast.h"
+#include "thrust/iterator/constant_iterator.h"
 #include "thrust/iterator/zip_iterator.h"
 
 #include <Eigen/Dense>
@@ -64,6 +65,7 @@ private:
 
   void reset_grad_accum();
   void reset_opacity();
+  void zero_grads();
   float backward_pass(const Image &curr_image, const Camera &curr_camera, ForwardPassData &pass_data,
                       const float bg_color);
   void optimizer_step(ForwardPassData pass_data, const Camera &curr_camera);
@@ -115,6 +117,22 @@ void TrainerImpl::reset_opacity() {
   const float new_opc = log(opc) - log(1.0f - opc);
 
   thrust::fill_n(cuda.gaussians.d_opacity.begin(), num_gaussians, new_opc);
+}
+
+void TrainerImpl::zero_grads() {
+  thrust::fill_n(cuda.gradients.d_grad_xyz.begin(), num_gaussians * 3, 0.0f);
+  thrust::fill_n(cuda.gradients.d_grad_rgb.begin(), num_gaussians * 3, 0.0f);
+  thrust::fill_n(cuda.gradients.d_grad_sh.begin(), num_gaussians * 15 * 3, 0.0f);
+  thrust::fill_n(cuda.gradients.d_grad_opacity.begin(), num_gaussians, 0.0f);
+  thrust::fill_n(cuda.gradients.d_grad_scale.begin(), num_gaussians * 3, 0.0f);
+  thrust::fill_n(cuda.gradients.d_grad_quaternion.begin(), num_gaussians * 4, 0.0f);
+
+  thrust::fill_n(cuda.gradients.d_grad_conic.begin(), num_gaussians * 3, 0.0f);
+  thrust::fill_n(cuda.gradients.d_grad_uv.begin(), num_gaussians * 2, 0.0f);
+  thrust::fill_n(cuda.gradients.d_grad_J.begin(), num_gaussians * 6, 0.0f);
+  thrust::fill_n(cuda.gradients.d_grad_sigma.begin(), num_gaussians * 9, 0.0f);
+  thrust::fill_n(cuda.gradients.d_grad_xyz_c.begin(), num_gaussians * 3, 0.0f);
+  thrust::fill_n(cuda.gradients.d_grad_precompute_rgb.begin(), num_gaussians * 3, 0.0f);
 }
 
 struct SHIndexMapper {
@@ -617,9 +635,12 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
 
 // A functor to compute the norm of a 2D gradient
 struct PositionalGradientNorm {
+  const int u_scale;
+  const int v_scale;
+  PositionalGradientNorm(int us, int vs) : u_scale(us), v_scale(vs) {}
   __host__ __device__ float operator()(const float2 &grad) const {
-    const float u = grad.x;
-    const float v = grad.y;
+    const float u = grad.x * u_scale;
+    const float v = grad.y * v_scale;
     return sqrtf(u * u + v * v);
   }
 };
@@ -665,11 +686,6 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
             thrust::raw_pointer_cast(d_m_quat.data()), thrust::raw_pointer_cast(d_v_quat.data()),
             config.base_lr * config.quat_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
             pass_data.num_culled, 4);
-
-  thrust::transform(d_steps.begin(), d_steps.end(), thrust::make_constant_iterator(1), d_steps.begin(),
-                    thrust::plus<int>());
-
-  scatter_masked_array<1>(d_steps, pass_data.d_mask, cuda.optimizer.d_training_steps);
 
   scatter_masked_array<3>(d_m_xyz, pass_data.d_mask, cuda.optimizer.m_grad_xyz);
   scatter_masked_array<3>(d_m_rgb, pass_data.d_mask, cuda.optimizer.m_grad_rgb);
@@ -742,6 +758,12 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
     }
   }
 
+  // Increment training step number
+  thrust::transform(d_steps.begin(), d_steps.end(), thrust::make_constant_iterator(1), d_steps.begin(),
+                    thrust::plus<int>());
+
+  scatter_masked_array<1>(d_steps, pass_data.d_mask, cuda.optimizer.d_training_steps);
+
   // Update gradient accumulators after step
   // Compact
   auto d_uv_accum_compact =
@@ -755,16 +777,16 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
   thrust::transform(reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())),
                     reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())) +
                         pass_data.num_culled,
-                    d_uv_grad_norms.begin(), PositionalGradientNorm());
+                    d_uv_grad_norms.begin(), PositionalGradientNorm(curr_camera.params[0], curr_camera.params[1]));
   thrust::transform(d_uv_accum_compact.begin(), d_uv_accum_compact.end(), d_uv_grad_norms.begin(),
                     d_uv_accum_compact.begin(), thrust::plus<float>());
 
   thrust::transform(d_xyz_accum_compact.begin(), d_xyz_accum_compact.end(), cuda.gradients.d_grad_xyz.begin(),
                     d_xyz_accum_compact.begin(), thrust::plus<float>());
 
-  thrust::device_vector<int> d_ones(pass_data.num_culled, 1);
-  thrust::transform(d_accum_dur_compact.begin(), d_accum_dur_compact.end(), d_ones.begin(), d_accum_dur_compact.begin(),
-                    thrust::plus<int>());
+  thrust::transform(d_accum_dur_compact.begin(), d_accum_dur_compact.end(), thrust::make_constant_iterator(1),
+                    d_accum_dur_compact.begin(), thrust::plus<int>());
+
   // Scatter
   scatter_masked_array<1>(d_uv_accum_compact, pass_data.d_mask, cuda.accumulators.d_uv_grad_accum);
   scatter_masked_array<3>(d_xyz_accum_compact, pass_data.d_mask, cuda.accumulators.d_xyz_grad_accum);
@@ -803,6 +825,8 @@ void TrainerImpl::train() {
     Image curr_image = train_images[distr(gen)];
     Camera curr_camera = cameras[curr_image.camera_id];
 
+    zero_grads();
+
     // Prepare and copy camera parameters to device (member 'cuda.camera')
     float h_K[9] = {(float)curr_camera.params[0],
                     0.f,
@@ -838,7 +862,6 @@ void TrainerImpl::train() {
       add_sh_band();
 
     // --- FORWARD PASS via RASTERIZE MODULE ---
-    // Uses member 'cuda'
     rasterize_image(num_gaussians, curr_camera, config, cuda.camera, cuda.gaussians, pass_data, bg_color, l_max);
 
     if (pass_data.num_culled == 0) {
@@ -855,7 +878,7 @@ void TrainerImpl::train() {
     optimizer_step(pass_data, curr_camera);
 
     // --- SAVE RENDERED IMAGE (if at interval) ---
-    if (iter % 100 == 0) {
+    if (iter % 500 == 0) {
       const int width = (int)curr_camera.width;
       const int height = (int)curr_camera.height;
       std::vector<float> h_image_buffer(width * height * 3);
