@@ -17,9 +17,6 @@ struct GaussianParameters {
 
 // Holds the momentum vectors for the Adam optimizer.
 struct OptimizerParameters {
-  // A device-side variable to track training steps, can be used for learning rate schedules.
-  thrust::device_vector<int> d_training_steps;
-
   // Optimizer moment vectors
   thrust::device_vector<float> m_grad_xyz, m_grad_rgb, m_grad_sh, m_grad_opacity, m_grad_scale, m_grad_quaternion;
   thrust::device_vector<float> v_grad_xyz, v_grad_rgb, v_grad_sh, v_grad_opacity, v_grad_scale, v_grad_quaternion;

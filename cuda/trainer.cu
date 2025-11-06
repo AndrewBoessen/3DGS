@@ -445,8 +445,6 @@ void TrainerImpl::adaptive_density_step() {
   auto keep_scale_v = compact_masked_array<3>(cuda.optimizer.v_grad_scale, d_keep_mask, keep_size);
   auto keep_quat_v = compact_masked_array<4>(cuda.optimizer.v_grad_quaternion, d_keep_mask, keep_size);
 
-  auto keep_training_steps = compact_masked_array<1>(cuda.optimizer.d_training_steps, d_keep_mask, keep_size);
-
   // Select SH params and optimizer states
   thrust::device_vector<float> keep_sh;
   thrust::device_vector<float> keep_sh_m;
@@ -488,9 +486,6 @@ void TrainerImpl::adaptive_density_step() {
   thrust::fill(cuda.optimizer.v_grad_quaternion.begin(), cuda.optimizer.v_grad_quaternion.end(), 0.0f);
   thrust::fill(cuda.optimizer.v_grad_sh.begin(), cuda.optimizer.v_grad_sh.end(), 0.0f);
 
-  // Set step values
-  thrust::fill(cuda.optimizer.d_training_steps.begin() + keep_size, cuda.optimizer.d_training_steps.end(), 1);
-
   // Fill with kept Gaussians
   thrust::copy(keep_xyz.begin(), keep_xyz.end(), cuda.gaussians.d_xyz.begin());
   thrust::copy(keep_rgb.begin(), keep_rgb.end(), cuda.gaussians.d_rgb.begin());
@@ -509,8 +504,6 @@ void TrainerImpl::adaptive_density_step() {
   thrust::copy(keep_op_v.begin(), keep_op_v.end(), cuda.optimizer.v_grad_opacity.begin());
   thrust::copy(keep_scale_v.begin(), keep_scale_v.end(), cuda.optimizer.v_grad_scale.begin());
   thrust::copy(keep_quat_v.begin(), keep_quat_v.end(), cuda.optimizer.v_grad_quaternion.begin());
-
-  thrust::copy(keep_training_steps.begin(), keep_training_steps.end(), cuda.optimizer.d_training_steps.begin());
 
   if (l_max > 0) {
     thrust::copy(keep_sh.begin(), keep_sh.end(), cuda.gaussians.d_sh.begin());
@@ -664,28 +657,21 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
   auto d_v_scale = compact_masked_array<3>(cuda.optimizer.v_grad_scale, pass_data.d_mask, pass_data.num_culled);
   auto d_v_quat = compact_masked_array<4>(cuda.optimizer.v_grad_quaternion, pass_data.d_mask, pass_data.num_culled);
 
-  auto d_steps = compact_masked_array<1>(cuda.optimizer.d_training_steps, pass_data.d_mask, pass_data.num_culled);
-
   adam_step(thrust::raw_pointer_cast(d_xyz.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz.data()),
             thrust::raw_pointer_cast(d_m_xyz.data()), thrust::raw_pointer_cast(d_v_xyz.data()),
-            config.base_lr * config.xyz_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
-            pass_data.num_culled, 3);
+            config.base_lr * config.xyz_lr_multiplier, iter + 1, B1, B2, EPS, pass_data.num_culled, 3);
   adam_step(thrust::raw_pointer_cast(d_rgb.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_rgb.data()),
             thrust::raw_pointer_cast(d_m_rgb.data()), thrust::raw_pointer_cast(d_v_rgb.data()),
-            config.base_lr * config.rgb_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
-            pass_data.num_culled, 3);
+            config.base_lr * config.rgb_lr_multiplier, iter + 1, B1, B2, EPS, pass_data.num_culled, 3);
   adam_step(thrust::raw_pointer_cast(d_op.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_opacity.data()),
             thrust::raw_pointer_cast(d_m_op.data()), thrust::raw_pointer_cast(d_v_op.data()),
-            config.base_lr * config.opacity_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
-            pass_data.num_culled, 1);
+            config.base_lr * config.opacity_lr_multiplier, iter + 1, B1, B2, EPS, pass_data.num_culled, 1);
   adam_step(thrust::raw_pointer_cast(d_scale.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_scale.data()),
             thrust::raw_pointer_cast(d_m_scale.data()), thrust::raw_pointer_cast(d_v_scale.data()),
-            config.base_lr * config.scale_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
-            pass_data.num_culled, 3);
+            config.base_lr * config.scale_lr_multiplier, iter + 1, B1, B2, EPS, pass_data.num_culled, 3);
   adam_step(thrust::raw_pointer_cast(d_quat.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_quaternion.data()),
             thrust::raw_pointer_cast(d_m_quat.data()), thrust::raw_pointer_cast(d_v_quat.data()),
-            config.base_lr * config.quat_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
-            pass_data.num_culled, 4);
+            config.base_lr * config.quat_lr_multiplier, iter + 1, B1, B2, EPS, pass_data.num_culled, 4);
 
   scatter_masked_array<3>(d_m_xyz, pass_data.d_mask, cuda.optimizer.m_grad_xyz);
   scatter_masked_array<3>(d_m_rgb, pass_data.d_mask, cuda.optimizer.m_grad_rgb);
@@ -720,8 +706,7 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
 
       adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
                 thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
-                config.base_lr * config.sh_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
-                pass_data.num_culled, 9);
+                config.base_lr * config.sh_lr_multiplier, iter + 1, B1, B2, EPS, pass_data.num_culled, 9);
 
       scatter_masked_array<9>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
       scatter_masked_array<9>(d_v_sh, pass_data.d_mask, cuda.optimizer.v_grad_sh);
@@ -733,8 +718,7 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
       d_v_sh = compact_masked_array<24>(cuda.optimizer.v_grad_sh, pass_data.d_mask, pass_data.num_culled);
       adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
                 thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
-                config.base_lr * config.sh_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
-                pass_data.num_culled, 24);
+                config.base_lr * config.sh_lr_multiplier, iter + 1, B1, B2, EPS, pass_data.num_culled, 24);
 
       scatter_masked_array<24>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
       scatter_masked_array<24>(d_v_sh, pass_data.d_mask, cuda.optimizer.v_grad_sh);
@@ -743,11 +727,10 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
     case 3:
       d_sh = compact_masked_array<45>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
       d_m_sh = compact_masked_array<45>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
-      d_v_sh = compact_masked_array<45>(cuda.optimizer.v_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      d_v_sh = compaet_masked_array<45>(cuda.optimizer.v_grad_sh, pass_data.d_mask, pass_data.num_culled);
       adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
                 thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
-                config.base_lr * config.sh_lr_multiplier, thrust::raw_pointer_cast(d_steps.data()), B1, B2, EPS,
-                pass_data.num_culled, 45);
+                config.base_lr * config.sh_lr_multiplier, iter + 1, B1, B2, EPS, pass_data.num_culled, 45);
       scatter_masked_array<45>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
       scatter_masked_array<45>(d_v_sh, pass_data.d_mask, cuda.optimizer.v_grad_sh);
       scatter_masked_array<45>(d_sh, pass_data.d_mask, cuda.gaussians.d_sh);
@@ -757,12 +740,6 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
       exit(EXIT_FAILURE);
     }
   }
-
-  // Increment training step number
-  thrust::transform(d_steps.begin(), d_steps.end(), thrust::make_constant_iterator(1), d_steps.begin(),
-                    thrust::plus<int>());
-
-  scatter_masked_array<1>(d_steps, pass_data.d_mask, cuda.optimizer.d_training_steps);
 
   // Update gradient accumulators after step
   // Compact

@@ -22,8 +22,6 @@ GaussianParameters::GaussianParameters(size_t max_gaussians) {
 
 OptimizerParameters::OptimizerParameters(size_t max_gaussians) {
   try {
-    d_training_steps.resize(max_gaussians);
-
     m_grad_xyz.resize(max_gaussians * 3);
     m_grad_rgb.resize(max_gaussians * 3);
     m_grad_sh.resize(max_gaussians * 15 * 3);
@@ -39,8 +37,6 @@ OptimizerParameters::OptimizerParameters(size_t max_gaussians) {
     v_grad_quaternion.resize(max_gaussians * 4);
 
     // Intialize states
-    thrust::fill(d_training_steps.begin(), d_training_steps.end(), 1);
-
     thrust::fill(m_grad_xyz.begin(), m_grad_xyz.end(), 0.0f);
     thrust::fill(m_grad_rgb.begin(), m_grad_rgb.end(), 0.0f);
     thrust::fill(m_grad_sh.begin(), m_grad_sh.end(), 0.0f);
