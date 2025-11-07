@@ -2,6 +2,7 @@
 
 #include "gsplat/trainer.hpp"
 
+#include "gsplat/progress_bar.hpp"
 #include "gsplat_cuda/adaptive_density.cuh"
 #include "gsplat_cuda/cuda_backward.cuh"
 #include "gsplat_cuda/cuda_data.cuh"
@@ -360,8 +361,8 @@ void TrainerImpl::adaptive_density_step() {
     return; // Nothing to do
   }
 
-  std::cout << "ADAPTIVE DENSITY: Pruning " << num_to_prune << ", Cloning " << num_to_clone << ", Splitting "
-            << num_to_split << ". (Net change: " << (new_num_gaussians - num_gaussians) << ")" << std::endl;
+  // std::cerr << "ADAPTIVE DENSITY: Pruning " << num_to_prune << ", Cloning " << num_to_clone << ", Splitting "
+  //           << num_to_split << ". (Net change: " << (new_num_gaussians - num_gaussians) << ")" << std::endl;
 
   // --- 6. Generate New Gaussian Parameters (Kernels) ---
   const int num_sh_coeffs = (l_max > 0) ? ((l_max + 1) * (l_max + 1) - 1) : 0;
@@ -804,7 +805,7 @@ void TrainerImpl::train() {
   std::mt19937 gen(rd());
   std::uniform_int_distribution<> distr(0, train_images.size() - 1);
 
-  float total_loss = 0.0f;
+  ProgressBar progressBar(config.num_iters);
 
   // TRAINING LOOP
   while (iter < config.num_iters) {
@@ -837,7 +838,7 @@ void TrainerImpl::train() {
       thrust::copy(h_K, h_K + 9, cuda.camera.d_K.begin());
       thrust::copy(h_T, h_T + 12, cuda.camera.d_T.begin());
     } catch (const std::exception &e) {
-      fprintf(stderr, "Error copying camera data to device: %s\n", e.what());
+      fprintf(stderr, "Error copying camera data to device: %s\\n", e.what());
       exit(EXIT_FAILURE);
     }
 
@@ -861,7 +862,6 @@ void TrainerImpl::train() {
     // --- BACKWARD PASS ---
     // Call Impl member function
     float loss = backward_pass(curr_image, curr_camera, pass_data, bg_color);
-    total_loss += loss;
 
     // --- OPTIMIZER STEP ---
     // Call Impl member function
@@ -881,7 +881,6 @@ void TrainerImpl::train() {
 
       std::string filename = "rendered_image_" + std::to_string(iter) + ".png";
       cv::imwrite(filename, rendered_image_8u);
-      std::cout << "Saved rendered image to " << filename << std::endl;
     }
 
     // --- ADAPTIVE DENSITY ---
@@ -898,15 +897,11 @@ void TrainerImpl::train() {
     }
 
     // Log status
-    if (iter % 50 == 0) {
-      std::cout << "ITER " << iter << std::endl;
-      std::cout << "NUM GAUSSIANS " << num_gaussians << std::endl;
-      std::cout << "LOSS " << total_loss / 50.0f << std::endl;
-      total_loss = 0.0f;
-    }
+    progressBar.update(iter, loss, num_gaussians);
 
     iter++;
   }
+  progressBar.finish();
 }
 
 // --- Implementation of Public Trainer Methods ---
