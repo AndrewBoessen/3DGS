@@ -14,6 +14,7 @@
 
 #include <Eigen/Dense>
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -109,6 +110,7 @@ void TrainerImpl::test_train_split() {
 void TrainerImpl::reset_grad_accum() {
   thrust::fill_n(cuda.accumulators.d_uv_grad_accum.begin(), num_gaussians, 0.0f);
   thrust::fill_n(cuda.accumulators.d_xyz_grad_accum.begin(), num_gaussians * 3, 0.0f);
+  thrust::fill_n(cuda.accumulators.d_max_radii.begin(), num_gaussians, 0.0f);
   thrust::fill_n(cuda.accumulators.d_grad_accum_dur.begin(), num_gaussians, 0);
 }
 
@@ -214,12 +216,14 @@ struct ComputeScaleMax {
 struct IdentifyPrune {
   const float op_threshold;
   const float scale_max;
+  const float radii_max;
 
-  IdentifyPrune(float ot, float sm) : op_threshold(ot), scale_max(sm) {}
+  IdentifyPrune(float ot, float sm, float rm) : op_threshold(ot), scale_max(sm), radii_max(rm) {}
 
-  __host__ __device__ bool operator()(const thrust::tuple<float, float> &t) const {
+  __host__ __device__ bool operator()(const thrust::tuple<float, float, float> &t) const {
     float opacity_logit = thrust::get<0>(t);
     float scale = thrust::get<1>(t);
+    float radii = thrust::get<2>(t);
 
     // Prune if opacity is too low
     if (opacity_logit < op_threshold)
@@ -227,6 +231,10 @@ struct IdentifyPrune {
 
     // Prune if scale is too large
     if (scale > scale_max)
+      return true;
+
+    // Prune if max_radii is too large
+    if (radii > radii_max)
       return true;
 
     return false;
@@ -306,13 +314,14 @@ void TrainerImpl::adaptive_density_step() {
   // Inverse sigmoid: log(p / (1-p))
   const float op_threshold = logf(config.delete_opacity_threshold) - logf(1.0f - config.delete_opacity_threshold);
 
-  auto prune_iter_start =
-      thrust::make_zip_iterator(thrust::make_tuple(cuda.gaussians.d_opacity.begin(), d_scale_max.begin()));
+  auto prune_iter_start = thrust::make_zip_iterator(
+      thrust::make_tuple(cuda.gaussians.d_opacity.begin(), d_scale_max.begin(), cuda.accumulators.d_max_radii.begin()));
   auto prune_iter_end = prune_iter_start + num_gaussians;
 
   thrust::device_vector<bool> d_prune_mask(num_gaussians);
+  const float radii_threshold = iter > config.reset_opacity_interval ? 20.0f : FLT_MAX;
   thrust::transform(prune_iter_start, prune_iter_end, d_prune_mask.begin(),
-                    IdentifyPrune(op_threshold, config.max_scale));
+                    IdentifyPrune(op_threshold, config.max_scale, radii_threshold));
 
   int num_to_prune = thrust::count(d_prune_mask.begin(), d_prune_mask.end(), true);
 
@@ -727,7 +736,7 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, const Camera &curr_c
     case 3:
       d_sh = compact_masked_array<45>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
       d_m_sh = compact_masked_array<45>(cuda.optimizer.m_grad_sh, pass_data.d_mask, pass_data.num_culled);
-      d_v_sh = compaet_masked_array<45>(cuda.optimizer.v_grad_sh, pass_data.d_mask, pass_data.num_culled);
+      d_v_sh = compact_masked_array<45>(cuda.optimizer.v_grad_sh, pass_data.d_mask, pass_data.num_culled);
       adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
                 thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
                 config.base_lr * config.sh_lr_multiplier, iter + 1, B1, B2, EPS, pass_data.num_culled, 45);
@@ -795,6 +804,8 @@ void TrainerImpl::train() {
   std::mt19937 gen(rd());
   std::uniform_int_distribution<> distr(0, train_images.size() - 1);
 
+  float total_loss = 0.0f;
+
   // TRAINING LOOP
   while (iter < config.num_iters) {
     ForwardPassData pass_data;
@@ -839,7 +850,8 @@ void TrainerImpl::train() {
       add_sh_band();
 
     // --- FORWARD PASS via RASTERIZE MODULE ---
-    rasterize_image(num_gaussians, curr_camera, config, cuda.camera, cuda.gaussians, pass_data, bg_color, l_max);
+    rasterize_image(num_gaussians, curr_camera, config, cuda.camera, cuda.gaussians, pass_data, cuda.accumulators,
+                    bg_color, l_max);
 
     if (pass_data.num_culled == 0) {
       std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;
@@ -849,6 +861,7 @@ void TrainerImpl::train() {
     // --- BACKWARD PASS ---
     // Call Impl member function
     float loss = backward_pass(curr_image, curr_camera, pass_data, bg_color);
+    total_loss += loss;
 
     // --- OPTIMIZER STEP ---
     // Call Impl member function
@@ -888,7 +901,8 @@ void TrainerImpl::train() {
     if (iter % 50 == 0) {
       std::cout << "ITER " << iter << std::endl;
       std::cout << "NUM GAUSSIANS " << num_gaussians << std::endl;
-      std::cout << "LOSS TOTAL " << loss << std::endl;
+      std::cout << "LOSS " << total_loss / 50.0f << std::endl;
+      total_loss = 0.0f;
     }
 
     iter++;

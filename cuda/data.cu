@@ -81,11 +81,13 @@ GradientAccumulators::GradientAccumulators(size_t max_gaussians) {
   try {
     d_xyz_grad_accum.resize(max_gaussians * 3);
     d_uv_grad_accum.resize(max_gaussians);
+    d_max_radii.resize(max_gaussians);
     d_grad_accum_dur.resize(max_gaussians);
 
     // Zero out accumulators
     thrust::fill(d_xyz_grad_accum.begin(), d_xyz_grad_accum.end(), 0.0f);
     thrust::fill(d_uv_grad_accum.begin(), d_uv_grad_accum.end(), 0.0f);
+    thrust::fill(d_max_radii.begin(), d_max_radii.end(), 0.0f);
     thrust::fill(d_grad_accum_dur.begin(), d_grad_accum_dur.end(), 0);
   } catch (const std::exception &e) {
     fprintf(stderr, "CUDA Memory Allocation Error (GradientAccumulators): %s\n", e.what());

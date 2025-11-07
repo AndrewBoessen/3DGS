@@ -9,7 +9,7 @@
 
 void rasterize_image(const int num_gaussians, const Camera &camera, const ConfigParameters &config,
                      CameraParameters &camera_parameters, GaussianParameters &gaussians, ForwardPassData &pass_data,
-                     const float bg_color, const int l_max) {
+                     GradientAccumulators &accum, const float bg_color, const int l_max) {
   const int width = (int)camera.width;
   const int height = (int)camera.height;
 
@@ -93,10 +93,11 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
   const int n_tiles_y = (height + TILE_SIZE_FWD - 1) / TILE_SIZE_FWD;
   const int n_tiles = n_tiles_x * n_tiles_y;
   size_t sorted_gaussian_size = 0;
-  get_sorted_gaussian_list(thrust::raw_pointer_cast(d_uv_selected.data()),
-                           thrust::raw_pointer_cast(d_xyz_c_selected.data()),
-                           thrust::raw_pointer_cast(pass_data.d_conic.data()), n_tiles_x, n_tiles_y, config.mh_dist,
-                           pass_data.num_culled, sorted_gaussian_size, nullptr, nullptr);
+  auto d_max_radii_compact = compact_masked_array<1>(accum.d_max_radii, pass_data.d_mask, pass_data.num_culled);
+  get_sorted_gaussian_list(
+      thrust::raw_pointer_cast(d_uv_selected.data()), thrust::raw_pointer_cast(d_xyz_c_selected.data()),
+      thrust::raw_pointer_cast(pass_data.d_conic.data()), n_tiles_x, n_tiles_y, config.mh_dist, pass_data.num_culled,
+      sorted_gaussian_size, nullptr, nullptr, thrust::raw_pointer_cast(d_max_radii_compact.data()));
 
   pass_data.d_splat_start_end_idx_by_tile_idx.resize(n_tiles + 1);
   pass_data.d_sorted_gaussians.resize(sorted_gaussian_size);
@@ -105,7 +106,11 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
       thrust::raw_pointer_cast(d_uv_selected.data()), thrust::raw_pointer_cast(d_xyz_c_selected.data()),
       thrust::raw_pointer_cast(pass_data.d_conic.data()), n_tiles_x, n_tiles_y, config.mh_dist, pass_data.num_culled,
       sorted_gaussian_size, thrust::raw_pointer_cast(pass_data.d_sorted_gaussians.data()),
-      thrust::raw_pointer_cast(pass_data.d_splat_start_end_idx_by_tile_idx.data()));
+      thrust::raw_pointer_cast(pass_data.d_splat_start_end_idx_by_tile_idx.data()),
+      thrust::raw_pointer_cast(d_max_radii_compact.data()));
+
+  // scatter back compact max_radii to correct gaussians
+  scatter_masked_array<1>(d_max_radii_compact, pass_data.d_mask, accum.d_max_radii);
 
   // Step 6: Render the final image
   pass_data.d_image_buffer.resize(height * width * 3);
