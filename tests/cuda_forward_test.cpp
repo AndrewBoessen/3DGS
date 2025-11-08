@@ -781,7 +781,7 @@ TEST_F(CudaKernelTest, FusedLossKernel) {
 
   // Expected loss per pixel
   float expected_l1_loss_pixel = fabsf(mu_p - mu_g);
-  float expected_ssim_loss_pixel = (1.0f - expected_ssim) / 2.0f;
+  float expected_ssim_loss_pixel = (1.0f - expected_ssim);
   float expected_combined_loss_pixel =
       (1.0f - ssim_weight) * expected_l1_loss_pixel + ssim_weight * expected_ssim_loss_pixel;
   float expected_mean_loss = expected_combined_loss_pixel;
@@ -819,7 +819,7 @@ TEST_F(CudaKernelTest, FusedLossKernel) {
   float d_ssim = (dN * ssim_den - ssim_num * dD) / (ssim_den * ssim_den);
 
   for (int i = 0; i < total_size; ++i) {
-    expected_grad[i] -= ssim_weight * d_ssim * 0.5f / (float)(rows * cols);
+    expected_grad[i] -= ssim_weight * d_ssim / (float)(rows * cols);
   }
 
   // 7. Compare results

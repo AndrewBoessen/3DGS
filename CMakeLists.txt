@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_ARCHITECTURES native)
-#set(CMAKE_CUDA_FLAGS_DEBUG "-g -G")
+
 # ===================================================================
 # DEPENDENCIES
 # ===================================================================
@@ -134,3 +134,6 @@ add_gtest_executable(cuda_optimizer_tests tests/optimizer_test.cpp gsplat_cuda)
 
 # --- Adaptive Density Tests ---
 add_gtest_executable(adaptive_density_tests tests/adaptive_density_test.cpp gsplat_cuda)
+
+# --- CUDA Data Tests ---
+add_gtest_executable(cuda_data_tests tests/cuda_data_test.cpp gsplat_cuda)
