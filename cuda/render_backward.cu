@@ -76,7 +76,7 @@ __global__ void render_tiles_backward_kernel(
       _uvs[i * 2 + 0] = uvs[gaussian_idx * 2 + 0];
       _uvs[i * 2 + 1] = uvs[gaussian_idx * 2 + 1];
       // apply sigmoid to match forward pass
-      _opacity[i] = __frcp_rn(1.0f + __expf(-opacity[gaussian_idx]));
+      _opacity[i] = 1.0f / (1.0f + __expf(-opacity[gaussian_idx]));
 
 #pragma unroll
       for (int j = 0; j < 3; j++)
@@ -108,7 +108,7 @@ __global__ void render_tiles_backward_kernel(
         const float c = _conic[i * 3 + 2];
 
         const float det = a * c - b * b;
-        const float reciprocal_det = __frcp_rn(det);
+        const float reciprocal_det = 1.0f / (det + 1e-6f);
         const float mh_sq = (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff) * reciprocal_det;
 
         float g = 0.0f;
@@ -117,13 +117,13 @@ __global__ void render_tiles_backward_kernel(
         }
 
         // effective opacity
-        float alpha = _opacity[i] * g;
+        float alpha = fminf(0.99f, _opacity[i] * g);
 
         // Gaussian does not contribute to image
-        if (alpha >= 0.0f) {
+        if (alpha >= 0.00392156862f) {
 
           // alpha reciprical
-          float ra = __frcp_rn(1.0f - alpha);
+          float ra = 1.0f / (1.0f - alpha);
           T *= ra;
 
           const float fac = alpha * T;

@@ -32,7 +32,7 @@ __global__ void cam_intr_proj_backward_kernel(const float *__restrict__ xyz_c, c
   const float z = xyz_c[i * XYZ_STRIDE + 2];
 
   // Avoid division by zero or negative depth
-  if (z <= 1e-6f) {
+  if (z <= 1e-4f) {
     xyz_c_grad_in[i * XYZ_STRIDE + 0] += 0.0f;
     xyz_c_grad_in[i * XYZ_STRIDE + 1] += 0.0f;
     xyz_c_grad_in[i * XYZ_STRIDE + 2] += 0.0f;

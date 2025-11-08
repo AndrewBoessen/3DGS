@@ -40,7 +40,7 @@ __global__ void fused_loss_kernel(const float *__restrict__ image, const float *
     return;
   }
   const int idx = y * cols + x;
-  const float grad_scale = __frcp_rn((float)(rows * cols));
+  const float grad_scale = 1.0f / (float)(rows * cols);
 
   float pixel_l1_loss = 0.0f;
   float pixel_ssim_loss = 0.0f;
@@ -137,10 +137,10 @@ __global__ void fused_loss_kernel(const float *__restrict__ image, const float *
       float d_ssim = (dN * ssim_den - ssim_num * dD) / (ssim_den * ssim_den);
 
       // Add weighted SSIM gradient part. Grad of loss (1-SSIM) is -d_ssim.
-      image_grad[central_idx] -= ssim_weight * 0.5f * d_ssim * grad_scale;
+      image_grad[central_idx] -= ssim_weight * d_ssim * grad_scale;
     }
     avg_ssim /= 3.0f;
-    pixel_ssim_loss = (1.0f - avg_ssim) / 2.0f;
+    pixel_ssim_loss = 1.0f - avg_ssim;
   }
 
   // --- Combine losses and store in shared memory for reduction ---

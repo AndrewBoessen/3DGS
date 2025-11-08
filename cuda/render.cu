@@ -87,21 +87,30 @@ __global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *
         const float c = _conic[i * 3 + 2];
 
         const float det = a * c - b * b;
-        if (det <= 0.0f)
+        if (det <= 0.0f) {
+          num_splats++;
           continue; // Skip degenerate or invalid Gaussians
-        const float inv_det = __frcp_rn(det);
+        }
+        const float inv_det = 1.0f / (det + 1e-6f);
 
         // Compute Mahalanobis distance squared: d^2 = (x-μ)^T Σ^-1 (x-μ)
         const float mh_sq = inv_det * (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff);
+
         if (mh_sq <= 0.0f) {
           num_splats++;
-          continue; // Gaussian has no influence
+          continue;
         }
 
         // Apply sigmoid to opacity
-        float opa = __frcp_rn(1.0f + __expf(-_opacity[i]));
+        float opa = 1.0f / (1.0f + __expf(-_opacity[i]));
         // Calculate alpha based on opacity and Gaussian falloff
-        const float alpha = opa * __expf(-0.5f * mh_sq);
+        const float alpha = fminf(0.99f, opa * __expf(-0.5f * mh_sq));
+
+        // Skip if alpha is below 1/255 for numerical stability
+        if (alpha < 0.00392156862f) {
+          num_splats++;
+          continue;
+        }
 
         // Alpha blending: C_out = α * C_in + (1 - α) * C_bg
         const float weight = alpha * (1.0f - alpha_accum);

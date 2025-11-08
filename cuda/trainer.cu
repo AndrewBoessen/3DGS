@@ -120,6 +120,8 @@ void TrainerImpl::reset_opacity() {
   const float new_opc = log(opc) - log(1.0f - opc);
 
   thrust::fill_n(cuda.gaussians.d_opacity.begin(), num_gaussians, new_opc);
+  thrust::fill_n(cuda.optimizer.m_grad_opacity.begin(), num_gaussians, 0.0f);
+  thrust::fill_n(cuda.optimizer.v_grad_opacity.begin(), num_gaussians, 0.0f);
 }
 
 void TrainerImpl::zero_grads() {

@@ -22,7 +22,7 @@ __global__ void compute_proj_jacobian_backward_kernel(const float *__restrict__ 
   const float y = xyz_c[i * 3 + 1];
   const float z = xyz_c[i * 3 + 2];
 
-  if (z <= 1e-6f) {
+  if (z <= 1e-4f) {
     xyz_c_grad_in[i * 3 + 0] = 0.0f;
     xyz_c_grad_in[i * 3 + 1] = 0.0f;
     xyz_c_grad_in[i * 3 + 2] = 0.0f;
@@ -41,9 +41,9 @@ __global__ void compute_proj_jacobian_backward_kernel(const float *__restrict__ 
   float gz = -grad_J[0] * fx * z_inv2 + grad_J[2] * 2.0f * fx * x * z_inv3 - grad_J[4] * fy * z_inv2 +
              grad_J[5] * 2.0f * fy * y * z_inv3;
 
-  xyz_c_grad_in[i * 3 + 0] = gx;
-  xyz_c_grad_in[i * 3 + 1] = gy;
-  xyz_c_grad_in[i * 3 + 2] = gz;
+  xyz_c_grad_in[i * 3 + 0] += gx;
+  xyz_c_grad_in[i * 3 + 1] += gy;
+  xyz_c_grad_in[i * 3 + 2] += gz;
 }
 
 void compute_projection_jacobian_backward(const float *const xyz_c, const float *const K, const float *const J_grad_out,
@@ -191,8 +191,8 @@ __global__ void sigma_backward_kernel(const float *__restrict__ q, const float *
   // --- 1. Recompute intermediate variables from the forward pass ---
 
   // Normalize quaternion
-  const float norm = sqrtf(qw * qw + qx * qx + qy * qy + qz * qz) + 1e-8f;
-  const float inv_norm = __frcp_rn(norm);
+  const float norm = sqrtf(qw * qw + qx * qx + qy * qy + qz * qz);
+  const float inv_norm = 1.0f / norm;
   const float w = qw * inv_norm;
   const float x = qx * inv_norm;
   const float y = qy * inv_norm;
