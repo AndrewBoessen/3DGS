@@ -103,7 +103,7 @@ protected:
 // It compares the GPU result with a CPU-based implementation.
 TEST_F(AdamOptimizerTest, Correctness) {
   // 1. Execute the adam_step CUDA kernel on the device
-  adam_step(d_params, d_param_grads, d_exp_avg, d_exp_avg_sq, lr, b1, b2, eps, b1, b2, N, 1);
+  adam_step(d_params, d_param_grads, d_exp_avg, d_exp_avg_sq, lr, b1, b2, eps, 1.0f - b1, 1.0f - b2, N, 1);
 
   // Ensure the kernel has finished execution before proceeding
   CUDA_CHECK(cudaDeviceSynchronize());

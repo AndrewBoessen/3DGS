@@ -190,7 +190,7 @@ __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float
 
   float obb[8];
   const float radius = compute_obb(u, v, a, b, c, mh_dist, obb);
-  const int radius_tiles = ceilf(radius * 0.0625) + 1;
+  const int radius_tiles = ceilf(radius * 0.0625f) + 1;
 
   const float curr_max_radius = radii[gaussian_idx];
   radii[gaussian_idx] = fmaxf(radius, curr_max_radius);
@@ -256,7 +256,7 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
 
   float obb[8];
   const float radius = compute_obb(u, v, a, b, c, mh_dist, obb);
-  const int radius_tiles = ceilf(radius * 0.0625) + 1;
+  const int radius_tiles = ceilf(radius * 0.0625f) + 1;
 
   const int tile_x = tile_idx % num_tiles_x;
   const int tile_y = tile_idx / num_tiles_x;
@@ -286,7 +286,7 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
 __global__ void find_tile_boundaries_kernel(const double *__restrict__ sorted_keys, const int num_splats,
                                             const int num_tiles, const float max_z,
                                             int *__restrict__ splat_start_end_idx_by_tile_idx) {
-  const double tile_idx_key_multiplier = (double)max_z + 1.0;
+  const double tile_idx_key_multiplier = (double)max_z + 1.0f;
 
   int splat_idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (splat_idx >= num_splats) {
