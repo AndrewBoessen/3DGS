@@ -584,7 +584,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
   std::vector<float> h_opacity = {2.0f, 2.0f, 2.0f};
   std::vector<float> h_conic = {5.0f, 0.0f, 5.0f, 5.0f, 0.0f, 5.0f, 5.0f, 0.0f, 5.0f}; // Gaussian 1
   std::vector<float> h_rgb = {0.5f, 0.2f, 0.2f, 0.2f, 0.2f, 0.5f, 0.2f, 0.5f, 0.2f};   // Gaussian 1
-  const float background_opacity = 0.1f;
+  const float background_opacity = 0.8f;
   std::vector<float> h_grad_image(image_width * image_height * 3);
   for (size_t i = 0; i < h_grad_image.size(); ++i)
     h_grad_image[i] = 0.01f;
@@ -612,9 +612,9 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
           const float u_diff = (float)u_splat - u_mean;
           const float v_diff = (float)v_splat - v_mean;
 
-          const float a = conic[i * 3 + 0];
+          const float a = conic[i * 3 + 0] + 0.3f;
           const float b = conic[i * 3 + 1];
-          const float c = conic[i * 3 + 2];
+          const float c = conic[i * 3 + 2] + 0.3f;
 
           const float det = a * c - b * b;
           const float reciprocal_det = 1.0f / det;

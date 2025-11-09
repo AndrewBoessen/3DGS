@@ -28,6 +28,7 @@ __global__ void render_tiles_backward_kernel(
   int num_splats_this_tile = splat_idx_end - splat_idx_start;
 
   // Per-pixel variables stored in registers
+  bool background_initialized = false;
   int num_splats_this_pixel;
   float T;
   float T_final;
@@ -38,12 +39,11 @@ __global__ void render_tiles_backward_kernel(
 
   if (valid_pixel) {
     num_splats_this_pixel = num_splats_per_pixel[pixel_id];
-    T_final = final_weight_per_pixel[u_splat + v_splat * image_width];
+    T_final = final_weight_per_pixel[pixel_id];
     T = T_final;
 #pragma unroll
     for (int channel = 0; channel < 3; channel++) {
       grad_image_local[channel] = grad_image[pixel_id * 3 + channel];
-      color_accum[channel] = background_opacity * T_final;
     }
   }
 
@@ -103,12 +103,12 @@ __global__ void render_tiles_backward_kernel(
         const float u_diff = float(u_splat) - u_mean;
         const float v_diff = float(v_splat) - v_mean;
 
-        const float a = _conic[i * 3 + 0];
+        const float a = _conic[i * 3 + 0] + 0.3f;
         const float b = _conic[i * 3 + 1];
-        const float c = _conic[i * 3 + 2];
+        const float c = _conic[i * 3 + 2] + 0.3f;
 
         const float det = a * c - b * b;
-        const float reciprocal_det = 1.0f / (det + 1e-6f);
+        const float reciprocal_det = 1.0f / det;
         const float mh_sq = (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff) * reciprocal_det;
 
         float g = 0.0f;
@@ -121,10 +121,23 @@ __global__ void render_tiles_backward_kernel(
 
         // Gaussian does not contribute to image
         if (alpha >= 0.00392156862f) {
+          if (!background_initialized) {
+            const float background_weight = 1.0f - (alpha * T + 1.0f - T);
+            if (background_weight > 0.001f) {
+#pragma unroll
+              for (int j = 0; j < 3; j++) {
+                color_accum[j] += background_opacity * background_weight;
+              }
+            }
+            background_initialized = true;
+          }
 
           // alpha reciprical
           float ra = 1.0f / (1.0f - alpha);
-          T *= ra;
+
+          // update T inlu if not first iteration
+          if (i < num_splats_this_pixel - 1)
+            T *= ra;
 
           const float fac = alpha * T;
 
@@ -144,26 +157,19 @@ __global__ void render_tiles_backward_kernel(
 
           // gradient of gaussian probability
           const float grad_g = grad_alpha * _opacity[i];
-          const float grad_mh = grad_g * (-0.5f * g);
-
-          const float grad_u_mean_component = (2.0f * b * v_diff - 2.0f * c * u_diff) * reciprocal_det;
-          const float grad_v_mean_component = (2.0f * b * u_diff - 2.0f * a * v_diff) * reciprocal_det;
+          const float grad_mh_sq = -0.5f * g * g;
 
           // UV gradients
-          grad_u = grad_mh * grad_u_mean_component;
-          grad_v = grad_mh * grad_v_mean_component;
+          grad_u = -(-b * v_diff - b * v_diff + 2.0f * c * u_diff) * reciprocal_det * grad_mh_sq;
+          grad_v = -(2.0f * a * v_diff - b * u_diff - b * u_diff) * reciprocal_det * grad_mh_sq;
 
-          // Partial derivative of m^2 w.r.t. 'a'
-          const float d_mh_sq_d_a = ((v_diff * v_diff) - mh_sq * c) * reciprocal_det;
-          grad_conic_splat[0] = grad_mh * d_mh_sq_d_a;
-
-          // Partial derivative of m^2 w.r.t. 'b'
-          const float d_mh_sq_d_b = (-2.0f * u_diff * v_diff + mh_sq * 2.0f * b) * reciprocal_det;
-          grad_conic_splat[1] = grad_mh * d_mh_sq_d_b;
-
-          // Partial derivative of m^2 w.r.t. 'c'
-          const float d_mh_sq_d_c = ((u_diff * u_diff) - mh_sq * a) * reciprocal_det;
-          grad_conic_splat[2] = grad_mh * d_mh_sq_d_c;
+          // Conic gradients
+          const float common_frac =
+              (a * v_diff * v_diff - b * u_diff * v_diff - b * u_diff * v_diff + c * u_diff * u_diff) * reciprocal_det *
+              reciprocal_det;
+          grad_conic_splat[0] = (-c * common_frac + v_diff * v_diff * reciprocal_det) * grad_mh_sq;
+          grad_conic_splat[1] = (b * common_frac - u_diff * v_diff * reciprocal_det) * grad_mh_sq;
+          grad_conic_splat[2] = (-a * common_frac + u_diff * u_diff * reciprocal_det) * grad_mh_sq;
 
           // Update color accum
 #pragma unroll

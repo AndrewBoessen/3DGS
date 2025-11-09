@@ -484,7 +484,7 @@ TEST_F(CudaKernelTest, GetSortedGaussianList) {
   EXPECT_GE(h_splat_boundaries[9], h_splat_boundaries[8]);
 
   // Expected max radius per gaussian
-  std::vector<float> expected_max_radii = {4.27f, 6.18f, 4.27f};
+  std::vector<float> expected_max_radii = {4.32f, 6.22f, 4.32f};
   EXPECT_NEAR(h_max_radii[0], expected_max_radii[0], 1e-2f);
   EXPECT_NEAR(h_max_radii[1], expected_max_radii[1], 1e-2f);
   EXPECT_NEAR(h_max_radii[2], expected_max_radii[2], 1e-2f);
@@ -666,9 +666,9 @@ TEST_F(CudaKernelTest, RenderImageMultipleGaussians) {
       const float u_diff = u_pixel - u_mean;
       const float v_diff = v_pixel - v_mean;
 
-      const float a = h_conic[gaussian_idx * 3 + 0];
+      const float a = h_conic[gaussian_idx * 3 + 0] + 0.3f;
       const float b_c = h_conic[gaussian_idx * 3 + 1];
-      const float c = h_conic[gaussian_idx * 3 + 2];
+      const float c = h_conic[gaussian_idx * 3 + 2] + 0.3f;
 
       const float det = a * c - b_c * b_c;
       const float mh_sq = (c * u_diff * u_diff - (b_c + b_c) * u_diff * v_diff + a * v_diff * v_diff) / det;

@@ -30,6 +30,7 @@ __global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *
 
   // Pixel-local accumulators
   float alpha_accum = 0.0f;
+  float alpha_weight = 0.0f;
   float3 accumulated_rgb = {0.0f, 0.0f, 0.0f};
   int num_splats = 0;
 
@@ -67,11 +68,12 @@ __global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *
 
     // Mask invalid threads outside of image
     if (valid_pixel) {
-      const int num_splats_this_batch = min(splat_batch_size, num_splats_this_tile - batch_idx * splat_batch_size);
-
+      const int batch_start = batch_idx * splat_batch_size;
+      const int batch_end = min((batch_idx + 1) * splat_batch_size, num_splats_this_tile);
+      const int num_splats_this_batch = batch_end - batch_start;
       for (int i = 0; i < num_splats_this_batch; i++) {
         // Early exit if pixel is saturated
-        if (alpha_accum > 0.999f) {
+        if (alpha_accum > 0.9999f) {
           break;
         }
         const float u_mean = _uvs[i * 2 + 0];
@@ -82,29 +84,24 @@ __global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *
         const float v_diff = float(v_splat) - v_mean;
 
         // Load conic values
-        const float a = _conic[i * 3 + 0];
+        const float a = _conic[i * 3 + 0] + 0.3f;
         const float b = _conic[i * 3 + 1];
-        const float c = _conic[i * 3 + 2];
+        const float c = _conic[i * 3 + 2] + 0.3f;
 
         const float det = a * c - b * b;
-        if (det <= 0.0f) {
-          num_splats++;
-          continue; // Skip degenerate or invalid Gaussians
-        }
-        const float inv_det = 1.0f / (det + 1e-6f);
+        const float inv_det = 1.0f / det;
 
         // Compute Mahalanobis distance squared: d^2 = (x-μ)^T Σ^-1 (x-μ)
         const float mh_sq = inv_det * (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff);
 
-        if (mh_sq <= 0.0f) {
-          num_splats++;
-          continue;
-        }
-
         // Apply sigmoid to opacity
-        float opa = 1.0f / (1.0f + __expf(-_opacity[i]));
-        // Calculate alpha based on opacity and Gaussian falloff
-        const float alpha = fminf(0.99f, opa * __expf(-0.5f * mh_sq));
+        const float opa = 1.0f / (1.0f + __expf(-_opacity[i]));
+
+        float alpha = 0.0f;
+        if (mh_sq > 0.0f) {
+          const float norm_prob = __expf(-0.5f * mh_sq);
+          alpha = fminf(0.99f, opa * norm_prob);
+        }
 
         // Skip if alpha is below 1/255 for numerical stability
         if (alpha < 0.00392156862f) {
@@ -112,6 +109,7 @@ __global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *
           continue;
         }
 
+        alpha_weight = 1.0f - alpha_accum;
         // Alpha blending: C_out = α * C_in + (1 - α) * C_bg
         const float weight = alpha * (1.0f - alpha_accum);
 
@@ -126,17 +124,23 @@ __global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *
     }
     __syncthreads(); // Ensure all threads finish before loading the next batch
   }
+  __syncthreads();
 
   // Final write to global memory
   if (valid_pixel) {
     splats_per_pixel[v_splat * image_width + u_splat] = num_splats;
-    final_weight_per_pixel[v_splat * image_width + u_splat] = 1.0f - alpha_accum;
+    final_weight_per_pixel[v_splat * image_width + u_splat] = alpha_weight;
 
-    const float background_contribution = 1.0f - alpha_accum;
+    // Background contribution
+    float background_val = 0.0f;
+    if (alpha_accum < 0.999f) {
+      background_val = background_opacity * (1.0f - alpha_accum);
+    }
+
     const int pixel_idx = (v_splat * image_width + u_splat) * 3;
-    image[pixel_idx + 0] = accumulated_rgb.x + background_opacity * background_contribution; // R
-    image[pixel_idx + 1] = accumulated_rgb.y + background_opacity * background_contribution; // G
-    image[pixel_idx + 2] = accumulated_rgb.z + background_opacity * background_contribution; // B
+    image[pixel_idx + 0] = accumulated_rgb.x + background_val; // R
+    image[pixel_idx + 1] = accumulated_rgb.y + background_val; // G
+    image[pixel_idx + 2] = accumulated_rgb.z + background_val; // B
   }
 }
 
