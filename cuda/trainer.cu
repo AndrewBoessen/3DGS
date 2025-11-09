@@ -867,8 +867,8 @@ void TrainerImpl::train() {
     // Call Impl member function
     optimizer_step(pass_data, curr_camera);
 
-    // --- SAVE RENDERED IMAGE (if at interval) ---
-    if (iter % 500 == 0) {
+    // --- SAVE RENDERED IMAGE ---
+    if (iter % config.print_interval == 0) {
       const int width = (int)curr_camera.width;
       const int height = (int)curr_camera.height;
       std::vector<float> h_image_buffer(width * height * 3);

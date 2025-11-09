@@ -9,22 +9,14 @@
 
 int main(int argc, char *argv[]) {
   // Check for the correct number of command-line arguments.
-  if (argc != 7) {
-    std::cerr << "Usage: " << argv[0]
-              << " <scaling factor> <path_to_config_file.yaml> <path_to_cameras.bin> <path_to_images.bin> "
-                 "<path_to_points3D.bin> "
-                 "<path_to_image_root_directory>"
-              << std::endl;
+  if (argc != 3) {
+    std::cerr << "Usage: " << argv[0] << " <path_to_config_file.yaml> <path_to_root_directory>" << std::endl;
     return 1; // Return an error code
   }
 
   // Get file paths from the arguments.
-  const int downsample_factor = *argv[1] - '0';
-  const std::string config_path = argv[2];
-  const std::string cameras_path = argv[3];
-  const std::string images_path = argv[4];
-  const std::string points3D_path = argv[5];
-  const std::string image_dir = argv[6];
+  const std::string config_path = argv[1];
+  const std::string root_dir = argv[2];
 
   // --- 1. Declarations ---
   // All data is declared here to be accessible at the end of the main function.
@@ -49,6 +41,14 @@ int main(int argc, char *argv[]) {
     return 1; // Return on error
   }
   std::cout << "Successfully loaded config file" << std::endl;
+
+  // Get binary paths
+  const std::string cameras_path = root_dir + "/" + config.dataset_path + "/sparse/0/cameras.bin";
+  const std::string images_path = root_dir + "/" + config.dataset_path + "/sparse/0/images.bin";
+  const std::string points3D_path = root_dir + "/" + config.dataset_path + "/sparse/0/points3D.bin";
+  const std::string image_dir = root_dir + "/" + config.dataset_path + "/";
+
+  const int downsample_factor = config.downsample_factor;
 
   std::cout << "\nAttempting to read COLMAP binary files..." << std::endl;
   std::cout << "Cameras file: " << cameras_path << std::endl;
