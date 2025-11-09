@@ -64,8 +64,6 @@ struct ConfigParameters {
   int adaptive_control_interval;
   int max_gaussians;
   double delete_opacity_threshold;
-  double max_scale;
-  double clone_scale_threshold;
   double uv_grad_threshold;
   double split_scale_factor;
 };

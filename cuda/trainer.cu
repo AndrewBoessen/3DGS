@@ -60,6 +60,7 @@ private:
   int iter;
   int l_max;
   int num_gaussians;
+  float scene_extent;
 
   // --- CUDA-specific data ---
   CudaDataManager cuda;
@@ -305,6 +306,9 @@ void TrainerImpl::adaptive_density_step() {
 
   thrust::transform(scale_iter_start, scale_iter_end, d_scale_max.begin(), ComputeScaleMax());
 
+  const float max_scale = scene_extent * 0.1f;
+  const float clone_scale_threshold = scene_extent * 0.01f;
+
   // --- 2. Identify Gaussians to Prune ---
   // Inverse sigmoid: log(p / (1-p))
   const float op_threshold = logf(config.delete_opacity_threshold) - logf(1.0f - config.delete_opacity_threshold);
@@ -314,8 +318,7 @@ void TrainerImpl::adaptive_density_step() {
   auto prune_iter_end = prune_iter_start + num_gaussians;
 
   thrust::device_vector<bool> d_prune_mask(num_gaussians);
-  thrust::transform(prune_iter_start, prune_iter_end, d_prune_mask.begin(),
-                    IdentifyPrune(op_threshold, config.max_scale));
+  thrust::transform(prune_iter_start, prune_iter_end, d_prune_mask.begin(), IdentifyPrune(op_threshold, max_scale));
 
   int num_to_prune = thrust::count(d_prune_mask.begin(), d_prune_mask.end(), true);
 
@@ -326,14 +329,14 @@ void TrainerImpl::adaptive_density_step() {
 
   thrust::device_vector<bool> d_clone_mask(num_gaussians);
   thrust::transform(densify_iter_start, densify_iter_end, d_clone_mask.begin(),
-                    IdentifyClone(config.uv_grad_threshold, config.clone_scale_threshold));
+                    IdentifyClone(config.uv_grad_threshold, clone_scale_threshold));
 
   int num_to_clone = thrust::count(d_clone_mask.begin(), d_clone_mask.end(), true);
 
   // --- 4. Identify Gaussians to Split ---
   thrust::device_vector<bool> d_split_mask(num_gaussians);
   thrust::transform(densify_iter_start, densify_iter_end, d_split_mask.begin(),
-                    IdentifySplit(config.uv_grad_threshold, config.clone_scale_threshold));
+                    IdentifySplit(config.uv_grad_threshold, clone_scale_threshold));
 
   int num_to_split = thrust::count(d_split_mask.begin(), d_split_mask.end(), true);
 
@@ -793,6 +796,10 @@ void TrainerImpl::train() {
     fprintf(stderr, "Error copying data to device: %s\n", e.what());
     exit(EXIT_FAILURE);
   }
+
+  // Calculate scene extent for adaptive density
+  scene_extent = 1.1f * computeMaxDiagonal(images);
+  std::cout << "SENE EXTENT " << scene_extent << std::endl;
 
   ProgressBar progressBar(config.num_iters);
 

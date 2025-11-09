@@ -52,9 +52,7 @@ protected:
         << "adaptive_control_end: 20000\n"
         << "adaptive_control_interval: 100\n"
         << "max_gaussians: 1000000\n"
-        << "max_scale: 0.005\n"
         << "delete_opacity_threshold: 0.005\n"
-        << "clone_scale_threshold: 0.01\n"
         << "uv_grad_threshold: 0.0002\n"
         << "split_scale_factor: 1.5\n";
     out.close();

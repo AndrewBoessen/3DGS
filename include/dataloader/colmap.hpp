@@ -78,3 +78,11 @@ ReadImagesBinary(const std::filesystem::path &path, const std::string img_root_d
  * Returns std::nullopt if the file cannot be opened or read.
  */
 std::optional<std::unordered_map<uint64_t, Point3D>> ReadPoints3DBinary(const std::filesystem::path &path);
+
+/**
+ * @brief Computes the max diagonal of camera centers, mimicking NeRF++ normalization logic.
+ *
+ * @param images An unordered_map of image IDs to Image structs.
+ * @return The maximum distance from any camera center to the average camera center.
+ */
+double computeMaxDiagonal(const std::unordered_map<int, Image> &images);
