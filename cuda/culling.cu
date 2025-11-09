@@ -184,9 +184,9 @@ __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float
 
   const float u = uvs[gaussian_idx * 2];
   const float v = uvs[gaussian_idx * 2 + 1];
-  const float a = conic[gaussian_idx * 3] + 0.25f;
-  const float b = conic[gaussian_idx * 3 + 1] / 2.0f;
-  const float c = conic[gaussian_idx * 3 + 2] + 0.25f;
+  const float a = conic[gaussian_idx * 3];
+  const float b = conic[gaussian_idx * 3 + 1];
+  const float c = conic[gaussian_idx * 3 + 2];
 
   float obb[8];
   const float radius = compute_obb(u, v, a, b, c, mh_dist, obb);
@@ -250,9 +250,9 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
   const float u = uvs[gaussian_idx * 2];
   const float v = uvs[gaussian_idx * 2 + 1];
   const double z = (double)(xyz_camera_frame[gaussian_idx * 3 + 2]);
-  const float a = conic[gaussian_idx * 3] + 0.25f;
-  const float b = conic[gaussian_idx * 3 + 1] / 2.0f;
-  const float c = conic[gaussian_idx * 3 + 2] + 0.25f;
+  const float a = conic[gaussian_idx * 3];
+  const float b = conic[gaussian_idx * 3 + 1];
+  const float c = conic[gaussian_idx * 3 + 2];
 
   float obb[8];
   const float radius = compute_obb(u, v, a, b, c, mh_dist, obb);
