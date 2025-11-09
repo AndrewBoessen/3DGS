@@ -151,17 +151,20 @@ __global__ void render_tiles_backward_kernel(
             grad_alpha += (_rgb[i * 3 + j] * T - color_accum[j] * ra) * grad_image_local[j];
 
           // opacity grad
-          grad_opa = grad_alpha * g;
+          grad_opa = g * grad_alpha;
           // sigmoid gradient
           grad_opa *= _opacity[i] * (1.0f - _opacity[i]);
 
           // gradient of gaussian probability
           const float grad_g = grad_alpha * _opacity[i];
-          const float grad_mh_sq = -0.5f * g * g;
+          const float grad_mh_sq = -0.5f * g * grad_g;
 
+          // Normalize viewspace positional gradients (-1 to 1)
+          const float u_norm = image_width * 0.5f;
+          const float v_norm = image_height * 0.5f;
           // UV gradients
-          grad_u = -(-b * v_diff - b * v_diff + 2.0f * c * u_diff) * reciprocal_det * grad_mh_sq;
-          grad_v = -(2.0f * a * v_diff - b * u_diff - b * u_diff) * reciprocal_det * grad_mh_sq;
+          grad_u = -(-b * v_diff - b * v_diff + 2.0f * c * u_diff) * reciprocal_det * grad_mh_sq * u_norm;
+          grad_v = -(2.0f * a * v_diff - b * u_diff - b * u_diff) * reciprocal_det * grad_mh_sq * v_norm;
 
           // Conic gradients
           const float common_frac =
