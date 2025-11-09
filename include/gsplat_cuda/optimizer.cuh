@@ -25,5 +25,5 @@ inline constexpr float EPS = 1e-8f;
  * @param[in]     stream       The CUDA stream to execute on
  */
 void adam_step(float *params, float *const param_grads, float *exp_avg, float *exp_avg_sq, const float lr,
-               const int step, const float b1, const float b2, const float eps, const int N, const int S,
-               cudaStream_t stream = 0);
+               const float b1, const float b2, const float eps, const float bias1, const float bias2, const int N,
+               const int S, cudaStream_t stream = 0);

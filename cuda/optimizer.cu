@@ -5,7 +5,7 @@
 
 __global__ void adam_kernel(const int N, const int S, float *__restrict__ param, const float *__restrict__ param_grad,
                             float *__restrict__ exp_avg, float *__restrict__ exp_avg_sq, const float lr, const float b1,
-                            const float b2, const float eps, const int step_num) {
+                            const float b2, const float eps, const float bias1, const float bias2) {
   const int p_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (p_idx >= N * S)
@@ -17,8 +17,8 @@ __global__ void adam_kernel(const int N, const int S, float *__restrict__ param,
   register_exp_avg = b1 * register_exp_avg + (1.0f - b1) * register_param_grad;
   register_exp_avg_sq = b2 * register_exp_avg_sq + (1.0f - b2) * register_param_grad * register_param_grad;
   // Compute bias-corrected estimates using pre-calculated values
-  float m_hat = register_exp_avg / (1.0f - pow(b1, step_num));
-  float v_hat = register_exp_avg_sq / (1.0f - pow(b2, step_num));
+  float m_hat = register_exp_avg / bias1;
+  float v_hat = register_exp_avg_sq / bias2;
   float step = -lr * m_hat / (sqrt(v_hat) + eps);
 
   param[p_idx] += step;
@@ -27,8 +27,8 @@ __global__ void adam_kernel(const int N, const int S, float *__restrict__ param,
 };
 
 void adam_step(float *params, float *const param_grads, float *exp_avg, float *exp_avg_sq, const float lr,
-               const int step, const float b1, const float b2, const float eps, const int N, const int S,
-               cudaStream_t stream) {
+               const float b1, const float b2, const float eps, const float bias1, const float bias2, const int N,
+               const int S, cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(params);
   ASSERT_DEVICE_POINTER(param_grads);
   ASSERT_DEVICE_POINTER(exp_avg);
@@ -37,5 +37,6 @@ void adam_step(float *params, float *const param_grads, float *exp_avg, float *e
   dim3 threads(256);
   dim3 blocks((N * S + threads.x - 1) / threads.x);
 
-  adam_kernel<<<blocks, threads, 0, stream>>>(N, S, params, param_grads, exp_avg, exp_avg_sq, lr, b1, b2, eps, step);
+  adam_kernel<<<blocks, threads, 0, stream>>>(N, S, params, param_grads, exp_avg, exp_avg_sq, lr, b1, b2, eps, bias1,
+                                              bias2);
 }
