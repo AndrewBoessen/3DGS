@@ -591,7 +591,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
 
   // Data that is computed during the forward pass
   std::vector<int> h_sorted_splats = {0, 1, 2};
-  std::vector<int> h_splat_range_by_tile = {0, 3};
+  std::vector<int> h_splat_range_by_tile = {0, 3}; // One tile [0, 3)
   std::vector<int> h_num_splats_per_pixel(image_width * image_height);
   std::vector<float> h_final_weight_per_pixel(image_width * image_height);
 
@@ -606,29 +606,40 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
         int splat_count = 0;
         float pixel_rgb[3] = {0.0f, 0.0f, 0.0f};
 
-        for (int i = 0; i < N; ++i) {
+        // Get splat range for this tile.
+        const int splat_idx_start = h_splat_range_by_tile[0];
+        const int splat_idx_end = h_splat_range_by_tile[1];
+
+        for (int splat_idx = splat_idx_start; splat_idx < splat_idx_end; ++splat_idx) {
+          const int i = h_sorted_splats[splat_idx]; // <-- UPDATED: Use indirection
+
           const float u_mean = uvs[i * 2 + 0];
           const float v_mean = uvs[i * 2 + 1];
           const float u_diff = (float)u_splat - u_mean;
           const float v_diff = (float)v_splat - v_mean;
 
-          const float a = conic[i * 3 + 0] + 0.3f;
+          const float a = conic[i * 3 + 0] + 0.3f; // Match kernel
           const float b = conic[i * 3 + 1];
-          const float c = conic[i * 3 + 2] + 0.3f;
+          const float c = conic[i * 3 + 2] + 0.3f; // Match kernel
 
           const float det = a * c - b * b;
           const float reciprocal_det = 1.0f / det;
           const float mh_sq = (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff) * reciprocal_det;
 
           float norm_prob = 0.0f;
-          if (mh_sq > 0.0f) {
-            norm_prob = std::exp(-0.5f * mh_sq);
-          } else {
-            continue; // Skip splats with no contribution
+          if (mh_sq <= 0.0f) { // Match kernel's `mh_sq > 0.0f` check
+            continue;
+          }
+          norm_prob = std::exp(-0.5f * mh_sq);
+
+          // Match kernel: opacity logit -> sigmoid
+          float alpha = std::min(0.99f, (1.0f / (1.0f + expf(-opacity[i]))) * norm_prob);
+
+          if (alpha < 0.00392156862f) {
+            continue;
           }
 
           splat_count++;
-          float alpha = std::min(0.9999f, (1.0f / (1.0f + expf(-opacity[i]))) * norm_prob);
 
           pixel_rgb[0] += rgb[i * 3 + 0] * alpha * T;
           pixel_rgb[1] += rgb[i * 3 + 1] * alpha * T;

@@ -173,7 +173,7 @@ __device__ __forceinline__ int warpSum(unsigned mask, int val) {
 
 __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float *__restrict__ conic,
                                       const float mh_dist, const int n_tiles_x, const int n_tiles_y, const int N,
-                                      int *buffer_size, int2 *pairs, int *global_index, float *radii) {
+                                      int *buffer_size, int2 *pairs, int *global_index) {
   const int gaussian_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
   // mask active threads for warpSum
@@ -191,9 +191,6 @@ __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float
   float obb[8];
   const float radius = compute_obb(u, v, a, b, c, mh_dist, obb);
   const int radius_tiles = ceilf(radius * 0.0625f) + 1;
-
-  const float curr_max_radius = radii[gaussian_idx];
-  radii[gaussian_idx] = fmaxf(radius, curr_max_radius);
 
   const int projected_tile_x = floorf(u / 16.0f);
   const int start_tile_x = max(0, projected_tile_x - radius_tiles);
@@ -354,8 +351,7 @@ struct copy_z_functor {
 
 void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *conic, const int n_tiles_x,
                               const int n_tiles_y, const float mh_dist, const int N, size_t &sorted_gaussian_size,
-                              int *sorted_gaussians, int *splat_start_end_idx_by_tile_idx, float *radii,
-                              cudaStream_t stream) {
+                              int *sorted_gaussians, int *splat_start_end_idx_by_tile_idx, cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(uv);
   ASSERT_DEVICE_POINTER(xyz);
   ASSERT_DEVICE_POINTER(conic);
@@ -370,9 +366,8 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
     // Use device_vectors for atomic counters. Initialize to 0.
     thrust::device_vector<int> d_buffer_size(1, 0);
 
-    coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N,
-                                                             thrust::raw_pointer_cast(d_buffer_size.data()), nullptr,
-                                                             nullptr, radii);
+    coarse_binning_kernel<<<num_blocks, threads_per_block>>>(
+        uv, conic, mh_dist, n_tiles_x, n_tiles_y, N, thrust::raw_pointer_cast(d_buffer_size.data()), nullptr, nullptr);
     sorted_gaussian_size = d_buffer_size[0];
 
     return;
@@ -388,7 +383,7 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
   coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N, nullptr,
                                                            thrust::raw_pointer_cast(d_pairs.data()),
-                                                           thrust::raw_pointer_cast(d_buffer_index.data()), radii);
+                                                           thrust::raw_pointer_cast(d_buffer_index.data()));
   assert(d_buffer_index[0] == sorted_gaussian_size);
 
   // Copy z values to new array

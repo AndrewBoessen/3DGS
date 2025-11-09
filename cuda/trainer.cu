@@ -110,7 +110,6 @@ void TrainerImpl::test_train_split() {
 void TrainerImpl::reset_grad_accum() {
   thrust::fill_n(cuda.accumulators.d_uv_grad_accum.begin(), num_gaussians, 0.0f);
   thrust::fill_n(cuda.accumulators.d_xyz_grad_accum.begin(), num_gaussians * 3, 0.0f);
-  thrust::fill_n(cuda.accumulators.d_max_radii.begin(), num_gaussians, 0.0f);
   thrust::fill_n(cuda.accumulators.d_grad_accum_dur.begin(), num_gaussians, 0);
 }
 
@@ -218,14 +217,12 @@ struct ComputeScaleMax {
 struct IdentifyPrune {
   const float op_threshold;
   const float scale_max;
-  const float radii_max;
 
-  IdentifyPrune(float ot, float sm, float rm) : op_threshold(ot), scale_max(sm), radii_max(rm) {}
+  IdentifyPrune(float ot, float sm) : op_threshold(ot), scale_max(sm) {}
 
-  __host__ __device__ bool operator()(const thrust::tuple<float, float, float> &t) const {
+  __host__ __device__ bool operator()(const thrust::tuple<float, float> &t) const {
     float opacity_logit = thrust::get<0>(t);
     float scale = thrust::get<1>(t);
-    float radii = thrust::get<2>(t);
 
     // Prune if opacity is too low
     if (opacity_logit < op_threshold)
@@ -233,10 +230,6 @@ struct IdentifyPrune {
 
     // Prune if scale is too large
     if (scale > scale_max)
-      return true;
-
-    // Prune if max_radii is too large
-    if (radii > radii_max)
       return true;
 
     return false;
@@ -316,14 +309,13 @@ void TrainerImpl::adaptive_density_step() {
   // Inverse sigmoid: log(p / (1-p))
   const float op_threshold = logf(config.delete_opacity_threshold) - logf(1.0f - config.delete_opacity_threshold);
 
-  auto prune_iter_start = thrust::make_zip_iterator(
-      thrust::make_tuple(cuda.gaussians.d_opacity.begin(), d_scale_max.begin(), cuda.accumulators.d_max_radii.begin()));
+  auto prune_iter_start =
+      thrust::make_zip_iterator(thrust::make_tuple(cuda.gaussians.d_opacity.begin(), d_scale_max.begin()));
   auto prune_iter_end = prune_iter_start + num_gaussians;
 
   thrust::device_vector<bool> d_prune_mask(num_gaussians);
-  const float radii_threshold = iter > config.reset_opacity_interval ? 20.0f : FLT_MAX;
   thrust::transform(prune_iter_start, prune_iter_end, d_prune_mask.begin(),
-                    IdentifyPrune(op_threshold, config.max_scale, radii_threshold));
+                    IdentifyPrune(op_threshold, config.max_scale));
 
   int num_to_prune = thrust::count(d_prune_mask.begin(), d_prune_mask.end(), true);
 
@@ -848,8 +840,7 @@ void TrainerImpl::train() {
       add_sh_band();
 
     // --- FORWARD PASS via RASTERIZE MODULE ---
-    rasterize_image(num_gaussians, curr_camera, config, cuda.camera, cuda.gaussians, pass_data, cuda.accumulators,
-                    bg_color, l_max);
+    rasterize_image(num_gaussians, curr_camera, config, cuda.camera, cuda.gaussians, pass_data, bg_color, l_max);
 
     if (pass_data.num_culled == 0) {
       std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;

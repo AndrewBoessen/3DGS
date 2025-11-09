@@ -38,7 +38,7 @@ struct GaussianGradients {
 // Holds buffers for accumulating gradients, used for density control heuristics.
 struct GradientAccumulators {
   // Gradient accumulators
-  thrust::device_vector<float> d_xyz_grad_accum, d_uv_grad_accum, d_max_radii;
+  thrust::device_vector<float> d_xyz_grad_accum, d_uv_grad_accum;
   thrust::device_vector<int> d_grad_accum_dur;
 
   GradientAccumulators(size_t max_gaussians);

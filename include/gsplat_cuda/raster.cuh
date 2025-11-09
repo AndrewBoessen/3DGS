@@ -15,10 +15,9 @@
  * @param[in]     config         Configuration parameters for rendering.
  * @param[in,out] cuda           A manager for long-lived CUDA device buffers.
  * @param[out]    pass_data      A struct to be populated with pointers to per-iteration device buffers.
- * @param[out]    accum          A struct to hold gaussians accumulators (used to store max_radii).
  * @param[in]     bg_color       Background color to use in rendering.
  * @param[in]     l_max          The maximum band of SH coefficients.
  */
 void rasterize_image(const int num_gaussians, const Camera &camera, const ConfigParameters &config,
                      CameraParameters &camera_parameters, GaussianParameters &gaussians, ForwardPassData &pass_data,
-                     GradientAccumulators &accum, const float bg_color, const int l_max);
+                     const float bg_color, const int l_max);

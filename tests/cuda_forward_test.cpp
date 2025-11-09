@@ -403,15 +403,13 @@ TEST_F(CudaKernelTest, GetSortedGaussianList) {
   };
 
   // Device-side pointers
-  float *d_uvs, *d_xyz, *d_conic, *d_max_radii;
+  float *d_uvs, *d_xyz, *d_conic;
   int *d_sorted_gaussians, *d_splat_boundaries;
 
   // Allocate and copy inputs to device
   CUDA_CHECK(cudaMalloc(&d_uvs, h_uvs.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_xyz, h_xyz.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_conic, h_conic.size() * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&d_max_radii, N * sizeof(float)));
-  CUDA_CHECK(cudaMemset(d_max_radii, 0.0f, N * sizeof(float)));
   CUDA_CHECK(cudaMemcpy(d_uvs, h_uvs.data(), h_uvs.size() * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_xyz, h_xyz.data(), h_xyz.size() * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_conic, h_conic.data(), h_conic.size() * sizeof(float), cudaMemcpyHostToDevice));
@@ -419,7 +417,7 @@ TEST_F(CudaKernelTest, GetSortedGaussianList) {
   // --- PASS 1: Get required buffer size ---
   size_t sorted_gaussian_bytes = 0;
   get_sorted_gaussian_list(d_uvs, d_xyz, d_conic, n_tiles_x, n_tiles_y, mh_dist, N, sorted_gaussian_bytes, nullptr,
-                           nullptr, d_max_radii);
+                           nullptr);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // Expected splats:
@@ -436,18 +434,16 @@ TEST_F(CudaKernelTest, GetSortedGaussianList) {
   CUDA_CHECK(cudaMalloc(&d_splat_boundaries, (num_tiles + 1) * sizeof(int)));
 
   get_sorted_gaussian_list(d_uvs, d_xyz, d_conic, n_tiles_x, n_tiles_y, mh_dist, N, sorted_gaussian_bytes,
-                           d_sorted_gaussians, d_splat_boundaries, d_max_radii);
+                           d_sorted_gaussians, d_splat_boundaries);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // --- Verification ---
   std::vector<int> h_sorted_gaussians(num_splats);
   std::vector<int> h_splat_boundaries(num_tiles + 1);
-  std::vector<float> h_max_radii(N);
   CUDA_CHECK(
       cudaMemcpy(h_sorted_gaussians.data(), d_sorted_gaussians, num_splats * sizeof(int), cudaMemcpyDeviceToHost));
   CUDA_CHECK(
       cudaMemcpy(h_splat_boundaries.data(), d_splat_boundaries, (num_tiles + 1) * sizeof(int), cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(h_max_radii.data(), d_max_radii, N * sizeof(float), cudaMemcpyDeviceToHost));
 
   // Expected sorting: by tile index, then by z-depth.
   // Tile 5: G0 (z=10), G1 (z=20) -> sorted order: [0, 1]
@@ -483,19 +479,12 @@ TEST_F(CudaKernelTest, GetSortedGaussianList) {
   // Check that an empty tile's range is valid (start >= end)
   EXPECT_GE(h_splat_boundaries[9], h_splat_boundaries[8]);
 
-  // Expected max radius per gaussian
-  std::vector<float> expected_max_radii = {4.32f, 6.22f, 4.32f};
-  EXPECT_NEAR(h_max_radii[0], expected_max_radii[0], 1e-2f);
-  EXPECT_NEAR(h_max_radii[1], expected_max_radii[1], 1e-2f);
-  EXPECT_NEAR(h_max_radii[2], expected_max_radii[2], 1e-2f);
-
   // --- Cleanup ---
   CUDA_CHECK(cudaFree(d_uvs));
   CUDA_CHECK(cudaFree(d_xyz));
   CUDA_CHECK(cudaFree(d_conic));
   CUDA_CHECK(cudaFree(d_sorted_gaussians));
   CUDA_CHECK(cudaFree(d_splat_boundaries));
-  CUDA_CHECK(cudaFree(d_max_radii));
 }
 
 // Test case for the precompute_spherical_harmonics function.

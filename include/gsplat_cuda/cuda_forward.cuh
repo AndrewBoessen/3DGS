@@ -80,13 +80,11 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
  * @param[out] sorted_gaussian_bytes            Pointer to store bytes to allocate for sorted_gaussians
  * @param[out] sorted_gaussians                 A device array to ouput gaussians sorted by z depth
  * @param[out] splat_start_end_idx_by_tile_idx  A device array to index into sorted_gaussian by tile id
- * @param[out] radii                            A device array to store max radii
  * @param[in]  stream                           The CUDA stream to execute kernel on
  */
 void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *conic, const int n_tiles_x,
                               const int n_tiles_y, const float mh_dist, const int N, size_t &sorted_gaussian_bytes,
-                              int *sorted_gaussians, int *splat_start_end_idx_by_tile_idx, float *radii,
-                              cudaStream_t stream = 0);
+                              int *sorted_gaussians, int *splat_start_end_idx_by_tile_idx, cudaStream_t stream = 0);
 
 /**
  * @brief Launches CUDA kernels to precompute spherical harmonic values and calculate rgb values
