@@ -53,6 +53,12 @@ __global__ void render_tiles_backward_kernel(
   __shared__ float _opacity[CHUNK_SIZE];
   __shared__ float _rgb[CHUNK_SIZE * 3];
   __shared__ float _conic[CHUNK_SIZE * 3];
+  // Shared memory for imtermediate gradient accum
+  __shared__ float _grad_opa[8];
+  __shared__ float _grad_u[8];
+  __shared__ float _grad_v[8];
+  __shared__ float _grad_conic[8 * 3];
+  __shared__ float _grad_rgb[8 * 3];
 
   // Coopertive group at block level i.e tiles
   cg::thread_block tile_thread_group = cg::this_thread_block();
@@ -63,27 +69,26 @@ __global__ void render_tiles_backward_kernel(
 
   // Iterate throught Gaussian chunks back to front
   for (int chunk_idx = num_chunks - 1; chunk_idx >= 0; chunk_idx--) {
-    tile_thread_group.sync();
-    // Load chunk to SMEM
+    //  Load chunk to SMEM
     for (int i = thread_id; i < CHUNK_SIZE; i += block_size) {
       const int tile_splat_idx = chunk_idx * CHUNK_SIZE + i;
-      if (tile_splat_idx >= num_splats_this_tile)
-        break;
-      const int global_splat_idx = splat_idx_start + tile_splat_idx;
-      const int gaussian_idx = gaussian_idx_by_splat_idx[global_splat_idx];
+      if (tile_splat_idx < num_splats_this_tile) {
+        const int global_splat_idx = splat_idx_start + tile_splat_idx;
+        const int gaussian_idx = gaussian_idx_by_splat_idx[global_splat_idx];
 
-      _gaussian_idx_by_splat_idx[i] = gaussian_idx;
-      _uvs[i * 2 + 0] = uvs[gaussian_idx * 2 + 0];
-      _uvs[i * 2 + 1] = uvs[gaussian_idx * 2 + 1];
-      // apply sigmoid to match forward pass
-      _opacity[i] = 1.0f / (1.0f + __expf(-opacity[gaussian_idx]));
+        _gaussian_idx_by_splat_idx[i] = gaussian_idx;
+        _uvs[i * 2 + 0] = uvs[gaussian_idx * 2 + 0];
+        _uvs[i * 2 + 1] = uvs[gaussian_idx * 2 + 1];
+        // apply sigmoid to match forward pass
+        _opacity[i] = 1.0f / (1.0f + __expf(-opacity[gaussian_idx]));
 
 #pragma unroll
-      for (int j = 0; j < 3; j++)
-        _rgb[i * 3 + j] = rgb[gaussian_idx * 3 + j];
+        for (int j = 0; j < 3; j++)
+          _rgb[i * 3 + j] = rgb[gaussian_idx * 3 + j];
 #pragma unroll
-      for (int j = 0; j < 3; j++)
-        _conic[i * 3 + j] = conic[gaussian_idx * 3 + j];
+        for (int j = 0; j < 3; j++)
+          _conic[i * 3 + j] = conic[gaussian_idx * 3 + j];
+      }
     }
 
     tile_thread_group.sync();
@@ -181,8 +186,6 @@ __global__ void render_tiles_backward_kernel(
         }
       }
 
-      tile_thread_group.sync();
-
       // --- Block-Level Reduction ---
       auto warp = cg::tiled_partition<32>(tile_thread_group);
       grad_opa = cg::reduce(warp, grad_opa, cg::plus<float>());
@@ -195,19 +198,50 @@ __global__ void render_tiles_backward_kernel(
       for (int j = 0; j < 3; j++)
         grad_rgb_local[j] = cg::reduce(warp, grad_rgb_local[j], cg::plus<float>());
 
-      // First thread in block performs the atomic write
-      if (thread_id % 32 == 0) {
-        const int gaussian_idx = _gaussian_idx_by_splat_idx[i];
-        atomicAdd(grad_opacity + gaussian_idx, grad_opa);
-        atomicAdd(grad_uv + gaussian_idx * 2 + 0, grad_u);
-        atomicAdd(grad_uv + gaussian_idx * 2 + 1, grad_v);
+      // First thread in warp writes to smem buffer
+      if (warp.thread_rank() == 0) {
+        const int buff_id = warp.meta_group_rank();
+        _grad_opa[buff_id] = grad_opa;
+        _grad_u[buff_id] = grad_u;
+        _grad_v[buff_id] = grad_v;
 #pragma unroll
         for (int j = 0; j < 3; j++)
-          atomicAdd(grad_rgb + gaussian_idx * 3 + j, grad_rgb_local[j]);
+          _grad_rgb[buff_id * 3 + j] = grad_rgb_local[j];
 #pragma unroll
         for (int j = 0; j < 3; j++)
-          atomicAdd(grad_conic + gaussian_idx * 3 + j, grad_conic_splat[j]);
+          _grad_conic[buff_id * 3 + j] = grad_conic_splat[j];
       }
+
+      //      tile_thread_group.sync(); // sync before reduce
+      //
+      //      // First group in new partition reduces smem buffer
+      //      auto reduce_group = cg::tiled_partition<8>(tile_thread_group);
+      //      if (reduce_group.meta_group_rank() == 0) {
+      //        const int buff_id = reduce_group.thread_rank();
+      //        grad_opa = cg::reduce(reduce_group, _grad_opa[buff_id], cg::plus<float>());
+      //        grad_u = cg::reduce(reduce_group, _grad_u[buff_id], cg::plus<float>());
+      //        grad_v = cg::reduce(reduce_group, _grad_v[buff_id], cg::plus<float>());
+      // #pragma unroll
+      //        for (int j = 0; j < 3; j++)
+      //          grad_rgb_local[j] = _grad_rgb[buff_id * 3 + j];
+      // #pragma unroll
+      //        for (int j = 0; j < 3; j++)
+      //          grad_conic_splat[j] = _grad_conic[buff_id * 3 + j];
+      //      }
+
+      //      // First thread in block write to global mem
+      //      if (tile_thread_group.thread_rank() == 0) {
+      //        const int gaussian_idx = _gaussian_idx_by_splat_idx[i];
+      //        atomicAdd(grad_opacity + gaussian_idx, grad_opa);
+      //        atomicAdd(grad_uv + gaussian_idx * 2 + 0, grad_u);
+      //        atomicAdd(grad_uv + gaussian_idx * 2 + 1, grad_v);
+      // #pragma unroll
+      //        for (int j = 0; j < 3; j++)
+      //          atomicAdd(grad_rgb + gaussian_idx * 3 + j, grad_rgb_local[j]);
+      // #pragma unroll
+      //        for (int j = 0; j < 3; j++)
+      //          atomicAdd(grad_conic + gaussian_idx * 3 + j, grad_conic_splat[j]);
+      //      }
     }
   }
 }
