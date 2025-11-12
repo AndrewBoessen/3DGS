@@ -589,6 +589,13 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
   auto d_scale_selected = compact_masked_array<3>(cuda.gaussians.d_scale, pass_data.d_mask, pass_data.num_culled);
   auto d_xyz_selected = compact_masked_array<3>(cuda.gaussians.d_xyz, pass_data.d_mask, pass_data.num_culled);
 
+  // Buffers to hold pre accumulated gradients from render backward
+  const int num_elements = pass_data.d_sorted_gaussians.size();
+  thrust::device_vector<float> d_grad_opacity_splats(num_elements);
+  thrust::device_vector<float> d_grad_uv_splats(num_elements * 2);
+  thrust::device_vector<float> d_grad_rgb_splats(num_elements * 3);
+  thrust::device_vector<float> d_grad_conic_splats(num_elements * 3);
+
   render_image_backward(
       thrust::raw_pointer_cast(d_uv_selected.data()), thrust::raw_pointer_cast(d_opacity_selected.data()),
       thrust::raw_pointer_cast(pass_data.d_conic.data()), thrust::raw_pointer_cast(pass_data.d_precomputed_rgb.data()),
@@ -597,9 +604,8 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
       thrust::raw_pointer_cast(pass_data.d_splats_per_pixel.data()),
       thrust::raw_pointer_cast(pass_data.d_weight_per_pixel.data()), thrust::raw_pointer_cast(d_grad_image.data()),
       width, height, thrust::raw_pointer_cast(cuda.gradients.d_grad_precompute_rgb.data()),
-      thrust::raw_pointer_cast(cuda.gradients.d_grad_opacity.data()),
-      thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data()),
-      thrust::raw_pointer_cast(cuda.gradients.d_grad_conic.data()));
+      thrust::raw_pointer_cast(d_grad_opacity_splats.data()), thrust::raw_pointer_cast(d_grad_uv_splats.data()),
+      thrust::raw_pointer_cast(d_grad_conic_splats.data()));
 
   precompute_spherical_harmonics_backward(thrust::raw_pointer_cast(d_xyz_c_selected.data()),
                                           thrust::raw_pointer_cast(cuda.gradients.d_grad_precompute_rgb.data()), l_max,

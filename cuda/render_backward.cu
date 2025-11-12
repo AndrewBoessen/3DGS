@@ -54,14 +54,24 @@ __global__ void render_tiles_backward_kernel(
   __shared__ float _rgb[CHUNK_SIZE * 3];
   __shared__ float _conic[CHUNK_SIZE * 3];
   // Shared memory for imtermediate gradient accum
-  __shared__ float _grad_opa[8];
-  __shared__ float _grad_u[8];
-  __shared__ float _grad_v[8];
-  __shared__ float _grad_conic[8 * 3];
-  __shared__ float _grad_rgb[8 * 3];
+  __shared__ float _grad_opa_chunk[CHUNK_SIZE];
+  __shared__ float _grad_u_chunk[CHUNK_SIZE];
+  __shared__ float _grad_v_chunk[CHUNK_SIZE];
+  __shared__ float _grad_conic_chunk[CHUNK_SIZE * 3];
+  __shared__ float _grad_rgb_chunk[CHUNK_SIZE * 3];
+
+  // Shared memory for block reduce sum
+  const int REDUCE_SIZE = TILE_SIZE_BWD * TILE_SIZE_BWD / 32; // Num warps, e.g., 16*16/32 = 8
+  __shared__ float _grad_opa[REDUCE_SIZE];
+  __shared__ float _grad_u[REDUCE_SIZE];
+  __shared__ float _grad_v[REDUCE_SIZE];
+  __shared__ float _grad_conic[REDUCE_SIZE * 3];
+  __shared__ float _grad_rgb[REDUCE_SIZE * 3];
 
   // Coopertive group at block level i.e tiles
   cg::thread_block tile_thread_group = cg::this_thread_block();
+  auto warp = cg::tiled_partition<32>(tile_thread_group);
+  const int warp_rank = warp.meta_group_rank();
 
   const int num_chunks = (num_splats_this_tile + CHUNK_SIZE - 1) / CHUNK_SIZE;
   const int thread_id = tile_thread_group.thread_rank();
@@ -186,8 +196,8 @@ __global__ void render_tiles_backward_kernel(
         }
       }
 
-      // --- Block-Level Reduction ---
-      auto warp = cg::tiled_partition<32>(tile_thread_group);
+      // --- Stage 1: Warp-Level Reduction ---
+      // Each warp reduces its 32 threads' values. Result lands in thread 0 of the warp.
       grad_opa = cg::reduce(warp, grad_opa, cg::plus<float>());
       grad_u = cg::reduce(warp, grad_u, cg::plus<float>());
       grad_v = cg::reduce(warp, grad_v, cg::plus<float>());
@@ -198,50 +208,85 @@ __global__ void render_tiles_backward_kernel(
       for (int j = 0; j < 3; j++)
         grad_rgb_local[j] = cg::reduce(warp, grad_rgb_local[j], cg::plus<float>());
 
-      // First thread in warp writes to smem buffer
+      // --- Stage 2: Write Warp Sums to Shared Memory ---
+      // Thread 0 of each warp writes its sum to the intermediate buffer.
       if (warp.thread_rank() == 0) {
-        const int buff_id = warp.meta_group_rank();
-        _grad_opa[buff_id] = grad_opa;
-        _grad_u[buff_id] = grad_u;
-        _grad_v[buff_id] = grad_v;
+        _grad_opa[warp_rank] = grad_opa;
+        _grad_u[warp_rank] = grad_u;
+        _grad_v[warp_rank] = grad_v;
 #pragma unroll
         for (int j = 0; j < 3; j++)
-          _grad_rgb[buff_id * 3 + j] = grad_rgb_local[j];
+          _grad_rgb[warp_rank * 3 + j] = grad_rgb_local[j];
 #pragma unroll
         for (int j = 0; j < 3; j++)
-          _grad_conic[buff_id * 3 + j] = grad_conic_splat[j];
+          _grad_conic[warp_rank * 3 + j] = grad_conic_splat[j];
       }
 
-      //      tile_thread_group.sync(); // sync before reduce
-      //
-      //      // First group in new partition reduces smem buffer
-      //      auto reduce_group = cg::tiled_partition<8>(tile_thread_group);
-      //      if (reduce_group.meta_group_rank() == 0) {
-      //        const int buff_id = reduce_group.thread_rank();
-      //        grad_opa = cg::reduce(reduce_group, _grad_opa[buff_id], cg::plus<float>());
-      //        grad_u = cg::reduce(reduce_group, _grad_u[buff_id], cg::plus<float>());
-      //        grad_v = cg::reduce(reduce_group, _grad_v[buff_id], cg::plus<float>());
-      // #pragma unroll
-      //        for (int j = 0; j < 3; j++)
-      //          grad_rgb_local[j] = _grad_rgb[buff_id * 3 + j];
-      // #pragma unroll
-      //        for (int j = 0; j < 3; j++)
-      //          grad_conic_splat[j] = _grad_conic[buff_id * 3 + j];
-      //      }
+      // Sync block to ensure all warp sums are in shared memory
+      tile_thread_group.sync();
 
-      //      // First thread in block write to global mem
-      //      if (tile_thread_group.thread_rank() == 0) {
-      //        const int gaussian_idx = _gaussian_idx_by_splat_idx[i];
-      //        atomicAdd(grad_opacity + gaussian_idx, grad_opa);
-      //        atomicAdd(grad_uv + gaussian_idx * 2 + 0, grad_u);
-      //        atomicAdd(grad_uv + gaussian_idx * 2 + 1, grad_v);
-      // #pragma unroll
-      //        for (int j = 0; j < 3; j++)
-      //          atomicAdd(grad_rgb + gaussian_idx * 3 + j, grad_rgb_local[j]);
-      // #pragma unroll
-      //        for (int j = 0; j < 3; j++)
-      //          atomicAdd(grad_conic + gaussian_idx * 3 + j, grad_conic_splat[j]);
-      //      }
+      // --- Stage 3: Block-Level Reduction (Reduce Warp Sums) ---
+      // A single warp (warp 0) now reduces the intermediate sums.
+      if (warp_rank == 0) {
+        // Load intermediate sums into warp 0's registers
+        float final_grad_opa = (warp.thread_rank() < REDUCE_SIZE) ? _grad_opa[warp.thread_rank()] : 0.0f;
+        float final_grad_u = (warp.thread_rank() < REDUCE_SIZE) ? _grad_u[warp.thread_rank()] : 0.0f;
+        float final_grad_v = (warp.thread_rank() < REDUCE_SIZE) ? _grad_v[warp.thread_rank()] : 0.0f;
+        float final_grad_rgb[3] = {0.0f, 0.0f, 0.0f};
+        float final_grad_conic[3] = {0.0f, 0.0f, 0.0f};
+
+        if (warp.thread_rank() < REDUCE_SIZE) {
+#pragma unroll
+          for (int j = 0; j < 3; j++)
+            final_grad_rgb[j] = _grad_rgb[warp.thread_rank() * 3 + j];
+#pragma unroll
+          for (int j = 0; j < 3; j++)
+            final_grad_conic[j] = _grad_conic[warp.thread_rank() * 3 + j];
+        }
+
+        // Reduce within warp 0
+        final_grad_opa = cg::reduce(warp, final_grad_opa, cg::plus<float>());
+        final_grad_u = cg::reduce(warp, final_grad_u, cg::plus<float>());
+        final_grad_v = cg::reduce(warp, final_grad_v, cg::plus<float>());
+#pragma unroll
+        for (int j = 0; j < 3; j++)
+          final_grad_rgb[j] = cg::reduce(warp, final_grad_rgb[j], cg::plus<float>());
+#pragma unroll
+        for (int j = 0; j < 3; j++)
+          final_grad_conic[j] = cg::reduce(warp, final_grad_conic[j], cg::plus<float>());
+
+        // --- Stage 4: Write Final Sum ---
+        // Only thread 0 of warp 0 writes the final result for this Gaussian.
+        if (warp.thread_rank() == 0) {
+          _grad_opa_chunk[i] = final_grad_opa;
+          _grad_u_chunk[i] = final_grad_u;
+          _grad_v_chunk[i] = final_grad_v;
+#pragma unroll
+          for (int j = 0; j < 3; j++)
+            _grad_rgb_chunk[i * 3 + j] = final_grad_rgb[j];
+#pragma unroll
+          for (int j = 0; j < 3; j++)
+            _grad_conic_chunk[i * 3 + j] = final_grad_conic[j];
+        }
+      }
+
+      // Sync to ensure chunk buffers are written before the next 'i' iteration
+      tile_thread_group.sync();
+    }
+
+    const int num_splats_in_chunk = chunk_end - chunk_start;
+    for (int i = thread_id; i < num_splats_in_chunk; i += block_size) {
+      const int global_write_idx = splat_idx_start + chunk_start + i;
+
+      grad_opacity[global_write_idx] = _grad_opa_chunk[i];
+      grad_uv[global_write_idx * 2 + 0] = _grad_u_chunk[i];
+      grad_uv[global_write_idx * 2 + 1] = _grad_v_chunk[i];
+#pragma unroll
+      for (int j = 0; j < 3; j++)
+        grad_rgb[global_write_idx * 3 + j] = _grad_rgb_chunk[i * 3 + j];
+#pragma unroll
+      for (int j = 0; j < 3; j++)
+        grad_conic[global_write_idx * 3 + j] = _grad_conic_chunk[i * 3 + j];
     }
   }
 }
