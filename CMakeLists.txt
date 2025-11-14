@@ -9,7 +9,15 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_ARCHITECTURES native)
+set(DEFAULT_ARCH 75)
+set(DETECTED_NATIVE_ARCH ${CUDAToolkit_DEFAULT_ARCHITECTURES})
+if(DETECTED_NATIVE_ARCH)
+  message(STATUS "Detected GPU arch: ${DETECTED_NATIVE_ARCH}")
+  set(CMAKE_CUDA_ARCHITECTURES ${DETECTED_NATIVE_ARCH})
+else()
+  message(STATUS "No GPU detected. Building for default arch: ${DEFAULT_ARCH}")
+  set(CMAKE_CUDA_ARCHITECTURES ${DEFAULT_ARCH})
+endif()
 
 # ===================================================================
 # DEPENDENCIES

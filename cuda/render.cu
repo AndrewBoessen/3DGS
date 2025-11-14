@@ -54,14 +54,12 @@ __global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *
         _opacity[i] = opacity[gaussian_idx];
 
 #pragma unroll
-        for (int channel = 0; channel < 3; channel++) {
+        for (int channel = 0; channel < 3; channel++)
           _rgb[i * 3 + channel] = rgb[gaussian_idx * 3 + channel];
-        }
 
 #pragma unroll
-        for (int j = 0; j < 3; j++) {
+        for (int j = 0; j < 3; j++)
           _conic[i * 3 + j] = conic[gaussian_idx * 3 + j];
-        }
       }
     }
     __syncthreads();

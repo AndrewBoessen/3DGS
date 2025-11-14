@@ -7,7 +7,7 @@ initial_scale_num_neighbors: 3
 initial_scale_factor: 0.8
 max_initial_scale: 0.1
 near_thresh: 0.3
-far_thresh: 500.0
+far_thresh: 1000.0
 mh_dist: 3.0
 cull_mask_padding: 100
 num_iters: 7000
