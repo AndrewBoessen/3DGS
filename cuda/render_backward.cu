@@ -2,106 +2,156 @@
 
 #include "checks.cuh"
 #include "gsplat_cuda/cuda_backward.cuh"
+#include <__clang_cuda_builtin_vars.h>
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
+#include <thread>
 
 namespace cg = cooperative_groups;
 
-constexpr int BATCH_SIZE = 256;
-
-template <unsigned int CHUNK_SIZE>
 __global__ void render_tiles_backward_kernel(
-    const float *__restrict__ uvs, const float *__restrict__ opacity, const float *__restrict__ rgb,
-    const float *__restrict__ conic, const int *__restrict__ splat_start_end_idx_by_tile_idx,
-    const int *__restrict__ gaussian_idx_by_splat_idx, const float background_opacity,
-    const int *__restrict__ num_splats_per_pixel, const float *__restrict__ final_weight_per_pixel,
-    const float *__restrict__ grad_image, const int image_width, const int image_height, float *__restrict__ grad_rgb,
-    float *__restrict__ grad_opacity, float *__restrict__ grad_uv, float *__restrict__ grad_conic) {
+    const int num_tiles_x, const int num_tiles_y, const float *__restrict__ uvs, const float *__restrict__ opacity,
+    const float *__restrict__ rgb, const float *__restrict__ conic,
+    const int *__restrict__ splat_start_end_idx_by_tile_idx, const int *__restrict__ gaussian_idx_by_splat_idx,
+    const float background_opacity, const int *__restrict__ num_splats_per_pixel,
+    const float *__restrict__ final_weight_per_pixel, const float *__restrict__ grad_image, const int image_width,
+    const int image_height, float *__restrict__ grad_rgb, float *__restrict__ grad_opacity, float *__restrict__ grad_uv,
+    float *__restrict__ grad_conic) {
   // Grid processes tiles, blocks process pixels within each tile
-  const int u_splat = blockIdx.x * blockDim.x + threadIdx.x;
-  const int v_splat = blockIdx.y * blockDim.y + threadIdx.y;
-  const int pixel_id = v_splat * image_width + u_splat;
+  const int PIXELS_PER_THREAD = (TILE_SIZE_BWD * TILE_SIZE_BWD) / 32;
+  const int tile_idx = blockIdx.x * blockDim.y + threadIdx.y;
+  // Tile outside of image
+  if (tile_idx >= num_tiles_x * num_tiles_y)
+    return;
 
-  const int tile_idx = blockIdx.x + blockIdx.y * gridDim.x;
   const int splat_idx_start = splat_start_end_idx_by_tile_idx[tile_idx];
   const int splat_idx_end = splat_start_end_idx_by_tile_idx[tile_idx + 1];
   int num_splats_this_tile = splat_idx_end - splat_idx_start;
 
+  __shared__ float _image_grad[3][PIXELS_PER_THREAD][32];
+  __shared__ float _trans_final[PIXELS_PER_THREAD][32];
+  __shared__ unsigned int _splats_per_pixel[PIXELS_PER_THREAD][32];
+
   // Per-pixel variables stored in registers
-  bool background_initialized = false;
-  int num_splats_this_pixel;
-  float T;
-  float T_final;
-  float grad_image_local[3];
-  float color_accum[3] = {0.0f, 0.0f, 0.0f};
+  bool background_initialized[PIXELS_PER_THREAD];
+  float T[PIXELS_PER_THREAD];
+  float3 color_accum[PIXELS_PER_THREAD];
 
-  bool valid_pixel = u_splat < image_width && v_splat < image_height;
+  const int in_tile_x = threadIdx.x % TILE_SIZE_BWD;                     // local tile x
+  const int in_tile_y = threadIdx.x / TILE_SIZE_BWD * PIXELS_PER_THREAD; // local tile y
 
-  if (valid_pixel) {
-    num_splats_this_pixel = num_splats_per_pixel[pixel_id];
-    T_final = final_weight_per_pixel[pixel_id];
-    T = T_final;
+  const int base_pixel_x = tile_idx % num_tiles_x * TILE_SIZE_BWD + in_tile_x;
+  const int base_pixel_y = tile_idx / num_tiles_x * TILE_SIZE_BWD + in_tile_y;
+
+  unsigned int index_in_tile = 0;
 #pragma unroll
-    for (int channel = 0; channel < 3; channel++) {
-      grad_image_local[channel] = grad_image[pixel_id * 3 + channel];
+  for (int i = 0; i < PIXELS_PER_THREAD; i++) {
+    const int global_pixel_x = base_pixel_x;
+    const int global_pixel_y = base_pixel_y + i;
+
+    bool valid_pixel = global_pixel_x < image_width && global_pixel_y < image_height;
+    if (valid_pixel) {
+      const int pixel_id = global_pixel_y * image_width + global_pixel_x;
+      _splats_per_pixel[i][threadIdx.x] = num_splats_per_pixel[pixel_id];
+      _trans_final[i][threadIdx.x] = final_weight_per_pixel[pixel_id];
+#pragma unroll
+      for (int channel = 0; channel < 3; channel++) {
+        _image_grad[channel][i][threadIdx.x] = grad_image[pixel_id * 3 + channel];
+      }
+    }
+    // Init per-pixel values
+    background_initialized[i] = false;
+    color_accum[i] = {0.0f, 0.0f, 0.0f};
+    T[i] = _trans_final[i][threadIdx.x];
+
+    index_in_tile = max(index_in_tile, _splats_per_pixel[i][threadIdx.x]);
+  }
+  index_in_tile = __reduce_max_sync(0xFFFFFFFF, index_in_tile); // max depth in tile
+
+  // Starting index in sorted splats
+  const int *splats_in_tile = &gaussian_idx_by_splat_idx[splat_idx_start];
+
+  // Iterate on splats in tile back to front
+  for (; index_in_tile >= 0; index_in_tile--) {
+    const int gaussian_idx = splats_in_tile[index_in_tile];
+
+    float basic;
+    float linear;
+    float quad;
+    float inv_det;
+    float2 d = {0.0f, 0.0f};
+    {
+      d.x = (float)base_pixel_x - uvs[gaussian_idx * 2 + 0];
+      d.y = (float)base_pixel_y - uvs[gaussian_idx * 2 + 1];
+      const float a = conic[gaussian_idx * 3 + 0] + 0.3f;
+      const float b = conic[gaussian_idx * 3 + 1];
+      const float c = conic[gaussian_idx * 3 + 2] + 0.3f;
+      inv_det = 1.0f / a * c - b * b;
+      basic = -0.5f * (a * d.x * d.x + c * d.y * d.y + 2.0f * b * d.x * d.y);
+      linear = b * d.x - c * d.y;
+      quad = -0.5f * c;
+    }
+
+    float3 color = {rgb[gaussian_idx * 3 + 0], rgb[gaussian_idx * 3 + 1], rgb[gaussian_idx * 3 + 2]};
+    float opa = opacity[gaussian_idx];
+
+    // Zero gradients for current gaussian
+    float3 grad_rgb = {0.0f, 0.0f, 0.0f};
+    float grad_alpha = 0.0f;
+    float grad_basic = 0.0f;
+    float grad_bxcy = 0.0f;
+    float grad_neg_half_c = 0.0f;
+
+    // Raster scan on all pixels per thread
+#pragma unroll
+    for (int i = 0; i < PIXELS_PER_THREAD; i++) {
+      float power = basic + linear * i + quad * i * i;
+      float g = __expf(power * inv_det);
+      float alpha = min(0.99f, opa * g);
+
+      // Mask out low alpha and depth
+      const bool valid_splat = (alpha >= 0.00392156862f) && (index_in_tile <= _splats_per_pixel[i][threadIdx.x]);
+      const unsigned int valid_mask = __ballot_sync(valid_mask, valid_splat);
+
+      if (__any_sync(0xFFFFFFFF, valid_mask != 0)) {
+        // Initialize background color
+        if (!background_initialized[i]) {
+          const float background_weight = 1.0f - (alpha * T[i] + 1.0f - T[i]);
+          if (background_weight > 0.001f) {
+            color_accum[i].x += background_opacity * background_weight;
+            color_accum[i].y += background_opacity * background_weight;
+            color_accum[i].z += background_opacity * background_weight;
+          }
+          background_initialized[i] = true;
+        } else {
+          // alpha reciprical
+          float ra = 1.0f / (1.0f - alpha);
+          T[i] *= ra;
+        }
+
+        const float fac = alpha * T[i];
+
+        // RGB gradients
+        grad_rgb.x += fac * _image_grad[0][i][threadIdx.x];
+        grad_rgb.y += fac * _image_grad[1][i][threadIdx.x];
+        grad_rgb.z += fac * _image_grad[2][i][threadIdx.x];
+
+        // alpha gradient
+        grad_alpha += (rgb[gaussian_idx * 3 + 0] - color_accum[i].x) * T[i] * _image_grad[0][i][threadIdx.x];
+        grad_alpha += (rgb[gaussian_idx * 3 + 1] - color_accum[i].y) * T[i] * _image_grad[1][i][threadIdx.x];
+        grad_alpha += (rgb[gaussian_idx * 3 + 2] - color_accum[i].z) * T[i] * _image_grad[2][i][threadIdx.x];
+        color_accum[i].x += alpha * (rgb[gaussian_idx * 3 + 0] - color_accum[i].x);
+        color_accum[i].y += alpha * (rgb[gaussian_idx * 3 + 1] - color_accum[i].y);
+        color_accum[i].z += alpha * (rgb[gaussian_idx * 3 + 2] - color_accum[i].z);
+      }
     }
   }
-
-  // Shared memory for batched processing of Gaussians
-  __shared__ int _gaussian_idx_by_splat_idx[CHUNK_SIZE];
-  __shared__ float _uvs[CHUNK_SIZE * 2];
-  __shared__ float _opacity[CHUNK_SIZE];
-  __shared__ float _rgb[CHUNK_SIZE * 3];
-  __shared__ float _conic[CHUNK_SIZE * 3];
-  // Shared memory for imtermediate gradient accum
-  __shared__ float _grad_opa_chunk[CHUNK_SIZE];
-  __shared__ float _grad_u_chunk[CHUNK_SIZE];
-  __shared__ float _grad_v_chunk[CHUNK_SIZE];
-  __shared__ float _grad_conic_chunk[CHUNK_SIZE * 3];
-  __shared__ float _grad_rgb_chunk[CHUNK_SIZE * 3];
-
-  // Shared memory for block reduce sum
-  const int REDUCE_SIZE = TILE_SIZE_BWD * TILE_SIZE_BWD / 32; // Num warps, e.g., 16*16/32 = 8
-  __shared__ float _grad_opa[REDUCE_SIZE];
-  __shared__ float _grad_u[REDUCE_SIZE];
-  __shared__ float _grad_v[REDUCE_SIZE];
-  __shared__ float _grad_conic[REDUCE_SIZE * 3];
-  __shared__ float _grad_rgb[REDUCE_SIZE * 3];
-
+  /*
   // Coopertive group at block level i.e tiles
   cg::thread_block tile_thread_group = cg::this_thread_block();
   auto warp = cg::tiled_partition<32>(tile_thread_group);
   const int warp_rank = warp.meta_group_rank();
 
-  const int num_chunks = (num_splats_this_tile + CHUNK_SIZE - 1) / CHUNK_SIZE;
-  const int thread_id = tile_thread_group.thread_rank();
-  const int block_size = blockDim.x * blockDim.y;
-
-  // Iterate throught Gaussian chunks back to front
-  for (int chunk_idx = num_chunks - 1; chunk_idx >= 0; chunk_idx--) {
-    //  Load chunk to SMEM
-    for (int i = thread_id; i < CHUNK_SIZE; i += block_size) {
-      const int tile_splat_idx = chunk_idx * CHUNK_SIZE + i;
-      if (tile_splat_idx < num_splats_this_tile) {
-        const int global_splat_idx = splat_idx_start + tile_splat_idx;
-        const int gaussian_idx = gaussian_idx_by_splat_idx[global_splat_idx];
-
-        _gaussian_idx_by_splat_idx[i] = gaussian_idx;
-        _uvs[i * 2 + 0] = uvs[gaussian_idx * 2 + 0];
-        _uvs[i * 2 + 1] = uvs[gaussian_idx * 2 + 1];
-        // apply sigmoid to match forward pass
-        _opacity[i] = 1.0f / (1.0f + __expf(-opacity[gaussian_idx]));
-
-#pragma unroll
-        for (int j = 0; j < 3; j++)
-          _rgb[i * 3 + j] = rgb[gaussian_idx * 3 + j];
-#pragma unroll
-        for (int j = 0; j < 3; j++)
-          _conic[i * 3 + j] = conic[gaussian_idx * 3 + j];
-      }
-    }
-
-    tile_thread_group.sync();
 
     int chunk_start = chunk_idx * CHUNK_SIZE;
     int chunk_end = min((chunk_idx + 1) * CHUNK_SIZE, num_splats_this_tile);
@@ -289,6 +339,7 @@ __global__ void render_tiles_backward_kernel(
         grad_conic[global_write_idx * 3 + j] = _grad_conic_chunk[i * 3 + j];
     }
   }
+  */
 }
 
 void render_image_backward(const float *const uvs, const float *const opacity, const float *const conic,
@@ -311,14 +362,17 @@ void render_image_backward(const float *const uvs, const float *const opacity, c
   ASSERT_DEVICE_POINTER(grad_uv);
   ASSERT_DEVICE_POINTER(grad_conic);
 
+  const int tiles_per_block = 4;
   const int num_tiles_x = (image_width + TILE_SIZE_BWD - 1) / TILE_SIZE_BWD;
   const int num_tiles_y = (image_height + TILE_SIZE_BWD - 1) / TILE_SIZE_BWD;
+  const int total_blocks = (num_tiles_x * num_tiles_y + tiles_per_block - 1) / tiles_per_block;
 
-  dim3 block_size(TILE_SIZE_BWD, TILE_SIZE_BWD, 1);
-  dim3 grid_size(num_tiles_x, num_tiles_y, 1);
+  dim3 block_size(32, tiles_per_block, 1);
+  dim3 grid_size(total_blocks, 1, 1);
 
   // Launch the single, non-templated kernel
-  render_tiles_backward_kernel<BATCH_SIZE><<<grid_size, block_size, 0, stream>>>(
-      uvs, opacity, rgb, conic, splat_range_by_tile, sorted_splats, background_opacity, num_splats_per_pixel,
-      final_weight_per_pixel, grad_image, image_width, image_height, grad_rgb, grad_opacity, grad_uv, grad_conic);
+  render_tiles_backward_kernel<<<grid_size, block_size, 0, stream>>>(
+      num_tiles_x, num_tiles_y, uvs, opacity, rgb, conic, splat_range_by_tile, sorted_splats, background_opacity,
+      num_splats_per_pixel, final_weight_per_pixel, grad_image, image_width, image_height, grad_rgb, grad_opacity,
+      grad_uv, grad_conic);
 }
