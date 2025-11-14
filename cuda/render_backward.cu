@@ -2,10 +2,8 @@
 
 #include "checks.cuh"
 #include "gsplat_cuda/cuda_backward.cuh"
-#include <__clang_cuda_builtin_vars.h>
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
-#include <thread>
 
 namespace cg = cooperative_groups;
 
@@ -20,6 +18,10 @@ __global__ void render_tiles_backward_kernel(
   // Grid processes tiles, blocks process pixels within each tile
   const int PIXELS_PER_THREAD = (TILE_SIZE_BWD * TILE_SIZE_BWD) / 32;
   const int tile_idx = blockIdx.x * blockDim.y + threadIdx.y;
+
+  cg::thread_block tile_thread_group = cg::this_thread_block();
+  auto warp = cg::tiled_partition<32>(tile_thread_group);
+
   // Tile outside of image
   if (tile_idx >= num_tiles_x * num_tiles_y)
     return;
@@ -97,10 +99,11 @@ __global__ void render_tiles_backward_kernel(
 
     // Zero gradients for current gaussian
     float3 grad_rgb = {0.0f, 0.0f, 0.0f};
+    float grad_opa = 0.0f;
     float grad_alpha = 0.0f;
     float grad_basic = 0.0f;
-    float grad_bxcy = 0.0f;
-    float grad_neg_half_c = 0.0f;
+    float grad_linear = 0.0f;
+    float grad_quad = 0.0f;
 
     // Raster scan on all pixels per thread
 #pragma unroll
@@ -111,9 +114,11 @@ __global__ void render_tiles_backward_kernel(
 
       // Mask out low alpha and depth
       const bool valid_splat = (alpha >= 0.00392156862f) && (index_in_tile <= _splats_per_pixel[i][threadIdx.x]);
-      const unsigned int valid_mask = __ballot_sync(valid_mask, valid_splat);
 
-      if (__any_sync(0xFFFFFFFF, valid_mask != 0)) {
+      if (valid_splat) {
+        // alpha reciprical
+        float ra = 1.0f / (1.0f - alpha);
+
         // Initialize background color
         if (!background_initialized[i]) {
           const float background_weight = 1.0f - (alpha * T[i] + 1.0f - T[i]);
@@ -124,12 +129,13 @@ __global__ void render_tiles_backward_kernel(
           }
           background_initialized[i] = true;
         } else {
-          // alpha reciprical
-          float ra = 1.0f / (1.0f - alpha);
           T[i] *= ra;
         }
 
         const float fac = alpha * T[i];
+        color_accum[i].x += fac * rgb[gaussian_idx * 3 + 0];
+        color_accum[i].y += fac * rgb[gaussian_idx * 3 + 1];
+        color_accum[i].z += fac * rgb[gaussian_idx * 3 + 2];
 
         // RGB gradients
         grad_rgb.x += fac * _image_grad[0][i][threadIdx.x];
@@ -137,13 +143,29 @@ __global__ void render_tiles_backward_kernel(
         grad_rgb.z += fac * _image_grad[2][i][threadIdx.x];
 
         // alpha gradient
-        grad_alpha += (rgb[gaussian_idx * 3 + 0] - color_accum[i].x) * T[i] * _image_grad[0][i][threadIdx.x];
-        grad_alpha += (rgb[gaussian_idx * 3 + 1] - color_accum[i].y) * T[i] * _image_grad[1][i][threadIdx.x];
-        grad_alpha += (rgb[gaussian_idx * 3 + 2] - color_accum[i].z) * T[i] * _image_grad[2][i][threadIdx.x];
-        color_accum[i].x += alpha * (rgb[gaussian_idx * 3 + 0] - color_accum[i].x);
-        color_accum[i].y += alpha * (rgb[gaussian_idx * 3 + 1] - color_accum[i].y);
-        color_accum[i].z += alpha * (rgb[gaussian_idx * 3 + 2] - color_accum[i].z);
+        grad_alpha += (rgb[gaussian_idx * 3 + 0] * T[i] - color_accum[i].x * ra) * _image_grad[0][i][threadIdx.x];
+        grad_alpha += (rgb[gaussian_idx * 3 + 1] * T[i] - color_accum[i].y * ra) * _image_grad[1][i][threadIdx.x];
+        grad_alpha += (rgb[gaussian_idx * 3 + 2] * T[i] - color_accum[i].z * ra) * _image_grad[2][i][threadIdx.x];
+
+        // opacity gradient
+        grad_opa += g * grad_alpha * opacity[gaussian_idx] * (1.0f * opacity[gaussian_idx]);
+
+        // G gradient
+        const float grad_g = grad_alpha * opacity[gaussian_idx];
+        const float grad_power = g * grad_g;
+
+        grad_basic += grad_power;
+        grad_linear += grad_power * i;
+        grad_quad += grad_power * i * i;
       }
+    }
+    // Accumulate gradients across tile
+    if (__any_sync(0xFFFFFFFF, grad_opa != 0.0f)) {
+      grad_rgb.x = cg::reduce(warp, grad_rgb.x, cg::plus<float>());
+      grad_rgb.y = cg::reduce(warp, grad_rgb.y, cg::plus<float>());
+      grad_rgb.z = cg::reduce(warp, grad_rgb.z, cg::plus<float>());
+
+      grad_opa = cg::reduce(warp, grad_opa, cg::plus<float>());
     }
   }
   /*
