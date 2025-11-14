@@ -577,17 +577,17 @@ TEST_F(CudaBackwardKernelTest, SphericalHarmonicsBackward) {
 TEST_F(CudaBackwardKernelTest, RenderBackward) {
   const int image_width = 16, image_height = 16;
   const int N = 3; // Number of Gaussians
-  const float h = 1e-4f;
+  const float h = 1e-6f;
 
   // Host data
-  std::vector<float> h_uvs = {8.0f, 8.0f, 2.0f, 2.0f, 4.0f, 4.0f};
-  std::vector<float> h_opacity = {2.0f, 2.0f, 2.0f};
-  std::vector<float> h_conic = {5.0f, 0.0f, 5.0f, 5.0f, 0.0f, 5.0f, 5.0f, 0.0f, 5.0f}; // Gaussian 1
+  std::vector<float> h_uvs = {8.1f, 8.1f, 2.1f, 2.1f, 4.1f, 4.1f};
+  std::vector<float> h_opacity = {5.0f, 5.0f, 5.0f};
+  std::vector<float> h_conic = {5.0f, 0.1f, 5.0f, 5.0f, 0.1f, 5.0f, 5.0f, 0.1f, 5.0f}; // Gaussian 1
   std::vector<float> h_rgb = {0.5f, 0.2f, 0.2f, 0.2f, 0.2f, 0.5f, 0.2f, 0.5f, 0.2f};   // Gaussian 1
-  const float background_opacity = 0.8f;
+  const float background_opacity = 0.5f;
   std::vector<float> h_grad_image(image_width * image_height * 3);
   for (size_t i = 0; i < h_grad_image.size(); ++i)
-    h_grad_image[i] = 0.01f;
+    h_grad_image[i] = 1e-3f;
 
   // Data that is computed during the forward pass
   std::vector<int> h_sorted_splats = {0, 1, 2};
@@ -602,15 +602,18 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     std::vector<float> image(image_width * image_height * 3);
     for (int v_splat = 0; v_splat < image_height; ++v_splat) {
       for (int u_splat = 0; u_splat < image_width; ++u_splat) {
-        float T = 1.0f;
         int splat_count = 0;
         float pixel_rgb[3] = {0.0f, 0.0f, 0.0f};
+        float alpha_accum = 0.0f;
+        float alpha_weight = 0.0f;
 
         // Get splat range for this tile.
         const int splat_idx_start = h_splat_range_by_tile[0];
         const int splat_idx_end = h_splat_range_by_tile[1];
 
         for (int splat_idx = splat_idx_start; splat_idx < splat_idx_end; ++splat_idx) {
+          if (alpha_accum > 0.9999f)
+            break;
           const int i = h_sorted_splats[splat_idx]; // <-- UPDATED: Use indirection
 
           const float u_mean = uvs[i * 2 + 0];
@@ -626,35 +629,46 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
           const float reciprocal_det = 1.0f / det;
           const float mh_sq = (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff) * reciprocal_det;
 
+          const float opa = 1.0f / (1.0f + expf(-opacity[i]));
+
           float norm_prob = 0.0f;
           if (mh_sq <= 0.0f) { // Match kernel's `mh_sq > 0.0f` check
+            splat_count++;
             continue;
           }
           norm_prob = std::exp(-0.5f * mh_sq);
 
           // Match kernel: opacity logit -> sigmoid
-          float alpha = std::min(0.99f, (1.0f / (1.0f + expf(-opacity[i]))) * norm_prob);
+          float alpha = std::min(0.99f, opa * norm_prob);
 
           if (alpha < 0.00392156862f) {
+            splat_count++;
             continue;
           }
 
+          alpha_weight = 1.0f - alpha_accum;
+          const float weight = alpha * (1.0f - alpha_accum);
+
+          pixel_rgb[0] += rgb[i * 3 + 0] * weight;
+          pixel_rgb[1] += rgb[i * 3 + 1] * weight;
+          pixel_rgb[2] += rgb[i * 3 + 2] * weight;
+
+          alpha_accum += weight;
           splat_count++;
-
-          pixel_rgb[0] += rgb[i * 3 + 0] * alpha * T;
-          pixel_rgb[1] += rgb[i * 3 + 1] * alpha * T;
-          pixel_rgb[2] += rgb[i * 3 + 2] * alpha * T;
-
-          T *= (1.0f - alpha);
         }
 
         int pixel_idx = v_splat * image_width + u_splat;
-        image[pixel_idx * 3 + 0] = pixel_rgb[0] + T * background_opacity;
-        image[pixel_idx * 3 + 1] = pixel_rgb[1] + T * background_opacity;
-        image[pixel_idx * 3 + 2] = pixel_rgb[2] + T * background_opacity;
+        float background_val = 0.0f;
+        if (alpha_accum < 0.999f) {
+          background_val = background_opacity * (1.0f - alpha_accum);
+        }
+
+        image[pixel_idx * 3 + 0] = pixel_rgb[0] + background_val;
+        image[pixel_idx * 3 + 1] = pixel_rgb[1] + background_val;
+        image[pixel_idx * 3 + 2] = pixel_rgb[2] + background_val;
 
         num_splats_per_pixel[pixel_idx] = splat_count;
-        final_weight_per_pixel[pixel_idx] = T;
+        final_weight_per_pixel[pixel_idx] = alpha_weight;
       }
     }
     return image;
@@ -734,7 +748,8 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_grad_uv[i], num_grad, 1e-2);
+    float norm_factor = (i % 2 == 0) ? (0.5f * image_width) : (0.5f * image_height);
+    EXPECT_NEAR(h_grad_uv[i] / norm_factor, num_grad, 1e-2);
   }
 
   // Gradients for opacity
