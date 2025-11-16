@@ -581,10 +581,10 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
 
   // Host data
   std::vector<float> h_uvs = {8.1f, 8.1f, 2.1f, 2.1f, 4.1f, 4.1f};
-  std::vector<float> h_opacity = {5.0f, 5.0f, 5.0f};
+  std::vector<float> h_opacity = {1.0f, 2.0f, 5.0f};
   std::vector<float> h_conic = {5.0f, 0.1f, 5.0f, 5.0f, 0.1f, 5.0f, 5.0f, 0.1f, 5.0f}; // Gaussian 1
   std::vector<float> h_rgb = {0.5f, 0.2f, 0.2f, 0.2f, 0.2f, 0.5f, 0.2f, 0.5f, 0.2f};   // Gaussian 1
-  const float background_opacity = 0.5f;
+  const float background_opacity = 0.8f;
   std::vector<float> h_grad_image(image_width * image_height * 3);
   for (size_t i = 0; i < h_grad_image.size(); ++i)
     h_grad_image[i] = 1e-3f;
