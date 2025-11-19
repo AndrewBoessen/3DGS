@@ -581,7 +581,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
 
   // Host data
   std::vector<float> h_uvs = {8.1f, 8.1f, 2.1f, 2.1f, 4.1f, 4.1f};
-  std::vector<float> h_opacity = {5.0f, 5.0f, 5.0f};
+  std::vector<float> h_opacity = {1.0f, 2.0f, 5.0f};
   std::vector<float> h_conic = {5.0f, 0.1f, 5.0f, 5.0f, 0.1f, 5.0f, 5.0f, 0.1f, 5.0f}; // Gaussian 1
   std::vector<float> h_rgb = {0.5f, 0.2f, 0.2f, 0.2f, 0.2f, 0.5f, 0.2f, 0.5f, 0.2f};   // Gaussian 1
   const float background_opacity = 0.5f;
@@ -749,7 +749,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
     float norm_factor = (i % 2 == 0) ? (0.5f * image_width) : (0.5f * image_height);
-    EXPECT_NEAR(h_grad_uv[i] / norm_factor, num_grad, 1e-2);
+    EXPECT_NEAR(h_grad_uv[i], num_grad * norm_factor, 1e-2);
   }
 
   // Gradients for opacity
