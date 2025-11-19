@@ -68,7 +68,7 @@ __global__ void render_tiles_backward_kernel(
       background_initialized[i] = false;
     }
   }
-  index_in_tile = __reduce_max_sync(0xFFFFFFFF, index_in_tile) - 1; // max depth in tile
+  index_in_tile = cg::reduce(warp, index_in_tile, cg::greater<int>()) - 1; // max depth in tile
 
   assert(index_in_tile < splat_idx_end);
 
