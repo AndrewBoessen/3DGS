@@ -1,4 +1,4 @@
-dataset_path: bicycle
+dataset_path: garden
 downsample_factor: 4
 output_dir: splat_output
 print_interval: 500

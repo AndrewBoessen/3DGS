@@ -117,9 +117,7 @@ __global__ void render_tiles_backward_kernel(
       valid_pixel = global_pixel_x < image_width && global_pixel_y < image_height;
 
       float power = basic + linear * i + quad * i * i;
-      float g = 0.0f;
-      if (power < 0.0f)
-        g = __expf(power);
+      float g = __expf(power);
       float alpha = min(0.99f, opa * g);
 
       // Mask out low alpha and depth
@@ -131,6 +129,7 @@ __global__ void render_tiles_backward_kernel(
 
       if (valid_mask) {
         alpha *= valid_splat;
+        g *= valid_splat;
 
         if (valid_splat && !background_initialized[i]) {
           const float background_weight = 1.0f - (alpha * T[i] + 1.0f - T[i]);
@@ -194,10 +193,11 @@ __global__ void render_tiles_backward_kernel(
       grad_u_tile = grad_basic * -(inv_cov00 * d.x + inv_cov01 * d.y) + (grad_linear * inv_cov01);
       grad_v_tile = grad_basic * -(inv_cov01 * d.x + inv_cov11 * d.y) + (grad_linear * inv_cov11);
 
-      grad_u_tile = cg::reduce(warp, grad_u_tile, cg::plus<float>());
-      grad_v_tile = cg::reduce(warp, grad_v_tile, cg::plus<float>());
       grad_u_tile *= 0.5f * image_width;
       grad_v_tile *= 0.5f * image_height;
+
+      grad_u_tile = cg::reduce(warp, grad_u_tile, cg::plus<float>());
+      grad_v_tile = cg::reduce(warp, grad_v_tile, cg::plus<float>());
 
       // Conic
       float3 grad_conic_tile = {0.0f, 0.0f, 0.0f};

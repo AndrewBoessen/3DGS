@@ -357,9 +357,6 @@ void TrainerImpl::adaptive_density_step() {
     return; // Nothing to do
   }
 
-  // std::cerr << "ADAPTIVE DENSITY: Pruning " << num_to_prune << ", Cloning " << num_to_clone << ", Splitting "
-  //           << num_to_split << ". (Net change: " << (new_num_gaussians - num_gaussians) << ")" << std::endl;
-
   // --- 6. Generate New Gaussian Parameters (Kernels) ---
   const int num_sh_coeffs = (l_max > 0) ? ((l_max + 1) * (l_max + 1) - 1) : 0;
 
@@ -799,7 +796,6 @@ void TrainerImpl::train() {
 
   // Calculate scene extent for adaptive density
   scene_extent = 1.1f * computeMaxDiagonal(images);
-  std::cout << "SENE EXTENT " << scene_extent << std::endl;
 
   ProgressBar progressBar(config.num_iters);
 

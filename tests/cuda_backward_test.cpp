@@ -749,7 +749,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
     float norm_factor = (i % 2 == 0) ? (0.5f * image_width) : (0.5f * image_height);
-    EXPECT_NEAR(h_grad_uv[i] / norm_factor, num_grad, 1e-2);
+    EXPECT_NEAR(h_grad_uv[i], num_grad * norm_factor, 1e-2);
   }
 
   // Gradients for opacity
