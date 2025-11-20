@@ -33,7 +33,8 @@ struct ConfigParameters {
 
   // Learning rates
   double base_lr;
-  double xyz_lr_multiplier;
+  double xyz_lr_multiplier_init;
+  double xyz_lr_multiplier_final;
   double quat_lr_multiplier;
   double scale_lr_multiplier;
   double opacity_lr_multiplier;

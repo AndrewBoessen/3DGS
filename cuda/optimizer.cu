@@ -12,6 +12,8 @@ __global__ void adam_kernel(const int N, const int S, float *__restrict__ param,
     return;
 
   float register_param_grad = param_grad[p_idx];
+  if (isnan(register_param_grad))
+    register_param_grad = 0.0f;
   float register_exp_avg = exp_avg[p_idx];
   float register_exp_avg_sq = exp_avg_sq[p_idx];
   register_exp_avg = b1 * register_exp_avg + (1.0f - b1) * register_param_grad;
