@@ -660,9 +660,12 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data) {
   const float bias1 = 1.0f - pow(B1, iter + 1);
   const float bias2 = 1.0f - pow(B2, iter + 1);
 
+  const float xyz_decay_factor =
+      pow((config.xyz_lr_multiplier_final / config.xyz_lr_multiplier_init), ((float)iter / (float)config.num_iters));
   adam_step(thrust::raw_pointer_cast(d_xyz.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz.data()),
             thrust::raw_pointer_cast(d_m_xyz.data()), thrust::raw_pointer_cast(d_v_xyz.data()),
-            config.base_lr * config.xyz_lr_multiplier, B1, B2, EPS, bias1, bias2, pass_data.num_culled, 3);
+            config.base_lr * config.xyz_lr_multiplier_init * xyz_decay_factor, B1, B2, EPS, bias1, bias2,
+            pass_data.num_culled, 3);
   adam_step(thrust::raw_pointer_cast(d_rgb.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_rgb.data()),
             thrust::raw_pointer_cast(d_m_rgb.data()), thrust::raw_pointer_cast(d_v_rgb.data()),
             config.base_lr * config.rgb_lr_multiplier, B1, B2, EPS, bias1, bias2, pass_data.num_culled, 3);

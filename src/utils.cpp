@@ -42,7 +42,8 @@ ConfigParameters parseConfig(const std::string &filename) {
 
     // Learning rates
     params.base_lr = getNodeValue<float>(config, "base_lr");
-    params.xyz_lr_multiplier = getNodeValue<float>(config, "xyz_lr_multiplier");
+    params.xyz_lr_multiplier_init = getNodeValue<float>(config, "xyz_lr_multiplier_init");
+    params.xyz_lr_multiplier_final = getNodeValue<float>(config, "xyz_lr_multiplier_final");
     params.quat_lr_multiplier = getNodeValue<float>(config, "quat_lr_multiplier");
     params.scale_lr_multiplier = getNodeValue<float>(config, "scale_lr_multiplier");
     params.opacity_lr_multiplier = getNodeValue<float>(config, "opacity_lr_multiplier");
