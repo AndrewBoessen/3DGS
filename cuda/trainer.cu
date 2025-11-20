@@ -9,18 +9,16 @@
 #include "gsplat_cuda/cuda_forward.cuh"
 #include "gsplat_cuda/optimizer.cuh"
 #include "gsplat_cuda/raster.cuh"
-#include "thrust/detail/raw_pointer_cast.h"
-#include "thrust/iterator/constant_iterator.h"
-#include "thrust/iterator/zip_iterator.h"
 
 #include <Eigen/Dense>
 #include <algorithm>
-#include <cfloat>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <iostream>
+#include <mutex>
 #include <opencv2/opencv.hpp>
-#include <stdexcept>
+#include <thread>
 #include <thrust/count.h>
 #include <thrust/device_vector.h>
 #include <thrust/functional.h>
@@ -69,11 +67,95 @@ private:
   void reset_opacity();
   void zero_grads();
   float backward_pass(const Image &curr_image, const Camera &curr_camera, ForwardPassData &pass_data,
-                      const float bg_color);
+                      const float bg_color, const thrust::device_vector<float> &d_gt_image);
   void optimizer_step(ForwardPassData pass_data);
   void add_sh_band();
   void adaptive_density_step();
+
+  // --- Async Loading Members ---
+  std::thread loader_thread;
+  std::mutex load_mutex;
+  std::condition_variable load_cv;
+
+  // Flags for synchronization
+  bool next_image_ready = false;
+  bool shutdown_requested = false;
+  bool request_next_load = false;
+
+  // Data for the loader to know what to fetch
+  int next_image_index = -1;
+
+  // Pinned Memory Buffer (Host side)
+  float *h_pinned_image_buffer = nullptr;
+  size_t pinned_buffer_size = 0;
+
+  // Device buffer to hold the current GT image
+  thrust::device_vector<float> d_current_gt_image;
+
+  // Helper to initialize pinned memory
+  void init_pinned_memory(size_t max_pixels) {
+    // Allocate enough for largest image * 3 channels * sizeof(float)
+    pinned_buffer_size = max_pixels * 3 * sizeof(float);
+    cudaMallocHost((void **)&h_pinned_image_buffer, pinned_buffer_size);
+  }
+
+  // The loop that runs in the background thread
+  void image_loader_loop();
+
+  // Clean up
+  void free_pinned_memory() {
+    if (h_pinned_image_buffer) {
+      cudaFreeHost(h_pinned_image_buffer);
+      h_pinned_image_buffer = nullptr;
+    }
+  }
 };
+
+void TrainerImpl::image_loader_loop() {
+  while (true) {
+    std::unique_lock<std::mutex> lock(load_mutex);
+
+    // Wait until main thread requests a load or shuts down
+    load_cv.wait(lock, [this] { return request_next_load || shutdown_requested; });
+
+    if (shutdown_requested)
+      break;
+
+    // Grab the index to load
+    int img_idx = next_image_index;
+    request_next_load = false; // Acknowledge request
+    lock.unlock();             // Release lock while doing heavy I/O
+
+    // 1. Disk I/O
+    const Image &next_img = train_images[img_idx];
+    cv::Mat bgr_image = cv::imread(next_img.name, cv::IMREAD_COLOR);
+
+    // Validation (basic)
+    if (bgr_image.empty()) {
+      std::cerr << "Async Error: Failed to load " << next_img.name << std::endl;
+      memset(h_pinned_image_buffer, 0, pinned_buffer_size);
+    } else {
+      // 2. CPU Compute (Color conversion & Float cast)
+      cv::Mat rgb_image;
+      cv::cvtColor(bgr_image, rgb_image, cv::COLOR_BGR2RGB);
+
+      cv::Mat float_image;
+      rgb_image.convertTo(float_image, CV_32FC3, 1.0 / 255.0);
+
+      // 3. Write to Pinned Memory
+      size_t copy_size = float_image.total() * float_image.elemSize();
+      if (copy_size <= pinned_buffer_size) {
+        memcpy(h_pinned_image_buffer, float_image.ptr<float>(0), copy_size);
+      }
+    }
+
+    // Notify main thread that data is ready
+    lock.lock();
+    next_image_ready = true;
+    lock.unlock();
+    load_cv.notify_one();
+  }
+}
 
 // --- Implementation of TrainerImpl methods ---
 
@@ -549,31 +631,12 @@ void TrainerImpl::adaptive_density_step() {
 }
 
 float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_camera, ForwardPassData &pass_data,
-                                 const float bg_color) {
+                                 const float bg_color, const thrust::device_vector<float> &d_gt_image) {
   const int width = (int)curr_camera.width;
   const int height = (int)curr_camera.height;
 
-  cv::Mat bgr_gt_image = cv::imread(curr_image.name, cv::IMREAD_COLOR);
-
-  if (bgr_gt_image.empty()) {
-    throw std::runtime_error("Failed to load image: " + curr_image.name);
-  }
-  if (bgr_gt_image.cols != width || bgr_gt_image.rows != height) {
-    throw std::runtime_error("Image dimensions mismatch for " + curr_image.name + ". Expected " +
-                             std::to_string(width) + "x" + std::to_string(height) + ", but got " +
-                             std::to_string(bgr_gt_image.cols) + "x" + std::to_string(bgr_gt_image.rows));
-  }
-
-  cv::Mat rgb_gt_image;
-  cv::cvtColor(bgr_gt_image, rgb_gt_image, cv::COLOR_BGR2RGB);
-  cv::Mat float_gt_image;
-  rgb_gt_image.convertTo(float_gt_image, CV_32FC3, 1.0 / 255.0);
-
-  thrust::device_vector<float> d_gt_image(height * width * 3);
-  const float *h_gt_data = float_gt_image.ptr<float>(0);
-  thrust::copy(h_gt_data, h_gt_data + height * width * 3, d_gt_image.begin());
-
   thrust::device_vector<float> d_grad_image(height * width * 3);
+
   float loss =
       fused_loss(thrust::raw_pointer_cast(pass_data.d_image_buffer.data()), thrust::raw_pointer_cast(d_gt_image.data()),
                  height, width, 3, config.ssim_frac, thrust::raw_pointer_cast(d_grad_image.data()));
@@ -797,6 +860,14 @@ void TrainerImpl::train() {
     exit(EXIT_FAILURE);
   }
 
+  // Assume max resolution for Mip-NeRF 360 dataset (50 megapixels)
+  init_pinned_memory(5187 * 3361);
+
+  shutdown_requested = false;
+  request_next_load = true;
+  next_image_index = 0; // Load first image immediately
+  loader_thread = std::thread(&TrainerImpl::image_loader_loop, this);
+
   // Calculate scene extent for adaptive density
   scene_extent = 1.1f * computeMaxDiagonal(images);
 
@@ -804,6 +875,35 @@ void TrainerImpl::train() {
 
   // TRAINING LOOP
   while (iter < config.num_iters) {
+    // Get next image
+    {
+      std::unique_lock<std::mutex> lock(load_mutex);
+      // Wait for the background thread to finish loading the *current* image
+      load_cv.wait(lock, [this] { return next_image_ready; });
+
+      Image curr_image = train_images[next_image_index];
+      Camera curr_camera = cameras[curr_image.camera_id];
+      int width = curr_camera.width;
+      int height = curr_camera.height;
+
+      // Resize device buffer if necessary
+      if (d_current_gt_image.size() != width * height * 3) {
+        d_current_gt_image.resize(width * height * 3);
+      }
+
+      cudaMemcpyAsync(thrust::raw_pointer_cast(d_current_gt_image.data()), h_pinned_image_buffer,
+                      width * height * 3 * sizeof(float), cudaMemcpyHostToDevice);
+
+      // Reset flag for the loader
+      next_image_ready = false;
+
+      // Queue the NEXT image (N+1) immediately
+      next_image_index = (iter + 1) % train_images.size();
+      request_next_load = true;
+
+      load_cv.notify_one();
+    }
+
     ForwardPassData pass_data;
 
     Image curr_image = train_images[iter % train_images.size()];
@@ -850,12 +950,13 @@ void TrainerImpl::train() {
 
     if (pass_data.num_culled == 0) {
       std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;
+      iter++;
       continue;
     }
 
     // --- BACKWARD PASS ---
     // Call Impl member function
-    float loss = backward_pass(curr_image, curr_camera, pass_data, bg_color);
+    float loss = backward_pass(curr_image, curr_camera, pass_data, bg_color, d_current_gt_image);
 
     // --- OPTIMIZER STEP ---
     // Call Impl member function
@@ -895,6 +996,15 @@ void TrainerImpl::train() {
 
     iter++;
   }
+  // Cleanup
+  {
+    std::lock_guard<std::mutex> lock(load_mutex);
+    shutdown_requested = true;
+    load_cv.notify_one();
+  }
+  if (loader_thread.joinable())
+    loader_thread.join();
+  free_pinned_memory();
   progressBar.finish();
 }
 
