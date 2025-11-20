@@ -3,142 +3,116 @@
 #include "checks.cuh"
 #include "gsplat_cuda/cuda_forward.cuh"
 
-constexpr int BATCH_SIZE = 256;
-
-template <unsigned int splat_batch_size>
-__global__ void render_tiles_kernel(const float *__restrict__ uvs, const float *__restrict__ opacity,
-                                    const float *__restrict__ rgb, const float *__restrict__ conic,
-                                    const float background_opacity,
+__global__ void render_tiles_kernel(const int num_tiles_x, const int num_tiles_y, const float *__restrict__ uvs,
+                                    const float *__restrict__ opacity, const float *__restrict__ rgb,
+                                    const float *__restrict__ conic, const float background_opacity,
                                     const int *__restrict__ splat_start_end_idx_by_tile_idx,
                                     const int *__restrict__ gaussian_idx_by_splat_idx, const int image_width,
                                     const int image_height, int *__restrict__ splats_per_pixel,
                                     float *__restrict__ final_weight_per_pixel, float *__restrict__ image) {
   // grid = tiles, blocks = pixels within each tile
-  const int u_splat = blockIdx.x * blockDim.x + threadIdx.x;
-  const int v_splat = blockIdx.y * blockDim.y + threadIdx.y;
-  const int tile_idx = blockIdx.x + blockIdx.y * gridDim.x;
+  const int PIXELS_PER_THREAD = (TILE_SIZE_FWD * TILE_SIZE_FWD) / 32;
+  const int tile_idx = blockIdx.x * blockDim.y + threadIdx.y;
 
-  // Mask threads outside the image boundary
-  const bool valid_pixel = u_splat < image_width && v_splat < image_height;
+  // Tile outside of image
+  if (tile_idx >= num_tiles_x * num_tiles_y)
+    return;
+
+  const int in_tile_x = threadIdx.x % TILE_SIZE_FWD;                     // local tile x
+  const int in_tile_y = threadIdx.x / TILE_SIZE_FWD * PIXELS_PER_THREAD; // local tile y
+
+  const int base_pixel_x = (tile_idx % num_tiles_x) * TILE_SIZE_FWD + in_tile_x;
+  const int base_pixel_y = (tile_idx / num_tiles_x) * TILE_SIZE_FWD + in_tile_y;
 
   const int splat_idx_start = splat_start_end_idx_by_tile_idx[tile_idx];
   const int splat_idx_end = splat_start_end_idx_by_tile_idx[tile_idx + 1];
-  const int num_splats_this_tile = splat_idx_end - splat_idx_start;
-
-  const int thread_id = threadIdx.x + threadIdx.y * blockDim.x;
-  const int block_size = blockDim.x * blockDim.y;
+  const int total_splats = splat_idx_end - splat_idx_start;
 
   // Pixel-local accumulators
-  float alpha_accum = 0.0f;
-  float alpha_weight = 0.0f;
-  float3 accumulated_rgb = {0.0f, 0.0f, 0.0f};
-  int num_splats = 0;
-
-  // shared memory copies of inputs
-  __shared__ float _uvs[splat_batch_size * 2];
-  __shared__ float _opacity[splat_batch_size];
-  __shared__ float _rgb[splat_batch_size * 3];
-  __shared__ float _conic[splat_batch_size * 3];
-
-  const int num_batches = (num_splats_this_tile + splat_batch_size - 1) / splat_batch_size;
-  for (int batch_idx = 0; batch_idx < num_batches; batch_idx++) {
-    // Cooperatively load a batch of splat data into shared memory
-    for (int i = thread_id; i < splat_batch_size; i += block_size) {
-      const int tile_splat_idx = batch_idx * splat_batch_size + i;
-      if (tile_splat_idx < num_splats_this_tile) {
-        const int global_splat_idx = splat_idx_start + tile_splat_idx;
-
-        const int gaussian_idx = gaussian_idx_by_splat_idx[global_splat_idx];
-        _uvs[i * 2 + 0] = uvs[gaussian_idx * 2 + 0];
-        _uvs[i * 2 + 1] = uvs[gaussian_idx * 2 + 1];
-        _opacity[i] = opacity[gaussian_idx];
+  float alpha_accum[PIXELS_PER_THREAD];
+  float3 accumulated_rgb[PIXELS_PER_THREAD];
+  int num_splats[PIXELS_PER_THREAD];
 
 #pragma unroll
-        for (int channel = 0; channel < 3; channel++)
-          _rgb[i * 3 + channel] = rgb[gaussian_idx * 3 + channel];
-
-#pragma unroll
-        for (int j = 0; j < 3; j++)
-          _conic[i * 3 + j] = conic[gaussian_idx * 3 + j];
-      }
-    }
-    __syncthreads();
-
-    // Mask invalid threads outside of image
-    if (valid_pixel) {
-      const int batch_start = batch_idx * splat_batch_size;
-      const int batch_end = min((batch_idx + 1) * splat_batch_size, num_splats_this_tile);
-      const int num_splats_this_batch = batch_end - batch_start;
-      for (int i = 0; i < num_splats_this_batch; i++) {
-        // Early exit if pixel is saturated
-        if (alpha_accum > 0.9999f) {
-          break;
-        }
-        const float u_mean = _uvs[i * 2 + 0];
-        const float v_mean = _uvs[i * 2 + 1];
-
-        // Distance from splat center
-        const float u_diff = float(u_splat) - u_mean;
-        const float v_diff = float(v_splat) - v_mean;
-
-        // Load conic values
-        const float a = _conic[i * 3 + 0] + 0.3f;
-        const float b = _conic[i * 3 + 1];
-        const float c = _conic[i * 3 + 2] + 0.3f;
-
-        const float det = a * c - b * b;
-        const float inv_det = 1.0f / det;
-
-        // Compute Mahalanobis distance squared: d^2 = (x-μ)^T Σ^-1 (x-μ)
-        const float mh_sq = inv_det * (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff);
-
-        // Apply sigmoid to opacity
-        const float opa = 1.0f / (1.0f + __expf(-_opacity[i]));
-
-        float alpha = 0.0f;
-        if (mh_sq > 0.0f) {
-          const float norm_prob = __expf(-0.5f * mh_sq);
-          alpha = fminf(0.99f, opa * norm_prob);
-        }
-
-        // Skip if alpha is below 1/255 for numerical stability
-        if (alpha < 0.00392156862f) {
-          num_splats++;
-          continue;
-        }
-
-        alpha_weight = 1.0f - alpha_accum;
-        // Alpha blending: C_out = α * C_in + (1 - α) * C_bg
-        const float weight = alpha * (1.0f - alpha_accum);
-
-        const int base_rgb_id = i * 3;
-        accumulated_rgb.x += _rgb[base_rgb_id + 0] * weight;
-        accumulated_rgb.y += _rgb[base_rgb_id + 1] * weight;
-        accumulated_rgb.z += _rgb[base_rgb_id + 2] * weight;
-
-        alpha_accum += weight;
-        num_splats++;
-      }
-    }
-    __syncthreads(); // Ensure all threads finish before loading the next batch
+  for (int i = 0; i < PIXELS_PER_THREAD; i++) {
+    alpha_accum[i] = 0.0f;
+    accumulated_rgb[i] = {0.0f, 0.0f, 0.0f};
+    num_splats[i] = 0;
   }
-  __syncthreads();
 
-  // Final write to global memory
-  if (valid_pixel) {
-    splats_per_pixel[v_splat * image_width + u_splat] = num_splats;
-    final_weight_per_pixel[v_splat * image_width + u_splat] = alpha_weight;
+  unsigned int any_active = 0xFFFFFFFF;
+  int index_in_tile = 0;
+  const int *splats_in_tile = &gaussian_idx_by_splat_idx[splat_idx_start];
 
-    // Background contribution
-    float background_val = 0.0f;
-    if (alpha_accum < 0.999f) {
-      background_val = background_opacity * (1.0f - alpha_accum);
+  // Iterate on splats in the tile front to back
+  for (; (index_in_tile < total_splats) && (any_active != 0); index_in_tile++) {
+    const int gaussian_idx = splats_in_tile[index_in_tile];
+    float basic;
+    float linear;
+    float quad;
+    float inv_det;
+
+    float3 color = {rgb[gaussian_idx * 3 + 0], rgb[gaussian_idx * 3 + 1], rgb[gaussian_idx * 3 + 2]};
+    float opa = 1.0f / (1.0f + __expf(-opacity[gaussian_idx]));
+    float2 d = {0.0f, 0.0f};
+    d.x = uvs[gaussian_idx * 2 + 0] - (float)base_pixel_x;
+    d.y = uvs[gaussian_idx * 2 + 1] - (float)base_pixel_y;
+
+    const float a = conic[gaussian_idx * 3 + 0] + 0.3f;
+    const float b = conic[gaussian_idx * 3 + 1];
+    const float c = conic[gaussian_idx * 3 + 2] + 0.3f;
+    inv_det = 1.0f / (a * c - b * b);
+    const float inv_cov00 = c * inv_det;
+    const float inv_cov01 = -b * inv_det;
+    const float inv_cov11 = a * inv_det;
+    basic = -0.5f * (inv_cov00 * d.x * d.x + 2.0f * inv_cov01 * d.x * d.y + inv_cov11 * d.y * d.y);
+    linear = inv_cov11 * d.y + inv_cov01 * d.x;
+    quad = -0.5f * inv_cov11;
+
+    any_active = 0;
+    for (int i = 0; i < PIXELS_PER_THREAD; i++) {
+      const float power = basic + linear * i + quad * i * i;
+
+      const float valid_alpha = alpha_accum[i] <= 0.9999f;
+      any_active |= __ballot_sync(0xFFFFFFFF, valid_alpha);
+
+      float alpha = fminf(0.99f, opa * __expf(power));
+      alpha = (valid_alpha && (alpha > 0.00392156862f)) ? alpha : 0.0f;
+
+      // Alpha blending: C_out = α * C_in + (1 - α) * C_bg
+      const float weight = alpha * (1.0f - alpha_accum[i]);
+
+      accumulated_rgb[i].x += color.x * weight;
+      accumulated_rgb[i].y += color.y * weight;
+      accumulated_rgb[i].z += color.z * weight;
+
+      alpha_accum[i] += weight;
+      num_splats[i] += valid_alpha;
     }
+  }
 
-    const int pixel_idx = (v_splat * image_width + u_splat) * 3;
-    image[pixel_idx + 0] = accumulated_rgb.x + background_val; // R
-    image[pixel_idx + 1] = accumulated_rgb.y + background_val; // G
-    image[pixel_idx + 2] = accumulated_rgb.z + background_val; // B
+  // Write results to output image
+  for (int i = 0; i < PIXELS_PER_THREAD; i++) {
+    const int global_pixel_x = base_pixel_x;
+    const int global_pixel_y = base_pixel_y + i;
+
+    const bool valid_pixel = global_pixel_x < image_width && global_pixel_y < image_height;
+
+    if (valid_pixel) {
+      splats_per_pixel[global_pixel_y * image_width + global_pixel_x] = num_splats[i];
+      final_weight_per_pixel[global_pixel_y * image_width + global_pixel_x] = 1.0f - alpha_accum[i];
+
+      // Background contribution
+      float background_val = 0.0f;
+      if (alpha_accum[i] < 0.999f) {
+        background_val = background_opacity * (1.0f - alpha_accum[i]);
+      }
+
+      const int pixel_idx = (global_pixel_y * image_width + global_pixel_x) * 3;
+      image[pixel_idx + 0] = accumulated_rgb[i].x + background_val; // R
+      image[pixel_idx + 1] = accumulated_rgb[i].y + background_val; // G
+      image[pixel_idx + 2] = accumulated_rgb[i].z + background_val; // B
+    }
   }
 }
 
@@ -156,13 +130,15 @@ void render_image(const float *uv, const float *opacity, const float *conic, con
   ASSERT_DEVICE_POINTER(weight_per_pixel);
   ASSERT_DEVICE_POINTER(image);
 
-  int num_tiles_x = (image_width + TILE_SIZE_FWD - 1) / TILE_SIZE_FWD;
-  int num_tiles_y = (image_height + TILE_SIZE_FWD - 1) / TILE_SIZE_FWD;
+  const int tiles_per_block = 4;
+  const int num_tiles_x = (image_width + TILE_SIZE_FWD - 1) / TILE_SIZE_FWD;
+  const int num_tiles_y = (image_height + TILE_SIZE_FWD - 1) / TILE_SIZE_FWD;
+  const int total_blocks = (num_tiles_x * num_tiles_y + tiles_per_block - 1) / tiles_per_block;
 
-  dim3 block_size(TILE_SIZE_FWD, TILE_SIZE_FWD, 1);
-  dim3 grid_size(num_tiles_x, num_tiles_y, 1);
+  dim3 block_size(32, tiles_per_block, 1);
+  dim3 grid_size(total_blocks, 1, 1);
 
-  render_tiles_kernel<BATCH_SIZE><<<grid_size, block_size, 0, stream>>>(
-      uv, opacity, rgb, conic, background_opacity, splat_range_by_tile, sorted_splats, image_width, image_height,
-      splats_per_pixel, weight_per_pixel, image);
+  render_tiles_kernel<<<grid_size, block_size, 0, stream>>>(
+      num_tiles_x, num_tiles_y, uv, opacity, rgb, conic, background_opacity, splat_range_by_tile, sorted_splats,
+      image_width, image_height, splats_per_pixel, weight_per_pixel, image);
 }
