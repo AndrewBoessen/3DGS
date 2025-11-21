@@ -366,7 +366,7 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
     // Use device_vectors for atomic counters. Initialize to 0.
     thrust::device_vector<int> d_buffer_size(1, 0);
 
-    coarse_binning_kernel<<<num_blocks, threads_per_block>>>(
+    coarse_binning_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
         uv, conic, mh_dist, n_tiles_x, n_tiles_y, N, thrust::raw_pointer_cast(d_buffer_size.data()), nullptr, nullptr);
     sorted_gaussian_size = d_buffer_size[0];
 
@@ -381,9 +381,9 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   // store pairs of gaussians and tiles
   thrust::device_vector<int2> d_pairs(sorted_gaussian_size);
 
-  coarse_binning_kernel<<<num_blocks, threads_per_block>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N, nullptr,
-                                                           thrust::raw_pointer_cast(d_pairs.data()),
-                                                           thrust::raw_pointer_cast(d_buffer_index.data()));
+  coarse_binning_kernel<<<num_blocks, threads_per_block, 0, stream>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N,
+                                                                      nullptr, thrust::raw_pointer_cast(d_pairs.data()),
+                                                                      thrust::raw_pointer_cast(d_buffer_index.data()));
   assert(d_buffer_index[0] == sorted_gaussian_size);
 
   // Copy z values to new array
@@ -391,12 +391,12 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
   // Use thrust::transform for the strided copy (replaces cudaMemcpy2D)
   // This executes on the device using the default stream, matching original async behavior
-  thrust::transform(thrust::device, thrust::make_counting_iterator(0), thrust::make_counting_iterator(N),
+  thrust::transform(thrust::cuda::par.on(stream), thrust::make_counting_iterator(0), thrust::make_counting_iterator(N),
                     z_vals.begin(), copy_z_functor(xyz));
 
   // Use thrust::max_element to find max Z value (replaces CUB::DeviceReduce)
   // This is a device-side operation
-  auto max_iter = thrust::max_element(thrust::device, z_vals.begin(), z_vals.end());
+  auto max_iter = thrust::max_element(thrust::cuda::par.on(stream), z_vals.begin(), z_vals.end());
   // Copy the single max value to d_max_z
   const float max_z = max_iter[0];
 

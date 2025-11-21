@@ -4,6 +4,7 @@
 
 #include "gsplat_cuda/cuda_data.cuh"
 #include "gsplat_cuda/cuda_forward.cuh"
+
 #include <thrust/count.h>
 #include <thrust/device_vector.h>
 
