@@ -2,187 +2,452 @@
 
 #include "checks.cuh"
 #include "gsplat_cuda/cuda_forward.cuh"
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
 #include <thrust/device_vector.h>
 
-// Define constants for SSIM calculation.
+namespace cg = cooperative_groups;
+
+// ------------------------------------------
+// Constant Memory for Gaussian Coefficients
+// ------------------------------------------
+__constant__ float cGauss[11] = {0.001028380123898387f,  0.0075987582094967365f, 0.036000773310661316f,
+                                 0.10936068743467331f,   0.21300552785396576f,   0.26601171493530273f,
+                                 0.21300552785396576f,   0.10936068743467331f,   0.036000773310661316f,
+                                 0.0075987582094967365f, 0.001028380123898387f};
+
 namespace SSIMConstants {
-constexpr int WINDOW_SIZE = 11;
-constexpr int WINDOW_RADIUS = WINDOW_SIZE / 2;
 constexpr float K1 = 0.01f;
 constexpr float K2 = 0.03f;
-// Dynamic range of pixel values (assuming normalized to [0,1]).
 constexpr float L = 1.0f;
 constexpr float C1 = (K1 * L) * (K1 * L);
 constexpr float C2 = (K2 * L) * (K2 * L);
 } // namespace SSIMConstants
 
-__device__ float gaussian(int x, int y, float sigma) {
-  float coeff = 1.0f / (2.0f * M_PI * sigma * sigma);
-  float exponent = -(x * x + y * y) / (2.0f * sigma * sigma);
-  return coeff * expf(exponent);
+// ------------------------------------------
+// Block and Shared Memory Dimensions
+// ------------------------------------------
+#define BLOCK_X 16
+#define BLOCK_Y 16
+#define HALO 5
+#define SHARED_X (BLOCK_X + 2 * HALO)
+#define SHARED_Y (BLOCK_Y + 2 * HALO)
+#define CONV_X BLOCK_X
+#define CONV_Y SHARED_Y
+
+// ------------------------------------------
+// Utility: Safe pixel fetch w/ Clamping (Matching original loss.cu logic)
+// ------------------------------------------
+__device__ __forceinline__ float get_pix_value_clamped(const float *img, int y, int x, int H, int W) {
+  int cy = max(0, min(H - 1, y));
+  int cx = max(0, min(W - 1, x));
+  return img[cy * W + cx];
 }
 
-__device__ float l1_loss(const float pred, const float gt) { return fabsf(pred - gt); }
+// ------------------------------------------
+// Forward Kernel: Fused SSIM + L1 Loss
+// ------------------------------------------
+__global__ void fused_loss_forward_kernel(int H, int W, float C1, float C2, float ssim_weight,
+                                          const float *__restrict__ pred, const float *__restrict__ gt,
+                                          float *__restrict__ total_loss_ptr, float *__restrict__ dm_dmu1,
+                                          float *__restrict__ dm_dsigma1_sq, float *__restrict__ dm_dsigma12) {
+  auto block = cg::this_thread_block();
 
-__global__ void fused_loss_kernel(const float *__restrict__ image, const float *__restrict__ gt_image, const int rows,
-                                  const int cols, const float ssim_weight, float *__restrict__ image_grad,
-                                  float *__restrict__ total_loss_ptr) {
-  // --- Shared memory for block-level loss reduction ---
-  extern __shared__ float s_loss[];
-  const unsigned int tid = threadIdx.y * blockDim.x + threadIdx.x;
-  s_loss[tid] = 0.0f;
+  // 1. Identify location
+  const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
+  const int pix_x = block.group_index().x * BLOCK_X + block.thread_index().x;
+  const int pix_id = pix_y * W + pix_x;
 
-  // --- Global thread indexing ---
-  const int x = blockIdx.x * blockDim.x + threadIdx.x;
-  const int y = blockIdx.y * blockDim.y + threadIdx.y;
+  // Shared memory for the tile (pred, gt)
+  __shared__ float sTile[SHARED_Y][SHARED_X][2];
+  // After horizontal pass, store partial sums here
+  // xconv[y][x] -> (sumX, sumX^2, sumY, sumY^2, sumXY)
+  __shared__ float xconv[CONV_Y][CONV_X][5];
 
-  if (x >= cols || y >= rows) {
-    return;
-  }
-  const int idx = y * cols + x;
-  const float grad_scale = 1.0f / (float)(rows * cols);
+  // ------------------------------------------------------------
+  // 2) Load (pred, gt) tile + halo into shared memory
+  // ------------------------------------------------------------
+  {
+    const int tileSize = SHARED_Y * SHARED_X;
+    const int threads = BLOCK_X * BLOCK_Y;
+    const int steps = (tileSize + threads - 1) / threads;
 
-  float pixel_l1_loss = 0.0f;
-  float pixel_ssim_loss = 0.0f;
+    const int tileStartY = block.group_index().y * BLOCK_Y;
+    const int tileStartX = block.group_index().x * BLOCK_X;
 
-  // --- L1 Loss and Gradient Calculation ---
-  for (int c = 0; c < 3; ++c) {
-    int channel_idx = c * rows * cols + idx;
-    float pred = image[channel_idx];
-    float gt = gt_image[channel_idx];
+    for (int s = 0; s < steps; ++s) {
+      int tid = s * threads + block.thread_rank();
+      if (tid < tileSize) {
+        int local_y = tid / SHARED_X;
+        int local_x = tid % SHARED_X;
+        int gy = tileStartY + local_y - HALO;
+        int gx = tileStartX + local_x - HALO;
 
-    pixel_l1_loss += l1_loss(pred, gt);
-
-    // Initialize gradient with the weighted L1 part. Gradient of L1 is sign(pred - gt).
-    if (ssim_weight < 1.0f) {
-      float grad_l1 = (pred > gt) ? 1.0f : -1.0f;
-      if (pred == gt)
-        grad_l1 = 0.0f;
-      image_grad[channel_idx] = (1.0f - ssim_weight) * grad_l1 * grad_scale;
-    } else {
-      image_grad[channel_idx] = 0.0f;
-    }
-  }
-  pixel_l1_loss /= 3.0f; // Average L1 loss over channels
-
-  // --- SSIM Loss and Gradient Calculation (if weighted) ---
-  if (ssim_weight > 0.0f) {
-    float avg_ssim = 0.0f;
-
-    // Process each channel independently for SSIM
-    for (int c = 0; c < 3; ++c) {
-      int channel_offset = c * rows * cols;
-      const float gauss_sigma = 1.5f;
-
-      // --- Window statistics calculation (Single Pass) ---
-      float mu_p = 0.0f, mu_g = 0.0f;
-      float p_sq_sum = 0.0f, g_sq_sum = 0.0f, pg_sum = 0.0f;
-      float total_weight = 0.0f;
-
-      for (int j = -SSIMConstants::WINDOW_RADIUS; j <= SSIMConstants::WINDOW_RADIUS; ++j) {
-        for (int i = -SSIMConstants::WINDOW_RADIUS; i <= SSIMConstants::WINDOW_RADIUS; ++i) {
-          int cur_x = x + i;
-          int cur_y = y + j;
-
-          // Clamp coordinates to image boundaries
-          cur_x = max(0, min(cols - 1, cur_x));
-          cur_y = max(0, min(rows - 1, cur_y));
-
-          int window_idx = channel_offset + cur_y * cols + cur_x;
-          float weight = gaussian(i, j, gauss_sigma);
-
-          float p = image[window_idx];
-          float g = gt_image[window_idx];
-
-          mu_p += p * weight;
-          mu_g += g * weight;
-          p_sq_sum += p * p * weight;
-          g_sq_sum += g * g * weight;
-          pg_sum += p * g * weight;
-          total_weight += weight;
-        }
+        // Use CLAMPED fetching for correct edge handling
+        sTile[local_y][local_x][0] = get_pix_value_clamped(pred, gy, gx, H, W);
+        sTile[local_y][local_x][1] = get_pix_value_clamped(gt, gy, gx, H, W);
       }
-
-      mu_p /= total_weight;
-      mu_g /= total_weight;
-      float var_p = p_sq_sum / total_weight - mu_p * mu_p;
-      float var_g = g_sq_sum / total_weight - mu_g * mu_g;
-      float cov_pg = pg_sum / total_weight - mu_p * mu_g;
-
-      // --- SSIM Calculation ---
-      float ssim_num = (2.0f * mu_p * mu_g + SSIMConstants::C1) * (2.0f * cov_pg + SSIMConstants::C2);
-      float ssim_den = (mu_p * mu_p + mu_g * mu_g + SSIMConstants::C1) * (var_p + var_g + SSIMConstants::C2);
-      float ssim = ssim_num / ssim_den;
-      avg_ssim += ssim;
-
-      // --- SSIM Gradient Calculation ---
-      // Gradient of L_ssim = 1 - SSIM is d(1-SSIM)/dp_i = -d(SSIM)/dp_i
-      // Using quotient rule: d(N/D)/dp_i = (D*dN/dp_i - N*dD/dp_i) / D^2
-      int central_idx = channel_offset + idx;
-      float p_i = image[central_idx];
-      float g_i = gt_image[central_idx];
-      float w_i = gaussian(0, 0, gauss_sigma) / total_weight;
-
-      // Derivatives of stats w.r.t central predicted pixel p_i
-      float d_mu_p = w_i;
-      float d_var_p = 2.0f * (p_i - mu_p) * w_i;
-      float d_cov_pg = (g_i - mu_g) * w_i;
-
-      // Derivatives of numerator (N) and denominator (D) terms of SSIM
-      float dN = (2.0f * mu_g * d_mu_p) * (2.0f * cov_pg + SSIMConstants::C2) +
-                 (2.0f * mu_p * mu_g + SSIMConstants::C1) * (2.0f * d_cov_pg);
-      float dD = (2.0f * mu_p * d_mu_p) * (var_p + var_g + SSIMConstants::C2) +
-                 (mu_p * mu_p + mu_g * mu_g + SSIMConstants::C1) * d_var_p;
-
-      float d_ssim = (dN * ssim_den - ssim_num * dD) / (ssim_den * ssim_den);
-
-      // Add weighted SSIM gradient part. Grad of loss (1-SSIM) is -d_ssim.
-      image_grad[central_idx] -= ssim_weight * d_ssim * grad_scale;
     }
-    avg_ssim /= 3.0f;
-    pixel_ssim_loss = 1.0f - avg_ssim;
+  }
+  block.sync();
+
+  // ------------------------------------------------------------
+  // 3) Horizontal convolution (11x1)
+  // ------------------------------------------------------------
+  {
+    int ly = threadIdx.y;
+    int lx = threadIdx.x + HALO;
+
+    // Helper lambda or macro for convolution could go here, but unrolling inline:
+    float sumX = 0, sumX2 = 0, sumY = 0, sumY2 = 0, sumXY = 0;
+
+#pragma unroll
+    for (int d = 1; d <= HALO; ++d) {
+      float w = cGauss[HALO - d];
+      float Xl = sTile[ly][lx - d][0];
+      float Yl = sTile[ly][lx - d][1];
+      float Xr = sTile[ly][lx + d][0];
+      float Yr = sTile[ly][lx + d][1];
+      sumX += (Xl + Xr) * w;
+      sumX2 += (Xl * Xl + Xr * Xr) * w;
+      sumY += (Yl + Yr) * w;
+      sumY2 += (Yl * Yl + Yr * Yr) * w;
+      sumXY += (Xl * Yl + Xr * Yr) * w;
+    }
+    // center
+    {
+      float wc = cGauss[HALO];
+      float Xc = sTile[ly][lx][0];
+      float Yc = sTile[ly][lx][1];
+      sumX += Xc * wc;
+      sumX2 += Xc * Xc * wc;
+      sumY += Yc * wc;
+      sumY2 += Yc * Yc * wc;
+      sumXY += Xc * Yc * wc;
+    }
+
+    xconv[ly][threadIdx.x][0] = sumX;
+    xconv[ly][threadIdx.x][1] = sumX2;
+    xconv[ly][threadIdx.x][2] = sumY;
+    xconv[ly][threadIdx.x][3] = sumY2;
+    xconv[ly][threadIdx.x][4] = sumXY;
+
+    // Process second row for vertical support if needed
+    int ly2 = ly + BLOCK_Y;
+    if (ly2 < CONV_Y) {
+      sumX = 0;
+      sumX2 = 0;
+      sumY = 0;
+      sumY2 = 0;
+      sumXY = 0;
+#pragma unroll
+      for (int d = 1; d <= HALO; ++d) {
+        float w = cGauss[HALO - d];
+        float Xl = sTile[ly2][lx - d][0];
+        float Yl = sTile[ly2][lx - d][1];
+        float Xr = sTile[ly2][lx + d][0];
+        float Yr = sTile[ly2][lx + d][1];
+        sumX += (Xl + Xr) * w;
+        sumX2 += (Xl * Xl + Xr * Xr) * w;
+        sumY += (Yl + Yr) * w;
+        sumY2 += (Yl * Yl + Yr * Yr) * w;
+        sumXY += (Xl * Yl + Xr * Yr) * w;
+      }
+      {
+        float wc = cGauss[HALO];
+        float Xc = sTile[ly2][lx][0];
+        float Yc = sTile[ly2][lx][1];
+        sumX += Xc * wc;
+        sumX2 += Xc * Xc * wc;
+        sumY += Yc * wc;
+        sumY2 += Yc * Yc * wc;
+        sumXY += Xc * Yc * wc;
+      }
+      xconv[ly2][threadIdx.x][0] = sumX;
+      xconv[ly2][threadIdx.x][1] = sumX2;
+      xconv[ly2][threadIdx.x][2] = sumY;
+      xconv[ly2][threadIdx.x][3] = sumY2;
+      xconv[ly2][threadIdx.x][4] = sumXY;
+    }
+  }
+  block.sync();
+
+  // ------------------------------------------------------------
+  // 4) Vertical convolution, SSIM Calc, Loss Reduction
+  // ------------------------------------------------------------
+  float my_loss = 0.0f;
+
+  {
+    int ly = threadIdx.y + HALO;
+    int lx = threadIdx.x;
+
+    float out0 = 0, out1 = 0, out2 = 0, out3 = 0, out4 = 0;
+
+#pragma unroll
+    for (int d = 1; d <= HALO; ++d) {
+      float w = cGauss[HALO - d];
+      float *top = xconv[ly - d][lx];
+      float *bot = xconv[ly + d][lx];
+      out0 += (top[0] + bot[0]) * w;
+      out1 += (top[1] + bot[1]) * w;
+      out2 += (top[2] + bot[2]) * w;
+      out3 += (top[3] + bot[3]) * w;
+      out4 += (top[4] + bot[4]) * w;
+    }
+    {
+      float wc = cGauss[HALO];
+      float *ctr = xconv[ly][lx];
+      out0 += ctr[0] * wc;
+      out1 += ctr[1] * wc;
+      out2 += ctr[2] * wc;
+      out3 += ctr[3] * wc;
+      out4 += ctr[4] * wc;
+    }
+
+    if (pix_x < W && pix_y < H) {
+      // Stats
+      float mu1 = out0;
+      float mu2 = out2;
+      float mu1_sq = mu1 * mu1;
+      float mu2_sq = mu2 * mu2;
+      float sigma1_sq = out1 - mu1_sq;
+      float sigma2_sq = out3 - mu2_sq;
+      float sigma12 = out4 - mu1 * mu2;
+
+      // SSIM
+      float A = mu1_sq + mu2_sq + C1;
+      float B = sigma1_sq + sigma2_sq + C2;
+      float C_ = 2.f * mu1 * mu2 + C1;
+      float D_ = 2.f * sigma12 + C2;
+      float ssim_val = (C_ * D_) / (A * B);
+
+      // L1
+      float pred_val = pred[pix_id];
+      float gt_val = gt[pix_id];
+      float l1_val = fabsf(pred_val - gt_val);
+
+      // Combined Loss
+      my_loss = (1.0f - ssim_weight) * l1_val + ssim_weight * (1.0f - ssim_val);
+
+      // -----------------------------------------------------
+      // Compute Partial Derivatives for Backward Pass
+      // We calculate d(SSIM)/d(Stats) here.
+      // Note: Since Loss = ... + weight * (1 - SSIM),
+      // d(Loss)/d(SSIM) = -weight.
+      // We multiply this factor into the stored derivatives
+      // so the backward kernel just convolves them.
+      // -----------------------------------------------------
+
+      float d_ssim_dmu1 = ((mu2 * 2.f * D_) / (A * B) - (mu2 * 2.f * C_) / (A * B) -
+                           (mu1 * 2.f * C_ * D_) / (A * A * B) + (mu1 * 2.f * C_ * D_) / (A * B * B));
+      float d_ssim_dsigma1_sq = (-C_ * D_) / (A * B * B);
+      float d_ssim_dsigma12 = (2.f * C_) / (A * B);
+
+      // Apply the chain rule for Loss: dL = -ssim_weight * dSSIM
+      dm_dmu1[pix_id] = -ssim_weight * d_ssim_dmu1;
+      dm_dsigma1_sq[pix_id] = -ssim_weight * d_ssim_dsigma1_sq;
+      dm_dsigma12[pix_id] = -ssim_weight * d_ssim_dsigma12;
+    }
   }
 
-  // --- Combine losses and store in shared memory for reduction ---
-  float combined_loss = (1.0f - ssim_weight) * pixel_l1_loss + ssim_weight * pixel_ssim_loss;
-  s_loss[tid] = combined_loss;
+  // ------------------------------------------------------------
+  // 5) Block Reduction for Total Loss
+  // ------------------------------------------------------------
+  // Using shared memory reduction
+  __shared__ float s_loss_red[BLOCK_Y * BLOCK_X];
+  int tid = threadIdx.y * BLOCK_X + threadIdx.x;
+  s_loss_red[tid] = my_loss;
+  block.sync();
 
-  __syncthreads();
-
-  // --- Block-level reduction using shared memory ---
-  for (unsigned int s = blockDim.x * blockDim.y / 2; s > 0; s >>= 1) {
+  for (unsigned int s = (BLOCK_X * BLOCK_Y) / 2; s > 0; s >>= 1) {
     if (tid < s) {
-      s_loss[tid] += s_loss[tid + s];
+      s_loss_red[tid] += s_loss_red[tid + s];
     }
-    __syncthreads();
+    block.sync();
   }
 
-  // First thread in block writes block's sum to global memory atomically
   if (tid == 0) {
-    atomicAdd(total_loss_ptr, s_loss[0]);
+    atomicAdd(total_loss_ptr, s_loss_red[0]);
   }
 }
 
-float fused_loss(const float *predicted_data, const float *gt_data, int rows, int cols, int channels,
+// ------------------------------------------
+// Backward Kernel: Fused Gradient Assembly
+// ------------------------------------------
+__global__ void fused_loss_backward_kernel(int H, int W, float ssim_weight, const float *__restrict__ pred,
+                                           const float *__restrict__ gt, float *__restrict__ image_grad,
+                                           const float *__restrict__ dm_dmu1, const float *__restrict__ dm_dsigma1_sq,
+                                           const float *__restrict__ dm_dsigma12) {
+  auto block = cg::this_thread_block();
+
+  const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
+  const int pix_x = block.group_index().x * BLOCK_X + block.thread_index().x;
+  const int pix_id = pix_y * W + pix_x;
+
+  // Shared memory for partials
+  // [0]: dm_dmu1, [1]: dm_dsigma1_sq, [2]: dm_dsigma12
+  __shared__ float sData[3][SHARED_Y][SHARED_X];
+  __shared__ float sScratch[CONV_Y][CONV_X][3];
+
+  float p1 = 0.f, p2 = 0.f;
+  if (pix_x < W && pix_y < H) {
+    p1 = pred[pix_id];
+    p2 = gt[pix_id];
+  }
+
+  // ------------------------------------------------------------
+  // 1) Load Derivatives Tile
+  // ------------------------------------------------------------
+  {
+    const int start_y = block.group_index().y * BLOCK_Y;
+    const int start_x = block.group_index().x * BLOCK_X;
+
+    int tid = threadIdx.y * blockDim.x + threadIdx.x;
+    int warp_id = tid / 32;
+    int lane_id = tid % 32;
+    int totalThreads = BLOCK_X * BLOCK_Y;
+    int num_warps = (totalThreads + 31) / 32;
+
+    // Parallel loading of the 3 derivative maps
+    for (int row = warp_id; row < SHARED_Y; row += num_warps) {
+      int gy = start_y + row - HALO;
+      for (int col = lane_id; col < SHARED_X; col += 32) {
+        int gx = start_x + col - HALO;
+
+        // Use clamped fetch for derivatives map
+        float vmu = get_pix_value_clamped(dm_dmu1, gy, gx, H, W);
+        float vs1 = get_pix_value_clamped(dm_dsigma1_sq, gy, gx, H, W);
+        float vs12 = get_pix_value_clamped(dm_dsigma12, gy, gx, H, W);
+
+        sData[0][row][col] = vmu;
+        sData[1][row][col] = vs1;
+        sData[2][row][col] = vs12;
+      }
+    }
+  }
+  block.sync();
+
+  // ------------------------------------------------------------
+  // 2) Horizontal Pass
+  // ------------------------------------------------------------
+  {
+    int ly = threadIdx.y;
+    int lx = threadIdx.x + HALO;
+
+    // Process up to 2 rows per thread if BLOCK_Y < CONV_Y
+    for (int pass = 0; pass < 2; ++pass) {
+      int yy = ly + pass * BLOCK_Y;
+      if (yy < CONV_Y) {
+        float accum0 = 0, accum1 = 0, accum2 = 0;
+#pragma unroll
+        for (int d = 1; d <= HALO; ++d) {
+          float w = cGauss[HALO - d];
+          accum0 += (sData[0][yy][lx - d] + sData[0][yy][lx + d]) * w;
+          accum1 += (sData[1][yy][lx - d] + sData[1][yy][lx + d]) * w;
+          accum2 += (sData[2][yy][lx - d] + sData[2][yy][lx + d]) * w;
+        }
+        {
+          float wc = cGauss[HALO];
+          accum0 += sData[0][yy][lx] * wc;
+          accum1 += sData[1][yy][lx] * wc;
+          accum2 += sData[2][yy][lx] * wc;
+        }
+        sScratch[yy][threadIdx.x][0] = accum0;
+        sScratch[yy][threadIdx.x][1] = accum1;
+        sScratch[yy][threadIdx.x][2] = accum2;
+      }
+    }
+  }
+  block.sync();
+
+  // ------------------------------------------------------------
+  // 3) Vertical Pass + L1 Gradient Addition
+  // ------------------------------------------------------------
+  if (pix_x < W && pix_y < H) {
+    int ly = threadIdx.y + HALO;
+    int lx = threadIdx.x;
+
+    float sum0 = 0, sum1 = 0, sum2 = 0;
+#pragma unroll
+    for (int d = 1; d <= HALO; ++d) {
+      float w = cGauss[HALO - d];
+      float *top = sScratch[ly - d][lx];
+      float *bot = sScratch[ly + d][lx];
+      sum0 += (top[0] + bot[0]) * w;
+      sum1 += (top[1] + bot[1]) * w;
+      sum2 += (top[2] + bot[2]) * w;
+    }
+    {
+      float wc = cGauss[HALO];
+      float *ctr = sScratch[ly][lx];
+      sum0 += ctr[0] * wc;
+      sum1 += ctr[1] * wc;
+      sum2 += ctr[2] * wc;
+    }
+
+    // 1. SSIM Gradient Component
+    // Formula derivation (matching ssim.cu):
+    // dL/dpix = sum(dL/dmu) + 2*pix*sum(dL/dsigma1_sq) + gt*sum(dL/dsigma12)
+    // Note: The subtractions of means are implicitly handled by the distribution
+    // of dmu vs dsigma terms in the separable convolution derivation.
+    float ssim_grad_component = sum0 + (2.f * p1) * sum1 + (p2)*sum2;
+
+    // 2. L1 Gradient Component
+    // d(L1)/dx = sign(x - target)
+    // Weight = (1 - ssim_weight)
+    float l1_grad_component = (1.0f - ssim_weight) * ((p1 > p2) ? 1.0f : -1.0f);
+
+    // Final Gradient
+    // Normalize by pixel count as done in original loss.cu
+    const float grad_scale = 1.0f / (float)(H * W);
+    float total_grad = (ssim_grad_component + l1_grad_component) * grad_scale;
+
+    image_grad[pix_id] = total_grad;
+  }
+}
+
+float fused_loss(const float *predicted_data, const float *gt_data, int rows, int cols,
+                 int channels, // Channels unused in flat buffer assumption of original loss.cu
                  const float ssim_weight, float *image_grad, cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(predicted_data);
   ASSERT_DEVICE_POINTER(gt_data);
   ASSERT_DEVICE_POINTER(image_grad);
 
-  dim3 blockDim(16, 16);
-  dim3 gridDim((cols + blockDim.x - 1) / blockDim.x, (rows + blockDim.y - 1) / blockDim.y);
+  // Use BLOCK_X/Y defined above
+  dim3 block(BLOCK_X, BLOCK_Y);
+  dim3 grid((cols + BLOCK_X - 1) / BLOCK_X, (rows + BLOCK_Y - 1) / BLOCK_Y);
 
-  // --- Allocate memory for total loss on device ---
+  size_t img_size = rows * cols * sizeof(float);
+  float *d_mu1, *d_sigma1_sq, *d_sigma12;
+
+  // Allocate temporary buffers for partial derivatives
+  cudaMallocAsync(&d_mu1, img_size, stream);
+  cudaMallocAsync(&d_sigma1_sq, img_size, stream);
+  cudaMallocAsync(&d_sigma12, img_size, stream);
+
+  // Total loss accumulator
   thrust::device_vector<float> d_total_loss(1, 0.0f);
+  float *d_loss_ptr = thrust::raw_pointer_cast(d_total_loss.data());
 
-  size_t shared_mem_size = blockDim.x * blockDim.y * sizeof(float);
+  // Constants
+  float C1 = SSIMConstants::C1;
+  float C2 = SSIMConstants::C2;
 
-  fused_loss_kernel<<<gridDim, blockDim, shared_mem_size, stream>>>(
-      predicted_data, gt_data, rows, cols, ssim_weight, image_grad, thrust::raw_pointer_cast(d_total_loss.data()));
+  // 1. Forward Pass: Compute Loss + Partial Derivatives
+  // Note: Shared memory size needed is purely internal to kernel via __shared__ keywords
+  // in the new style, but dynamic allocation is not used here, so 3rd arg is 0.
+  fused_loss_forward_kernel<<<grid, block, 0, stream>>>(rows, cols, C1, C2, ssim_weight, predicted_data, gt_data,
+                                                        d_loss_ptr, d_mu1, d_sigma1_sq, d_sigma12);
 
-  // --- Copy result back to host ---
-  float h_total_loss = d_total_loss[0];
+  // 2. Backward Pass: Convolve Partials + Add L1
+  fused_loss_backward_kernel<<<grid, block, 0, stream>>>(rows, cols, ssim_weight, predicted_data, gt_data, image_grad,
+                                                         d_mu1, d_sigma1_sq, d_sigma12);
 
-  // Return the mean loss per pixel
-  return h_total_loss / (rows * cols);
+  cudaFreeAsync(d_mu1, stream);
+  cudaFreeAsync(d_sigma1_sq, stream);
+  cudaFreeAsync(d_sigma12, stream);
+
+  // Return average loss
+  float total_loss = d_total_loss[0];
+  return total_loss / (float)(rows * cols);
 }
