@@ -15,9 +15,11 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <mutex>
 #include <opencv2/opencv.hpp>
+#include <string>
 #include <thread>
 #include <thrust/count.h>
 #include <thrust/device_vector.h>
@@ -25,6 +27,8 @@
 #include <thrust/host_vector.h>
 #include <thrust/scan.h>
 #include <thrust/transform.h>
+
+namespace fs = std::filesystem;
 
 /**
  * @brief Private implementation (PImpl) for the Trainer class.
@@ -942,6 +946,21 @@ void TrainerImpl::train() {
   // Calculate scene extent for adaptive density
   scene_extent = 1.1f * computeMaxDiagonal(images);
 
+  // --- Periodic Rendering Setup ---
+  // Create output directory
+  fs::path render_dir = "renders";
+  if (!fs::exists(render_dir)) {
+    fs::create_directory(render_dir);
+  }
+
+  // Use the first training camera as the fixed view
+  Camera fixed_camera = cameras[train_images[0].camera_id];
+
+  // Pre-allocate host buffer for the rendered image (RGB float)
+  int fixed_w = fixed_camera.width;
+  int fixed_h = fixed_camera.height;
+  std::vector<float> h_render_buffer(fixed_w * fixed_h * 3);
+
   ProgressBar progressBar(config.num_iters);
 
   // TRAINING LOOP
@@ -1035,6 +1054,28 @@ void TrainerImpl::train() {
         iter < config.reset_opacity_end) {
       reset_opacity();
       reset_grad_accum();
+    }
+
+    // --- Periodic Rendering ---
+    if (iter % 100 == 0) {
+      ForwardPassData render_pass_data;
+      // Render the fixed view
+      rasterize_image(num_gaussians, fixed_camera, config, cuda.camera, cuda.gaussians, render_pass_data, bg_color,
+                      l_max);
+
+      // Copy result to host
+      cudaMemcpy(h_render_buffer.data(), thrust::raw_pointer_cast(render_pass_data.d_image_buffer.data()),
+                 fixed_w * fixed_h * 3 * sizeof(float), cudaMemcpyDeviceToHost);
+
+      // Convert to OpenCV Mat (BGR 8-bit) and save
+      cv::Mat float_img(fixed_h, fixed_w, CV_32FC3, h_render_buffer.data());
+      cv::Mat bgr_img;
+      cv::cvtColor(float_img, bgr_img, cv::COLOR_RGB2BGR);
+      cv::Mat save_img;
+      bgr_img.convertTo(save_img, CV_8UC3, 255.0);
+
+      std::string filename = (render_dir / ("render_" + std::to_string(iter) + ".png")).string();
+      cv::imwrite(filename, save_img);
     }
 
     // 3. Launch Transfer for Next Image (iter + 1)
