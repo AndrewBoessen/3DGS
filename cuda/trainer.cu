@@ -954,12 +954,40 @@ void TrainerImpl::train() {
   }
 
   // Use the first training camera as the fixed view
-  Camera fixed_camera = cameras[train_images[0].camera_id];
+  Image fixed_image = train_images[0];
+  Camera fixed_camera = cameras[fixed_image.camera_id];
+  CameraParameters fixed_cam_params;
 
   // Pre-allocate host buffer for the rendered image (RGB float)
   int fixed_w = fixed_camera.width;
   int fixed_h = fixed_camera.height;
   std::vector<float> h_render_buffer(fixed_w * fixed_h * 3);
+
+  // Prepare and copy camera parameters to device (member 'cuda.camera')
+  float h_K[9] = {(float)fixed_camera.params[0],
+                  0.f,
+                  (float)fixed_camera.params[2],
+                  0.f,
+                  (float)fixed_camera.params[1],
+                  (float)fixed_camera.params[3],
+                  0.f,
+                  0.f,
+                  1.f};
+  Eigen::Matrix3d rot_mat_d = fixed_image.QvecToRotMat();
+  Eigen::Vector3d t_vec_d = fixed_image.tvec;
+  float h_T[12];
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j)
+      h_T[i * 4 + j] = (float)rot_mat_d(i, j);
+    h_T[i * 4 + 3] = (float)t_vec_d(i);
+  }
+  try {
+    thrust::copy(h_K, h_K + 9, fixed_cam_params.d_K.begin());
+    thrust::copy(h_T, h_T + 12, fixed_cam_params.d_T.begin());
+  } catch (const std::exception &e) {
+    fprintf(stderr, "Error copying camera data to device: %s\\n", e.what());
+    exit(EXIT_FAILURE);
+  }
 
   ProgressBar progressBar(config.num_iters);
 
@@ -1057,10 +1085,10 @@ void TrainerImpl::train() {
     }
 
     // --- Periodic Rendering ---
-    if (iter % 100 == 0) {
+    if (iter % 500 == 0) {
       ForwardPassData render_pass_data;
       // Render the fixed view
-      rasterize_image(num_gaussians, fixed_camera, config, cuda.camera, cuda.gaussians, render_pass_data, bg_color,
+      rasterize_image(num_gaussians, fixed_camera, config, fixed_cam_params, cuda.gaussians, render_pass_data, bg_color,
                       l_max);
 
       // Copy result to host
