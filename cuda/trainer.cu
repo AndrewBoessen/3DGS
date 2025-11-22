@@ -676,7 +676,7 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
 
   float loss =
       fused_loss(thrust::raw_pointer_cast(pass_data.d_image_buffer.data()), thrust::raw_pointer_cast(d_gt_image.data()),
-                 height, width, 3, config.ssim_frac, thrust::raw_pointer_cast(d_grad_image.data()));
+                 height, width, config.ssim_frac, thrust::raw_pointer_cast(d_grad_image.data()));
 
   auto d_uv_selected = compact_masked_array<2>(pass_data.d_uv, pass_data.d_mask, pass_data.num_culled);
   auto d_opacity_selected = compact_masked_array<1>(cuda.gaussians.d_opacity, pass_data.d_mask, pass_data.num_culled);

@@ -725,123 +725,131 @@ constexpr float C2 = (K2 * L) * (K2 * L);
 
 // Test case for the fused_loss function.
 // This test verifies both the combined L1/SSIM loss value and the calculated gradients.
-TEST_F(CudaKernelTest, FusedLossKernel_Correctness) {
+TEST_F(CudaKernelTest, FusedLossKernel_RGB_Correctness) {
   // 1. Setup test parameters
   const int rows = 16;
   const int cols = 16;
-  const int channels = 3;
+  const int channels = 3; // RGB
   const float ssim_weight = 0.2f;
   const int num_pixels = rows * cols;
+  const int total_elements = num_pixels * channels;
 
-  // 2. Host-side data: uniform images
-  // Using uniform images simplifies the chain rule test because:
-  // - Variance is 0
-  // - Covariance is 0
-  // - d(Loss)/d(Pixel) is constant in the non-border regions.
-  std::vector<float> h_pred(num_pixels, 0.5f);
-  std::vector<float> h_gt(num_pixels, 0.6f);
-  std::vector<float> h_grad(num_pixels, 0.0f);
+  // 2. Host-side data: uniform images, but different per channel
+  // We use different values for R, G, and B to verify stride logic.
+  // Channel 0 (R): 0.5 vs 0.6 (Slight diff)
+  // Channel 1 (G): 0.4 vs 0.4 (Identical - should yield 0 L1, perfect SSIM)
+  // Channel 2 (B): 0.1 vs 0.9 (Large diff)
+  std::vector<float> h_pred(total_elements);
+  std::vector<float> h_gt(total_elements);
+  std::vector<float> h_grad(total_elements, 0.0f);
+
+  float vals_pred[3] = {0.5f, 0.4f, 0.1f};
+  float vals_gt[3] = {0.6f, 0.4f, 0.9f};
+
+  for (int i = 0; i < num_pixels; ++i) {
+    for (int c = 0; c < channels; ++c) {
+      h_pred[i * channels + c] = vals_pred[c];
+      h_gt[i * channels + c] = vals_gt[c];
+    }
+  }
 
   // 3. Device-side data setup
   float *d_pred, *d_gt, *d_grad;
-  CUDA_CHECK(cudaMalloc(&d_pred, num_pixels * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&d_gt, num_pixels * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&d_grad, num_pixels * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_pred, total_elements * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_gt, total_elements * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_grad, total_elements * sizeof(float)));
 
-  CUDA_CHECK(cudaMemcpy(d_pred, h_pred.data(), num_pixels * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_gt, h_gt.data(), num_pixels * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_pred, h_pred.data(), total_elements * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_gt, h_gt.data(), total_elements * sizeof(float), cudaMemcpyHostToDevice));
 
   // 4. Call the function
-  // Note: Ensure your host function signature matches.
-  float gpu_loss = fused_loss(d_pred, d_gt, rows, cols, channels, ssim_weight, d_grad, 0);
+  // Note: Updated signature to include channels (3)
+  float gpu_loss = fused_loss(d_pred, d_gt, rows, cols, ssim_weight, d_grad, 0);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // 5. Copy results back
-  CUDA_CHECK(cudaMemcpy(h_grad.data(), d_grad, num_pixels * sizeof(float), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_grad.data(), d_grad, total_elements * sizeof(float), cudaMemcpyDeviceToHost));
 
   // 6. Calculate Expected Results (Host Side)
 
-  // --- A. Expected Loss Value ---
-  // Constants from ssim.cu / loss.cu
+  // SSIM Constants
   const float K1 = 0.01f;
   const float K2 = 0.03f;
   const float L_val = 1.0f;
   const float C1 = (K1 * L_val) * (K1 * L_val);
   const float C2 = (K2 * L_val) * (K2 * L_val);
 
-  const float mu_p = 0.5f;
-  const float mu_g = 0.6f;
-
-  // Since image is uniform, sigma_p, sigma_g, and sigma_pg are ALL 0.0.
-  // The Structure (cs) term becomes: (0 + 0 + C2) / (0 + 0 + C2) = 1.0.
-  // So SSIM depends only on Luminance term.
-  float lum_num = 2.0f * mu_p * mu_g + C1;
-  float lum_den = mu_p * mu_p + mu_g * mu_g + C1;
-  float expected_ssim = lum_num / lum_den;
-
-  float l1_val = fabsf(mu_p - mu_g);
-  float expected_loss = (1.0f - ssim_weight) * l1_val + ssim_weight * (1.0f - expected_ssim);
-
-  EXPECT_NEAR(gpu_loss, expected_loss, 1e-4) << "Loss value mismatch";
-
-  // --- B. Expected Gradient Value ---
-
-  // 1. L1 Gradient Part
-  // d(|x - y|) / dx = sign(x - y)
-  float l1_grad_dir = (mu_p > mu_g) ? 1.0f : -1.0f;
-  float term_l1 = (1.0f - ssim_weight) * l1_grad_dir;
-
-  // 2. SSIM Gradient Part (Exact Derivative)
-  // We calculate d(1 - SSIM) / d(Pixel).
-  // Since uniform image:
-  // - d(sigma)/d(pixel) terms are 0 (because pixel == mean).
-  // - We only need d(SSIM)/d(mean).
-
-  // d(SSIM)/d(mu1) for the Luminance term:
-  // L = (2*mu1*mu2 + C1) / (mu1^2 + mu2^2 + C1)
-  // Quotient rule: u/v -> (u'v - uv') / v^2
-  // u = 2*mu1*mu2 + C1, u' = 2*mu2
-  // v = mu1^2 + mu2^2 + C1, v' = 2*mu1
-  float term_num = (2.0f * mu_g) * lum_den - lum_num * (2.0f * mu_p);
-  float term_den = lum_den * lum_den;
-  float dSSIM_dmu1 = term_num / term_den;
-
-  // CRITICAL DIFFERENCE FROM APPROXIMATION:
-  // The gradient for pixel i is Sum( dSSIM/d(mu_j) * d(mu_j)/d(pixel_i) )
-  // d(mu_j)/d(pixel_i) is the Gaussian weight w_{ji}.
-  // For a uniform image/gradient, this sum is simply: dSSIM_dmu1 * Sum(Weights).
-  // The weights in the kernel are normalized (conceptually), but let's check the hardcoded sum.
-
-  // Using exact weights from kernel to ensure precision matches
+  // Gaussian weights sum calculation
   const float cGauss[11] = {0.00102838f, 0.00759876f, 0.03600077f, 0.10936069f, 0.21300553f, 0.26601171f,
                             0.21300553f, 0.10936069f, 0.03600077f, 0.00759876f, 0.00102838f};
-
-  // Calculate the sum of the 1D kernel (approx 1.0)
   float sum_weights_1d = 0.0f;
   for (float w : cGauss)
     sum_weights_1d += w;
-  // The 2D kernel sum is sum_1d * sum_1d
   float sum_weights_2d = sum_weights_1d * sum_weights_1d;
 
-  // The contribution to the gradient is dSSIM_dmu1 * sum_weights.
-  // (In the approximation, this was dSSIM_dmu1 * center_weight).
-  float term_ssim = -1.0f * dSSIM_dmu1 * sum_weights_2d; // Negative because Loss = 1 - SSIM
+  float expected_total_loss = 0.0f;
+  float expected_grads[3] = {0.f, 0.f, 0.f};
 
-  float total_grad_unscaled = term_l1 + ssim_weight * term_ssim;
+  // Calculate per-channel expectations
+  for (int c = 0; c < 3; ++c) {
+    float mu_p = vals_pred[c];
+    float mu_g = vals_gt[c];
 
-  // 3. Apply Resolution Scaling (1/N)
-  // This is required because the kernel now computes the gradient of the Mean loss.
-  float expected_grad_val = total_grad_unscaled / (float)num_pixels;
+    // -- Loss Calculation --
+    // Uniform image -> sigma = 0, cov = 0.
+    float lum_num = 2.0f * mu_p * mu_g + C1;
+    float lum_den = mu_p * mu_p + mu_g * mu_g + C1;
+    float expected_ssim = lum_num / lum_den; // Structure term is 1.0
+
+    float l1_val = fabsf(mu_p - mu_g);
+    float ch_loss = (1.0f - ssim_weight) * l1_val + ssim_weight * (1.0f - expected_ssim);
+
+    expected_total_loss += ch_loss;
+
+    // -- Gradient Calculation --
+
+    // 1. L1 Gradient
+    float l1_grad_dir = (mu_p > mu_g) ? 1.0f : -1.0f;
+    // Handle the exact equality case (Channel 1) where grad is mathematically undefined/subgradient
+    if (mu_p == mu_g)
+      l1_grad_dir = -1.0f; // Matching the C implementation (usually > check)
+
+    float term_l1 = (1.0f - ssim_weight) * l1_grad_dir;
+
+    // 2. SSIM Gradient
+    // d(SSIM)/d(mu_p)
+    float term_num = (2.0f * mu_g) * lum_den - lum_num * (2.0f * mu_p);
+    float term_den = lum_den * lum_den;
+    float dSSIM_dmu1 = term_num / term_den;
+
+    // Gradient contribution = -weight * dSSIM/dmu * sum_weights
+    float term_ssim = -1.0f * dSSIM_dmu1 * sum_weights_2d;
+
+    // 3. Normalization
+    // IMPORTANT: Divided by (H * W * Channels)
+    float total_grad_unscaled = term_l1 + ssim_weight * term_ssim;
+    expected_grads[c] = total_grad_unscaled / (float)total_elements;
+  }
+
+  // Average the loss across channels
+  expected_total_loss /= 3.0f;
+
+  EXPECT_NEAR(gpu_loss, expected_total_loss, 1e-4) << "Loss value mismatch";
 
   // 7. Compare Gradients
   for (int i = 0; i < num_pixels; ++i) {
     int r = i / cols;
-    int c = i % cols;
+    int c_img = i % cols;
 
-    // Only check center pixels to avoid boundary padding logic complexity in test
-    if (r >= 5 && r < rows - 5 && c >= 5 && c < cols - 5) {
-      EXPECT_NEAR(h_grad[i], expected_grad_val, 1e-6)
-          << "Gradient mismatch at index " << i << " (Row: " << r << ", Col: " << c << ")";
+    // Only check center pixels to avoid boundary padding logic complexity
+    if (r >= 5 && r < rows - 5 && c_img >= 5 && c_img < cols - 5) {
+      for (int c = 0; c < channels; ++c) {
+        float gpu_val = h_grad[i * channels + c];
+        float cpu_val = expected_grads[c];
+
+        EXPECT_NEAR(gpu_val, cpu_val, 1e-6)
+            << "Gradient mismatch at pixel " << i << " channel " << c << " (Row: " << r << ", Col: " << c_img << ")";
+      }
     }
   }
 

@@ -127,14 +127,13 @@ void render_image(const float *uv, const float *opacity, const float *conic, con
  * @param[in]  gt_data         A device pointer to ground truth image
  * @param[in]  rows            Height of the image
  * @param[in]  cols            Width of the image
- * @param[in]  channels        Number of channels (3 for RGB)
  * @param[in]  ssim_weight     Alpha value in loss function
  * @param[out] image_grad      Gradient per pixel channel
  * @param[in]  stream          The CUDA stream to execute kernel on
  * @return Loss from combined L1 and SSIM
  */
-float fused_loss(const float *predicted_data, const float *gt_data, int rows, int cols, int channels,
-                 const float ssim_weight, float *image_grad, cudaStream_t stream = 0);
+float fused_loss(const float *predicted_data, const float *gt_data, int rows, int cols, const float ssim_weight,
+                 float *image_grad, cudaStream_t stream = 0);
 
 /**
  * @brief Launch CUDA kernel to accumulate gradients
