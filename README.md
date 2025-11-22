@@ -68,6 +68,8 @@ The main executable, `gaussian_splatting`, will be located in the `build/` direc
 
 ### Mip-NeRF 360
 
+![bonsai training](./assets/bonsai.gif)
+
 ### COLMAP
 
 ## Testing
