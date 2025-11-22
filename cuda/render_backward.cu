@@ -63,10 +63,12 @@ __global__ void render_tiles_backward_kernel(
       }
       index_in_tile = max(index_in_tile, _splats_per_pixel[i][threadIdx.y * blockDim.x + threadIdx.x]);
       // Init per-pixel values
-      color_accum[i] = {0.0f, 0.0f, 0.0f};
       T[i] = _trans_final[i][threadIdx.y * blockDim.x + threadIdx.x];
-      background_initialized[i] = false;
+    } else {
+      T[i] = 0.0f;
     }
+    color_accum[i] = {0.0f, 0.0f, 0.0f};
+    background_initialized[i] = false;
   }
   index_in_tile = cg::reduce(warp, index_in_tile, cg::greater<int>()) - 1; // max depth in tile
 
