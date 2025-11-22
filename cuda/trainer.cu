@@ -100,6 +100,7 @@ private:
   // CUDA Stream and Event for Async Transfer
   cudaStream_t transfer_stream;
   cudaEvent_t copy_finished_events[2];
+  cudaEvent_t compute_done_events[2];
 
   // Helper to initialize pinned memory
   void init_pinned_memory(size_t max_pixels) {
@@ -111,6 +112,8 @@ private:
     cudaStreamCreate(&transfer_stream);
     cudaEventCreate(&copy_finished_events[0]);
     cudaEventCreate(&copy_finished_events[1]);
+    cudaEventCreate(&compute_done_events[0]);
+    cudaEventCreate(&compute_done_events[1]);
   }
 
   // The loop that runs in the background thread
@@ -129,6 +132,8 @@ private:
     cudaStreamDestroy(transfer_stream);
     cudaEventDestroy(copy_finished_events[0]);
     cudaEventDestroy(copy_finished_events[1]);
+    cudaEventDestroy(compute_done_events[0]);
+    cudaEventDestroy(compute_done_events[1]);
   }
 };
 
@@ -904,6 +909,11 @@ void TrainerImpl::train() {
   // Assume max resolution for Mip-NeRF 360 dataset (50 megapixels)
   init_pinned_memory(5187 * 3361);
 
+  // Pre-allocate device buffers to max size to avoid reallocation during training
+  // This is critical for safety when resizing in a double-buffered context
+  d_gt_image[0].reserve(5187 * 3361 * 3);
+  d_gt_image[1].reserve(5187 * 3361 * 3);
+
   shutdown_requested = false;
 
   // --- Prologue: Load and Copy first image ---
@@ -1005,6 +1015,9 @@ void TrainerImpl::train() {
     // This ensures that the compute stream doesn't start using d_gt_image[curr] until copy is done.
     cudaStreamWaitEvent(0, copy_finished_events[curr_buf_idx], 0);
 
+    // Also record that we are starting compute on this buffer (implicitly, by being in the stream)
+    // We will record the 'done' event at the end of the iteration.
+
     // 2. Submit Compute Work (Async)
     ForwardPassData pass_data;
     zero_grads();
@@ -1071,6 +1084,9 @@ void TrainerImpl::train() {
       progressBar.update(iter, loss, num_gaussians);
     }
 
+    // Record that compute is done for this buffer
+    cudaEventRecord(compute_done_events[curr_buf_idx], 0);
+
     // --- ADAPTIVE DENSITY ---
     if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&
         iter < config.adaptive_control_end) {
@@ -1088,7 +1104,8 @@ void TrainerImpl::train() {
     if (iter % 500 == 0) {
       ForwardPassData render_pass_data;
       // Render the fixed view
-      rasterize_image(num_gaussians, fixed_camera, config, fixed_cam_params, cuda.gaussians, render_pass_data, bg_color,
+      // Use a fixed background color (black) for consistency
+      rasterize_image(num_gaussians, fixed_camera, config, fixed_cam_params, cuda.gaussians, render_pass_data, 0.0f,
                       l_max);
 
       // Copy result to host
@@ -1124,6 +1141,9 @@ void TrainerImpl::train() {
     if (d_gt_image[next_buf_idx].size() != next_width * next_height * 3) {
       d_gt_image[next_buf_idx].resize(next_width * next_height * 3);
     }
+
+    // Wait for the PREVIOUS compute on 'next_buf_idx' to finish before overwriting it
+    cudaStreamWaitEvent(transfer_stream, compute_done_events[next_buf_idx], 0);
 
     cudaMemcpyAsync(thrust::raw_pointer_cast(d_gt_image[next_buf_idx].data()), h_pinned_image_buffer[next_buf_idx],
                     next_width * next_height * 3 * sizeof(float), cudaMemcpyHostToDevice, transfer_stream);
