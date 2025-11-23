@@ -118,7 +118,7 @@ __global__ void render_tiles_backward_kernel(
 
       valid_pixel = global_pixel_x < image_width && global_pixel_y < image_height;
 
-      float power = basic + linear * i + quad * i * i;
+      float power = fminf(0.0f, basic + linear * i + quad * i * i);
       float g = __expf(power);
       float alpha = min(0.99f, opa * g);
 
