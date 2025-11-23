@@ -71,7 +71,7 @@ __global__ void render_tiles_kernel(const int num_tiles_x, const int num_tiles_y
 
     any_active = 0;
     for (int i = 0; i < PIXELS_PER_THREAD; i++) {
-      const float power = basic + linear * i + quad * i * i;
+      const float power = fminf(0.0f, basic + linear * i + quad * i * i);
 
       const float valid_alpha = alpha_accum[i] <= 0.9999f;
       any_active |= __ballot_sync(0xFFFFFFFF, valid_alpha);
