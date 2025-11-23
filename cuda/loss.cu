@@ -406,14 +406,14 @@ __global__ void fused_loss_backward_kernel(int H, int W, float ssim_weight, cons
       }
 
       // 1. SSIM Gradient Component
-      float ssim_grad_component = sum0 + (2.f * p1[c]) * sum1 + (p2[c]) * sum2;
+      float ssim_grad_component = ssim_weight * (sum0 + (2.f * p1[c]) * sum1 + (p2[c]) * sum2);
 
       // 2. L1 Gradient Component
       float l1_grad_component = (1.0f - ssim_weight) * ((p1[c] > p2[c]) ? 1.0f : -1.0f);
 
       // Final Gradient
       // Normalizing by pixel count * channels
-      const float grad_scale = 1.0f / (float)(H * W * CHANNELS);
+      const float grad_scale = 1.0f / (float)(H * W);
       float total_grad = (ssim_grad_component + l1_grad_component) * grad_scale;
 
       image_grad[pix_id * CHANNELS + c] = total_grad;
