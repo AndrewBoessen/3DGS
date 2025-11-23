@@ -964,7 +964,7 @@ void TrainerImpl::train() {
   }
 
   // Use the first training camera as the fixed view
-  Image fixed_image = train_images[0];
+  Image fixed_image = train_images[20];
   Camera fixed_camera = cameras[fixed_image.camera_id];
   CameraParameters fixed_cam_params;
 
@@ -1059,46 +1059,21 @@ void TrainerImpl::train() {
     // --- FORWARD PASS via RASTERIZE MODULE ---
     rasterize_image(num_gaussians, curr_camera, config, cuda.camera, cuda.gaussians, pass_data, bg_color, l_max);
 
-    if (pass_data.num_culled == 0) {
+    if (pass_data.num_culled == 0)
       std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;
-      // We still need to handle the pipeline logic even if we skip compute
-      // But for simplicity, let's just let it run through or handle it?
-      // If we continue, we break the pipeline sync.
-      // Let's just run backward pass on empty? No.
-      // Let's just increment iter and continue, but we need to ensure transfers keep going.
-      // For now, assume this is rare and just let it crash or handle gracefully?
-      // The original code did 'iter++; continue;'.
-      // If we do that, we skip the 'Launch Next Transfer' and 'Trigger Load'.
-      // That would deadlock the pipeline.
-      // So we MUST proceed to transfer logic.
-    } else {
-      // --- BACKWARD PASS ---
-      // Call Impl member function
-      float loss = backward_pass(curr_image, curr_camera, pass_data, bg_color, d_gt_image[curr_buf_idx]);
+    // --- BACKWARD PASS ---
+    // Call Impl member function
+    float loss = backward_pass(curr_image, curr_camera, pass_data, bg_color, d_gt_image[curr_buf_idx]);
 
-      // --- OPTIMIZER STEP ---
-      // Call Impl member function
-      optimizer_step(pass_data);
+    // --- OPTIMIZER STEP ---
+    // Call Impl member function
+    optimizer_step(pass_data);
 
-      // Log status
-      progressBar.update(iter, loss, num_gaussians);
-    }
+    // Log status
+    progressBar.update(iter, loss, num_gaussians);
 
     // Record that compute is done for this buffer
     cudaEventRecord(compute_done_events[curr_buf_idx], 0);
-
-    // --- ADAPTIVE DENSITY ---
-    if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&
-        iter < config.adaptive_control_end) {
-      adaptive_density_step();
-      reset_grad_accum();
-    }
-
-    if (iter > config.reset_opacity_start && iter % config.reset_opacity_interval == 0 &&
-        iter < config.reset_opacity_end) {
-      reset_opacity();
-      reset_grad_accum();
-    }
 
     // --- Periodic Rendering ---
     if (iter % 500 == 0) {
@@ -1121,6 +1096,19 @@ void TrainerImpl::train() {
 
       std::string filename = (render_dir / ("render_" + std::to_string(iter) + ".png")).string();
       cv::imwrite(filename, save_img);
+    }
+
+    // --- ADAPTIVE DENSITY ---
+    if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&
+        iter < config.adaptive_control_end) {
+      adaptive_density_step();
+      reset_grad_accum();
+    }
+
+    if (iter > config.reset_opacity_start && iter % config.reset_opacity_interval == 0 &&
+        iter < config.reset_opacity_end) {
+      reset_opacity();
+      reset_grad_accum();
     }
 
     // 3. Launch Transfer for Next Image (iter + 1)
