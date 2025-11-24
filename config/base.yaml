@@ -18,8 +18,8 @@ xyz_lr_multiplier_final: 1.6e-3
 quat_lr_multiplier: 1
 scale_lr_multiplier: 2.5
 opacity_lr_multiplier: 25
-rgb_lr_multiplier: 2.5
-sh_lr_multiplier: 0.125
+rgb_lr_multiplier: 25
+sh_lr_multiplier: 1.25
 test_eval_interval: 500
 test_split_ratio: 8
 use_background: true
@@ -39,5 +39,5 @@ adaptive_control_end: 6500
 adaptive_control_interval: 100
 max_gaussians: 4250000
 delete_opacity_threshold: 0.005
-uv_grad_threshold: 4e-6
+uv_grad_threshold: 3e-7
 split_scale_factor: 1.6
