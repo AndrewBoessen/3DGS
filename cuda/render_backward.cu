@@ -196,8 +196,8 @@ __global__ void render_tiles_backward_kernel(
       grad_u_tile = grad_basic * -(inv_cov00 * d.x + inv_cov01 * d.y) + (grad_linear * inv_cov01);
       grad_v_tile = grad_basic * -(inv_cov01 * d.x + inv_cov11 * d.y) + (grad_linear * inv_cov11);
 
-      grad_u_tile *= 0.5f * image_width;
-      grad_v_tile *= 0.5f * image_height;
+      // grad_u_tile *= 0.5f * image_width;
+      // grad_v_tile *= 0.5f * image_height;
 
       grad_u_tile = cg::reduce(warp, grad_u_tile, cg::plus<float>());
       grad_v_tile = cg::reduce(warp, grad_v_tile, cg::plus<float>());
