@@ -46,6 +46,12 @@ __device__ __forceinline__ float get_pix_value_clamped_rgb(const float *img, int
   return img[(cy * W + cx) * CHANNELS + c];
 }
 
+__device__ __forceinline__ float get_pix_value_zero(const float *img, int y, int x, int c, int H, int W) {
+  if (y < 0 || y >= H || x < 0 || x >= W)
+    return 0.0f;
+  return img[(y * W + x) * CHANNELS + c];
+}
+
 // ------------------------------------------
 // Forward Kernel: Fused SSIM + L1 Loss (RGB)
 // ------------------------------------------
@@ -330,9 +336,9 @@ __global__ void fused_loss_backward_kernel(int H, int W, float ssim_weight, cons
 #pragma unroll
         for (int c = 0; c < CHANNELS; ++c) {
           // Use clamped fetch for derivatives map
-          float vmu = get_pix_value_clamped_rgb(dm_dmu1, gy, gx, c, H, W);
-          float vs1 = get_pix_value_clamped_rgb(dm_dsigma1_sq, gy, gx, c, H, W);
-          float vs12 = get_pix_value_clamped_rgb(dm_dsigma12, gy, gx, c, H, W);
+          float vmu = get_pix_value_zero(dm_dmu1, gy, gx, c, H, W);
+          float vs1 = get_pix_value_zero(dm_dsigma1_sq, gy, gx, c, H, W);
+          float vs12 = get_pix_value_zero(dm_dsigma12, gy, gx, c, H, W);
 
           sData[0][row][col][c] = vmu;
           sData[1][row][col][c] = vs1;
@@ -406,14 +412,14 @@ __global__ void fused_loss_backward_kernel(int H, int W, float ssim_weight, cons
       }
 
       // 1. SSIM Gradient Component
-      float ssim_grad_component = ssim_weight * (sum0 + (2.f * p1[c]) * sum1 + (p2[c]) * sum2);
+      float ssim_grad_component = sum0 + (2.f * p1[c]) * sum1 + (p2[c]) * sum2;
 
       // 2. L1 Gradient Component
       float l1_grad_component = (1.0f - ssim_weight) * ((p1[c] > p2[c]) ? 1.0f : -1.0f);
 
       // Final Gradient
       // Normalizing by pixel count * channels
-      const float grad_scale = 1.0f / (float)(H * W);
+      const float grad_scale = 1.0f / (float)(H * W * CHANNELS);
       float total_grad = (ssim_grad_component + l1_grad_component) * grad_scale;
 
       image_grad[pix_id * CHANNELS + c] = total_grad;

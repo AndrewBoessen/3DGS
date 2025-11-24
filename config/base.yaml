@@ -16,7 +16,7 @@ base_lr: 1e-3
 xyz_lr_multiplier_init: 1.6e-1
 xyz_lr_multiplier_final: 1.6e-3
 quat_lr_multiplier: 1
-scale_lr_multiplier: 5
+scale_lr_multiplier: 2.5
 opacity_lr_multiplier: 25
 rgb_lr_multiplier: 2.5
 sh_lr_multiplier: 0.125

@@ -15,8 +15,8 @@ ssim_frac: 0.2
 base_lr: 1e-3
 xyz_lr_multiplier_init: 1.6e-1
 xyz_lr_multiplier_final: 1.6e-3
-quat_lr_multiplier: 1
-scale_lr_multiplier: 5
+quat_lr_multiplier: 1.5
+scale_lr_multiplier: 2.5
 opacity_lr_multiplier: 25
 rgb_lr_multiplier: 2.5
 sh_lr_multiplier: 0.125
@@ -34,10 +34,10 @@ add_sh_band_interval: 1000
 use_split: true
 use_clone: true
 use_delete: true
-adaptive_control_start: 1500
+adaptive_control_start: 500
 adaptive_control_end: 27500
 adaptive_control_interval: 100
 max_gaussians: 4250000
 delete_opacity_threshold: 0.005
-uv_grad_threshold: 2e-4
+uv_grad_threshold: 1.5e-4
 split_scale_factor: 1.6
