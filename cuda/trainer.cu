@@ -407,12 +407,11 @@ void TrainerImpl::adaptive_density_step() {
   // --- 1. Calculate Average Gradient Norms and Scale Max---
   thrust::device_vector<float> d_avg_uv_grad_norm(num_gaussians);
 
-  thrust::transform(
-      thrust::make_zip_iterator(
-          thrust::make_tuple(cuda.accumulators.d_uv_grad_accum.begin(), cuda.accumulators.d_grad_accum_dur.begin())),
-      thrust::make_zip_iterator(thrust::make_tuple(cuda.accumulators.d_uv_grad_accum.begin() + num_gaussians,
-                                                   cuda.accumulators.d_grad_accum_dur.begin() + num_gaussians)),
-      d_avg_uv_grad_norm.begin(), ComputeAvgGrad());
+  auto avg_uv_grad_iter_start = thrust::make_zip_iterator(
+      thrust::make_tuple(cuda.accumulators.d_uv_grad_accum.begin(), cuda.accumulators.d_grad_accum_dur.begin()));
+  auto avg_uv_grad_iter_end = avg_uv_grad_iter_start + num_gaussians;
+
+  thrust::transform(avg_uv_grad_iter_start, avg_uv_grad_iter_end, d_avg_uv_grad_norm.begin(), ComputeAvgGrad());
 
   thrust::device_vector<float> d_scale_max(num_gaussians);
 
@@ -531,9 +530,6 @@ void TrainerImpl::adaptive_density_step() {
         thrust::raw_pointer_cast(d_new_split_scale.data()), thrust::raw_pointer_cast(d_new_split_quat.data()),
         thrust::raw_pointer_cast(d_new_split_sh.data()));
   }
-
-  // --- 7. Get mask of all gaussians to remove ---
-  thrust::device_vector<bool> d_remove_mask(num_gaussians);
 
   // --- 8, 9, 10. Compact existing vectors and append new data ---
   // - Compact all params in keep mask
@@ -764,7 +760,7 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data) {
       pow((config.xyz_lr_multiplier_final / config.xyz_lr_multiplier_init), ((float)iter / (float)config.num_iters));
   adam_step(thrust::raw_pointer_cast(d_xyz.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz.data()),
             thrust::raw_pointer_cast(d_m_xyz.data()), thrust::raw_pointer_cast(d_v_xyz.data()),
-            config.base_lr * config.xyz_lr_multiplier_init * xyz_decay_factor, B1, B2, EPS, bias1, bias2,
+            scene_extent * config.base_lr * config.xyz_lr_multiplier_init * xyz_decay_factor, B1, B2, EPS, bias1, bias2,
             pass_data.num_culled, 3);
   adam_step(thrust::raw_pointer_cast(d_rgb.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_rgb.data()),
             thrust::raw_pointer_cast(d_m_rgb.data()), thrust::raw_pointer_cast(d_v_rgb.data()),

@@ -66,6 +66,7 @@ __global__ void render_tiles_backward_kernel(
       T[i] = _trans_final[i][threadIdx.y * blockDim.x + threadIdx.x];
     } else {
       T[i] = 0.0f;
+      _splats_per_pixel[i][threadIdx.y * blockDim.x + threadIdx.x] = 0;
     }
     color_accum[i] = {0.0f, 0.0f, 0.0f};
     background_initialized[i] = false;
