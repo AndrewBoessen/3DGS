@@ -229,7 +229,6 @@ void TrainerImpl::test_train_split() {
 
 void TrainerImpl::reset_grad_accum() {
   thrust::fill_n(cuda.accumulators.d_uv_grad_accum.begin(), num_gaussians, 0.0f);
-  thrust::fill_n(cuda.accumulators.d_xyz_grad_accum.begin(), num_gaussians * 3, 0.0f);
   thrust::fill_n(cuda.accumulators.d_grad_accum_dur.begin(), num_gaussians, 0);
 }
 
@@ -500,10 +499,8 @@ void TrainerImpl::adaptive_density_step() {
     thrust::exclusive_scan(clone_int_mask_start, clone_int_mask_end, clone_write_ids.begin());
     clone_gaussians(
         num_gaussians, num_sh_coeffs, thrust::raw_pointer_cast(d_clone_mask.data()),
-        thrust::raw_pointer_cast(clone_write_ids.data()),
-        thrust::raw_pointer_cast(cuda.accumulators.d_xyz_grad_accum.data()),
-        thrust::raw_pointer_cast(cuda.accumulators.d_grad_accum_dur.data()),
-        thrust::raw_pointer_cast(cuda.gaussians.d_xyz.data()), thrust::raw_pointer_cast(cuda.gaussians.d_rgb.data()),
+        thrust::raw_pointer_cast(clone_write_ids.data()), thrust::raw_pointer_cast(cuda.gaussians.d_xyz.data()),
+        thrust::raw_pointer_cast(cuda.gaussians.d_rgb.data()),
         thrust::raw_pointer_cast(cuda.gaussians.d_opacity.data()),
         thrust::raw_pointer_cast(cuda.gaussians.d_scale.data()),
         thrust::raw_pointer_cast(cuda.gaussians.d_quaternion.data()),
@@ -847,8 +844,6 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data) {
   // Compact
   auto d_uv_accum_compact =
       compact_masked_array<1>(cuda.accumulators.d_uv_grad_accum, pass_data.d_mask, pass_data.num_culled);
-  auto d_xyz_accum_compact =
-      compact_masked_array<3>(cuda.accumulators.d_xyz_grad_accum, pass_data.d_mask, pass_data.num_culled);
   auto d_accum_dur_compact =
       compact_masked_array<1>(cuda.accumulators.d_grad_accum_dur, pass_data.d_mask, pass_data.num_culled);
   // Add
@@ -860,15 +855,11 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data) {
   thrust::transform(d_uv_accum_compact.begin(), d_uv_accum_compact.end(), d_uv_grad_norms.begin(),
                     d_uv_accum_compact.begin(), thrust::plus<float>());
 
-  thrust::transform(d_xyz_accum_compact.begin(), d_xyz_accum_compact.end(), cuda.gradients.d_grad_xyz.begin(),
-                    d_xyz_accum_compact.begin(), thrust::plus<float>());
-
   thrust::transform(d_accum_dur_compact.begin(), d_accum_dur_compact.end(), thrust::make_constant_iterator(1),
                     d_accum_dur_compact.begin(), thrust::plus<int>());
 
   // Scatter
   scatter_masked_array<1>(d_uv_accum_compact, pass_data.d_mask, cuda.accumulators.d_uv_grad_accum);
-  scatter_masked_array<3>(d_xyz_accum_compact, pass_data.d_mask, cuda.accumulators.d_xyz_grad_accum);
   scatter_masked_array<1>(d_accum_dur_compact, pass_data.d_mask, cuda.accumulators.d_grad_accum_dur);
 }
 
@@ -1018,6 +1009,21 @@ void TrainerImpl::train() {
 
       // Log status
       progressBar.update(iter, loss, num_gaussians);
+    }
+    // --- SAVE RENDERED IMAGE ---
+    if (iter % config.print_interval == 0) {
+      const int width = (int)curr_camera.width;
+      const int height = (int)curr_camera.height;
+      std::vector<float> h_image_buffer(width * height * 3);
+      thrust::copy(pass_data.d_image_buffer.begin(), pass_data.d_image_buffer.end(), h_image_buffer.begin());
+
+      cv::Mat rendered_image(height, width, CV_32FC3, h_image_buffer.data());
+      cv::Mat rendered_image_8u;
+      rendered_image.convertTo(rendered_image_8u, CV_8UC3, 255.0);
+      cv::cvtColor(rendered_image_8u, rendered_image_8u, cv::COLOR_RGB2BGR);
+
+      std::string filename = "rendered_image_" + std::to_string(iter) + ".png";
+      cv::imwrite(filename, rendered_image_8u);
     }
 
     // --- ADAPTIVE DENSITY ---

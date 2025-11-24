@@ -29,7 +29,7 @@ protected:
   // Pointers to device memory for Gaussian attributes (INPUTS)
   float *d_xyz = nullptr, *d_rgb = nullptr, *d_sh = nullptr, *d_opacity = nullptr;
   float *d_scale = nullptr, *d_quaternion = nullptr;
-  float *d_uv_grad_accum = nullptr, *d_xyz_grad_accum = nullptr;
+  float *d_uv_grad_accum = nullptr;
   int *d_grad_accum_count = nullptr;
   bool *d_mask = nullptr;
   int *d_write_ids = nullptr;
@@ -65,8 +65,6 @@ protected:
       CUDA_CHECK(cudaFree(d_quaternion));
     if (d_uv_grad_accum)
       CUDA_CHECK(cudaFree(d_uv_grad_accum));
-    if (d_xyz_grad_accum)
-      CUDA_CHECK(cudaFree(d_xyz_grad_accum));
     if (d_grad_accum_count)
       CUDA_CHECK(cudaFree(d_grad_accum_count));
     if (d_mask)
@@ -130,7 +128,6 @@ protected:
     CUDA_CHECK(cudaMalloc(&d_scale, max_gaussians * 3 * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_quaternion, max_gaussians * 4 * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_uv_grad_accum, max_gaussians * 2 * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_xyz_grad_accum, max_gaussians * 3 * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_grad_accum_count, max_gaussians * sizeof(int)));
     CUDA_CHECK(cudaMalloc(&d_mask, max_gaussians * sizeof(bool)));
     CUDA_CHECK(cudaMalloc(&d_write_ids, max_gaussians * sizeof(int)));
@@ -169,13 +166,11 @@ protected:
       h_quat[i * 4 + 0] = 1.0f; // Identity quaternion w
       h_quat[i * 4 + 3] = 0.0f; // Identity quaternion z (kernel expects w,x,y,z)
     }
-    std::vector<float> h_xyz_grad(N * 3, 0.01f);
 
     // Copy attribute data to device
     CUDA_CHECK(cudaMemcpy(d_xyz, h_xyz.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_rgb, h_rgb.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_quaternion, h_quat.data(), N * 4 * sizeof(float), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_xyz_grad_accum, h_xyz_grad.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_opacity, h_opacity.data(), N * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_scale, h_scale.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_uv_grad_accum, h_uv_grad.data(), N * 2 * sizeof(float), cudaMemcpyHostToDevice));
@@ -203,21 +198,18 @@ TEST_F(AdaptiveDensityTest, CloneGaussiansTest) {
 
   // Set specific input data for this test
   std::vector<float> h_xyz_in = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
-  std::vector<float> h_xyz_grad = {100.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f};
   std::vector<char> h_mask = {true, false}; // Clone G0, not G1
   std::vector<int> h_write_ids = {0, 1};    // Exclusive scan of h_mask
   std::vector<float> h_opacity_in = {0.8f, 0.7f};
 
   CUDA_CHECK(cudaMemcpy(d_xyz, h_xyz_in.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_xyz_grad_accum, h_xyz_grad.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_mask, h_mask.data(), N * sizeof(bool), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_write_ids, h_write_ids.data(), N * sizeof(int), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_opacity, h_opacity_in.data(), N * sizeof(float), cudaMemcpyHostToDevice));
 
   // Call the kernel
-  clone_gaussians(N, num_sh_coef, d_mask, d_write_ids, d_xyz_grad_accum, d_grad_accum_count, d_xyz, d_rgb, d_opacity,
-                  d_scale, d_quaternion, d_sh, d_xyz_out, d_rgb_out, d_opacity_out, d_scale_out, d_quaternion_out,
-                  d_sh_out, 0);
+  clone_gaussians(N, num_sh_coef, d_mask, d_write_ids, d_xyz, d_rgb, d_opacity, d_scale, d_quaternion, d_sh, d_xyz_out,
+                  d_rgb_out, d_opacity_out, d_scale_out, d_quaternion_out, d_sh_out, 0);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // Copy results back

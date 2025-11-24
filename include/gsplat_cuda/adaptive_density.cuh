@@ -11,8 +11,6 @@
  * @param[in]   num_sh_coef  Total number of SH coefficients
  * @param[in]   mask         Clone mask on all N Gaussians
  * @param[in]   write_ids    Write ids into output (exclusive sum on clone mask)
- * @param[in]   xyz_grad     Gradient accumulator for xyz positions
- * @param[in]   accum_dur    Number of iterations in accum
  * @param[in]   xyz_in       XYZ for all current Gaussians
  * @param[in]   rgb_in       RGB for all current Gaussians
  * @param[in]   op_in        Opacity for all current Gaussians
@@ -27,10 +25,10 @@
  * @param[out]  sh_out       Spherical harmonics output buffer
  * @param[in]   stream       CUDA stream to execute on
  */
-void clone_gaussians(const int N, const int num_sh_coef, const bool *mask, const int *write_ids, const float *xyz_grad,
-                     const int *accum_dur, const float *xyz_in, const float *rgb_in, const float *op_in,
-                     const float *scale_in, const float *quat_in, const float *sh_in, float *xyz_out, float *rgb_out,
-                     float *op_out, float *scale_out, float *quat_out, float *sh_out, cudaStream_t stream = 0);
+void clone_gaussians(const int N, const int num_sh_coef, const bool *mask, const int *write_ids, const float *xyz_in,
+                     const float *rgb_in, const float *op_in, const float *scale_in, const float *quat_in,
+                     const float *sh_in, float *xyz_out, float *rgb_out, float *op_out, float *scale_out,
+                     float *quat_out, float *sh_out, cudaStream_t stream = 0);
 
 /**
  * @brief Splits the of Gaussians specified in the mask

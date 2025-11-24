@@ -11,8 +11,7 @@ __global__ void setup_states(curandState *state, unsigned long seed) {
 }
 
 void __global__ clone_gaussians_kernel(const int N, const int num_sh_coef, const bool *__restrict__ mask,
-                                       const int *__restrict__ write_ids, const float *__restrict__ xyz_grad,
-                                       const int *__restrict__ accum_dur, const float *__restrict__ xyz_in,
+                                       const int *__restrict__ write_ids, const float *__restrict__ xyz_in,
                                        const float *__restrict__ rgb_in, const float *__restrict__ op_in,
                                        const float *__restrict__ scale_in, const float *__restrict__ quat_in,
                                        const float *__restrict__ sh_in, float *xyz_out, float *rgb_out, float *op_out,
@@ -33,29 +32,11 @@ void __global__ clone_gaussians_kernel(const int N, const int num_sh_coef, const
     const float3 scale = {scale_in[i * 3 + 0], scale_in[i * 3 + 1], scale_in[i * 3 + 2]};
     const float4 quat = {quat_in[i * 4 + 0], quat_in[i * 4 + 1], quat_in[i * 4 + 2], quat_in[i * 4 + 3]};
 
-    // move cloned in xyz grad direction
-    const int accum_count = accum_dur[i];
-
-    float3 xyz_grad_accum = {0.0f, 0.0f, 0.0f};
-    if (accum_count > 0) {
-      xyz_grad_accum = {xyz_grad[i * 3 + 0] / accum_count, xyz_grad[i * 3 + 1] / accum_count,
-                        xyz_grad[i * 3 + 2] / accum_count};
-    }
-
-    const float3 xyz_new = {xyz.x - xyz_grad_accum.x * 0.01f, xyz.y - xyz_grad_accum.y * 0.01f,
-                            xyz.z - xyz_grad_accum.z * 0.01f};
-
     // write cloned parameters
     for (int j = 0; j < 2; j++) {
-      if (j == 0) {
-        xyz_out[(write_base + j) * 3 + 0] = xyz_new.x;
-        xyz_out[(write_base + j) * 3 + 1] = xyz_new.y;
-        xyz_out[(write_base + j) * 3 + 2] = xyz_new.z;
-      } else {
-        xyz_out[(write_base + j) * 3 + 0] = xyz.x;
-        xyz_out[(write_base + j) * 3 + 1] = xyz.y;
-        xyz_out[(write_base + j) * 3 + 2] = xyz.z;
-      }
+      xyz_out[(write_base + j) * 3 + 0] = xyz.x;
+      xyz_out[(write_base + j) * 3 + 1] = xyz.y;
+      xyz_out[(write_base + j) * 3 + 2] = xyz.z;
 
       rgb_out[(write_base + j) * 3 + 0] = rgb.x;
       rgb_out[(write_base + j) * 3 + 1] = rgb.y;
@@ -186,14 +167,12 @@ void __global__ split_gaussians_kernel(const int N, const float scale_factor, co
   }
 }
 
-void clone_gaussians(const int N, const int num_sh_coef, const bool *mask, const int *write_ids, const float *xyz_grad,
-                     const int *accum_dur, const float *xyz_in, const float *rgb_in, const float *op_in,
-                     const float *scale_in, const float *quat_in, const float *sh_in, float *xyz_out, float *rgb_out,
-                     float *op_out, float *scale_out, float *quat_out, float *sh_out, cudaStream_t stream) {
+void clone_gaussians(const int N, const int num_sh_coef, const bool *mask, const int *write_ids, const float *xyz_in,
+                     const float *rgb_in, const float *op_in, const float *scale_in, const float *quat_in,
+                     const float *sh_in, float *xyz_out, float *rgb_out, float *op_out, float *scale_out,
+                     float *quat_out, float *sh_out, cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(mask);
   ASSERT_DEVICE_POINTER(write_ids);
-  ASSERT_DEVICE_POINTER(xyz_grad);
-  ASSERT_DEVICE_POINTER(accum_dur);
 
   if (N == 0)
     return;
@@ -201,9 +180,9 @@ void clone_gaussians(const int N, const int num_sh_coef, const bool *mask, const
   const int threads = 256;
   const int blocks = (N + threads - 1) / threads;
 
-  clone_gaussians_kernel<<<blocks, threads, 0, stream>>>(N, num_sh_coef, mask, write_ids, xyz_grad, accum_dur, xyz_in,
-                                                         rgb_in, op_in, scale_in, quat_in, sh_in, xyz_out, rgb_out,
-                                                         op_out, scale_out, quat_out, sh_out);
+  clone_gaussians_kernel<<<blocks, threads, 0, stream>>>(N, num_sh_coef, mask, write_ids, xyz_in, rgb_in, op_in,
+                                                         scale_in, quat_in, sh_in, xyz_out, rgb_out, op_out, scale_out,
+                                                         quat_out, sh_out);
 }
 
 void split_gaussians(const int N, const float scale_factor, const int num_sh_coef, const bool *mask,
