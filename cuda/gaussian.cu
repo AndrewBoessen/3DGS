@@ -18,7 +18,7 @@ __global__ void compute_sigma_fused_kernel(const float *__restrict__ quaternion,
   float z = quaternion[quat_base_idx + 3];
 
   const float norm = sqrtf(w * w + x * x + y * y + z * z);
-  const float inv_norm = 1.0f / norm;
+  const float inv_norm = 1.0f / (norm + 1e-6f);
   w *= inv_norm;
   x *= inv_norm;
   y *= inv_norm;

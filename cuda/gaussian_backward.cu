@@ -29,7 +29,7 @@ __global__ void compute_proj_jacobian_backward_kernel(const float *__restrict__ 
     return;
   }
 
-  const float z_inv = 1.0f / z;
+  const float z_inv = 1.0f / (z + 1e-6f);
   const float z_inv2 = z_inv * z_inv;
   const float z_inv3 = z_inv2 * z_inv;
 
@@ -192,7 +192,7 @@ __global__ void sigma_backward_kernel(const float *__restrict__ q, const float *
 
   // Normalize quaternion
   const float norm = sqrtf(qw * qw + qx * qx + qy * qy + qz * qz);
-  const float inv_norm = 1.0f / norm;
+  const float inv_norm = 1.0f / (norm + 1e-6f);
   const float w = qw * inv_norm;
   const float x = qx * inv_norm;
   const float y = qy * inv_norm;

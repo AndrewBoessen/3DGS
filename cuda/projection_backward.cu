@@ -39,7 +39,7 @@ __global__ void cam_intr_proj_backward_kernel(const float *__restrict__ xyz_c, c
     return;
   }
 
-  const float z_inv = 1.0f / z;
+  const float z_inv = 1.0f / (z + 1e-6f);
   const float z_inv2 = z_inv * z_inv;
 
   const float grad_u = uv_grad_out[i * UV_STRIDE + 0];
