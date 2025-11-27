@@ -18,6 +18,7 @@
 #include <iostream>
 #include <mutex>
 #include <opencv2/opencv.hpp>
+#include <random>
 #include <thread>
 #include <thrust/count.h>
 #include <thrust/device_vector.h>
@@ -92,6 +93,10 @@ private:
 
   // Device buffers to hold the GT images - Double Buffered
   thrust::device_vector<float> d_gt_image[2];
+  int buffer_image_indices[2] = {-1, -1}; // Tracks which image index is in each buffer
+
+  // RNG
+  std::mt19937 rng;
 
   // CUDA Stream and Event for Async Transfer
   cudaStream_t transfer_stream;
@@ -893,7 +898,16 @@ void TrainerImpl::train() {
   {
     // 1. Request Load Image 0
     std::unique_lock<std::mutex> lock(load_mutex);
-    next_image_index = 0;
+
+    // Initialize RNG
+    std::random_device rd;
+    rng = std::mt19937(rd());
+    std::uniform_int_distribution<int> dist(0, train_images.size() - 1);
+
+    int first_idx = dist(rng);
+    next_image_index = first_idx;
+    buffer_image_indices[0] = first_idx;
+
     request_load[0] = true;
     loader_thread = std::thread(&TrainerImpl::image_loader_loop, this);
 
@@ -902,7 +916,7 @@ void TrainerImpl::train() {
     buffer_ready[0] = false; // Consume
     lock.unlock();
 
-    Image curr_image = train_images[0];
+    Image curr_image = train_images[first_idx];
     Camera curr_camera = cameras[curr_image.camera_id];
     int width = curr_camera.width;
     int height = curr_camera.height;
@@ -919,7 +933,10 @@ void TrainerImpl::train() {
     // 3. Request Load Image 1 -> Host Buffer 1 (Async)
     lock.lock();
     if (train_images.size() > 1) {
-      next_image_index = 1;
+      std::uniform_int_distribution<int> dist(0, train_images.size() - 1);
+      int next_idx = dist(rng);
+      next_image_index = next_idx;
+      buffer_image_indices[1] = next_idx;
       request_load[1] = true;
       load_cv.notify_all();
     }
@@ -936,7 +953,7 @@ void TrainerImpl::train() {
     int curr_buf_idx = iter % 2;
     int next_buf_idx = (iter + 1) % 2;
 
-    Image curr_image = train_images[iter % train_images.size()];
+    Image curr_image = train_images[buffer_image_indices[curr_buf_idx]];
     Camera curr_camera = cameras[curr_image.camera_id];
     int width = curr_camera.width;
     int height = curr_camera.height;
@@ -988,23 +1005,11 @@ void TrainerImpl::train() {
 
     if (pass_data.num_culled == 0) {
       std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;
-      // We still need to handle the pipeline logic even if we skip compute
-      // But for simplicity, let's just let it run through or handle it?
-      // If we continue, we break the pipeline sync.
-      // Let's just run backward pass on empty? No.
-      // Let's just increment iter and continue, but we need to ensure transfers keep going.
-      // For now, assume this is rare and just let it crash or handle gracefully?
-      // The original code did 'iter++; continue;'.
-      // If we do that, we skip the 'Launch Next Transfer' and 'Trigger Load'.
-      // That would deadlock the pipeline.
-      // So we MUST proceed to transfer logic.
     } else {
       // --- BACKWARD PASS ---
-      // Call Impl member function
       float loss = backward_pass(curr_image, curr_camera, pass_data, bg_color, d_gt_image[curr_buf_idx]);
 
       // --- OPTIMIZER STEP ---
-      // Call Impl member function
       optimizer_step(pass_data);
 
       // Log status
@@ -1069,7 +1074,12 @@ void TrainerImpl::train() {
 
     {
       std::unique_lock<std::mutex> lock(load_mutex);
-      next_image_index = (iter + 2) % train_images.size();
+      std::uniform_int_distribution<int> dist(0, train_images.size() - 1);
+      int next_idx = dist(rng);
+
+      next_image_index = next_idx;
+      buffer_image_indices[curr_buf_idx] = next_idx; // Update for the next time this buffer is used
+
       request_load[curr_buf_idx] = true;
       load_cv.notify_all();
     }
