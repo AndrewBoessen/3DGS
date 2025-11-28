@@ -469,3 +469,57 @@ float fused_loss(const float *predicted_data, const float *gt_data, int rows, in
   float total_loss = d_total_loss[0];
   return total_loss / (float)(rows * cols * CHANNELS);
 }
+
+// ------------------------------------------
+// MSE Kernel for PSNR
+// ------------------------------------------
+__global__ void compute_mse_kernel(int H, int W, const float *__restrict__ pred, const float *__restrict__ gt,
+                                   float *__restrict__ total_mse_ptr) {
+  auto block = cg::this_thread_block();
+  const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
+  const int pix_x = block.group_index().x * BLOCK_X + block.thread_index().x;
+  const int pix_id = pix_y * W + pix_x;
+
+  float pixel_mse_sum = 0.0f;
+
+  if (pix_x < W && pix_y < H) {
+    for (int c = 0; c < CHANNELS; ++c) {
+      float diff = pred[pix_id * CHANNELS + c] - gt[pix_id * CHANNELS + c];
+      pixel_mse_sum += diff * diff;
+    }
+  }
+
+  // Block Reduction
+  __shared__ float s_mse_red[BLOCK_Y * BLOCK_X];
+  int tid = threadIdx.y * BLOCK_X + threadIdx.x;
+  s_mse_red[tid] = pixel_mse_sum;
+  block.sync();
+
+  for (unsigned int s = (BLOCK_X * BLOCK_Y) / 2; s > 0; s >>= 1) {
+    if (tid < s) {
+      s_mse_red[tid] += s_mse_red[tid + s];
+    }
+    block.sync();
+  }
+
+  if (tid == 0) {
+    atomicAdd(total_mse_ptr, s_mse_red[0]);
+  }
+}
+
+float compute_psnr(const float *predicted_data, const float *gt_data, int rows, int cols, cudaStream_t stream) {
+  dim3 block(BLOCK_X, BLOCK_Y);
+  dim3 grid((cols + BLOCK_X - 1) / BLOCK_X, (rows + BLOCK_Y - 1) / BLOCK_Y);
+
+  thrust::device_vector<float> d_total_mse(1, 0.0f);
+  float *d_mse_ptr = thrust::raw_pointer_cast(d_total_mse.data());
+
+  compute_mse_kernel<<<grid, block, 0, stream>>>(rows, cols, predicted_data, gt_data, d_mse_ptr);
+
+  float total_mse = d_total_mse[0];
+  float mse = total_mse / (float)(rows * cols * CHANNELS);
+
+  if (mse == 0.0f)
+    return 100.0f; // Perfect match
+  return 10.0f * log10f(1.0f / mse);
+}

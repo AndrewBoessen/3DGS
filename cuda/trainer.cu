@@ -45,6 +45,7 @@ public:
   // --- Public methods (called by Trainer) ---
   void test_train_split();
   void train();
+  void evaluate();
 
 private:
   // --- All original private members ---
@@ -955,8 +956,6 @@ void TrainerImpl::train() {
 
     Image curr_image = train_images[buffer_image_indices[curr_buf_idx]];
     Camera curr_camera = cameras[curr_image.camera_id];
-    int width = curr_camera.width;
-    int height = curr_camera.height;
 
     // 1. Wait for GT Image Transfer to complete on GPU
     // This ensures that the compute stream doesn't start using d_gt_image[curr] until copy is done.
@@ -1031,6 +1030,11 @@ void TrainerImpl::train() {
       cv::imwrite(filename, rendered_image_8u);
     }
 
+    // --- EVALUATION ---
+    if (iter % 3000 == 0) {
+      evaluate();
+    }
+
     // --- ADAPTIVE DENSITY ---
     if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&
         iter < config.adaptive_control_end) {
@@ -1096,6 +1100,81 @@ void TrainerImpl::train() {
     loader_thread.join();
   free_pinned_memory();
   progressBar.finish();
+}
+
+void TrainerImpl::evaluate() {
+  if (test_images.empty())
+    return;
+
+  std::cout << "\n[ITER " << iter << "] Evaluating on " << test_images.size() << " test images..." << std::endl;
+
+  float total_psnr = 0.0f;
+
+  // Use a separate device buffer for test image to avoid conflict with double buffering
+  thrust::device_vector<float> d_test_image;
+
+  for (const auto &img : test_images) {
+    // Load image synchronously
+    cv::Mat bgr_image = cv::imread(img.name, cv::IMREAD_COLOR);
+    if (bgr_image.empty()) {
+      std::cerr << "Failed to load test image: " << img.name << std::endl;
+      continue;
+    }
+
+    Camera cam = cameras[img.camera_id];
+
+    cv::Mat rgb_image;
+    cv::cvtColor(bgr_image, rgb_image, cv::COLOR_BGR2RGB);
+    cv::Mat float_image;
+    rgb_image.convertTo(float_image, CV_32FC3, 1.0 / 255.0);
+
+    int width = cam.width;
+    int height = cam.height;
+
+    // Resize device buffer if needed
+    if (d_test_image.size() != width * height * 3) {
+      d_test_image.resize(width * height * 3);
+    }
+
+    // Copy to device
+    cudaMemcpy(thrust::raw_pointer_cast(d_test_image.data()), float_image.ptr<float>(0),
+               width * height * 3 * sizeof(float), cudaMemcpyHostToDevice);
+
+    // Prepare camera data
+    float h_K[9] = {(float)cam.params[0],
+                    0.f,
+                    (float)cam.params[2],
+                    0.f,
+                    (float)cam.params[1],
+                    (float)cam.params[3],
+                    0.f,
+                    0.f,
+                    1.f};
+    Eigen::Matrix3d rot_mat_d = img.QvecToRotMat();
+    Eigen::Vector3d t_vec_d = img.tvec;
+    float h_T[12];
+    for (int i = 0; i < 3; ++i) {
+      for (int j = 0; j < 3; ++j)
+        h_T[i * 4 + j] = (float)rot_mat_d(i, j);
+      h_T[i * 4 + 3] = (float)t_vec_d(i);
+    }
+    thrust::copy(h_K, h_K + 9, cuda.camera.d_K.begin());
+    thrust::copy(h_T, h_T + 12, cuda.camera.d_T.begin());
+
+    // Render
+    ForwardPassData pass_data;
+    float bg_color = 0.0f; // Black background for eval
+
+    rasterize_image(num_gaussians, cam, config, cuda.camera, cuda.gaussians, pass_data, bg_color, l_max);
+
+    // Compute PSNR
+    float psnr = compute_psnr(thrust::raw_pointer_cast(pass_data.d_image_buffer.data()),
+                              thrust::raw_pointer_cast(d_test_image.data()), height, width);
+    total_psnr += psnr;
+  }
+
+  float avg_psnr = total_psnr / test_images.size();
+  std::cout << "[ITER " << iter << "] Eval PSNR: " << avg_psnr << std::endl;
 }
 
 // --- Implementation of Public Trainer Methods ---

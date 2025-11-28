@@ -14,6 +14,8 @@ set(CMAKE_CUDA_ARCHITECTURES native)
 # ===================================================================
 # DEPENDENCIES
 # ===================================================================
+# Find CUDA Runtime and Toolkit
+find_package(CUDAToolkit REQUIRED)
 # Find OpenMP for sphericart parallelization
 find_package(OpenMP REQUIRED)
 # Find OpenCV for image procesing
@@ -83,7 +85,7 @@ target_include_directories(gsplat_cuda
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-target_link_libraries(gsplat_cuda PUBLIC sphericart CCCL::CCCL)
+target_link_libraries(gsplat_cuda PUBLIC CUDA::cudart sphericart CCCL::CCCL)
 
 # ===================================================================
 # MAIN EXECUTABLE
