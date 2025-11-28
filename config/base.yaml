@@ -27,7 +27,7 @@ use_background_end: 6600
 reset_opacity_interval: 3000
 reset_opacity_value: 0.01
 reset_opacity_start: 1050
-reset_opacity_end: 6500
+reset_opacity_end: 5000
 use_sh_precompute: true
 max_sh_band: 3
 add_sh_band_interval: 1000
@@ -35,10 +35,10 @@ use_split: true
 use_clone: true
 use_delete: true
 adaptive_control_start: 500
-adaptive_control_end: 6500
+adaptive_control_end: 5000
 adaptive_control_interval: 100
 max_gaussians: 4250000
 delete_opacity_threshold: 0.005
-uv_grad_threshold: 2e-4
+uv_grad_threshold: 1.5e-4
 split_scale_factor: 1.6
 max_anisotropy: 20.0
