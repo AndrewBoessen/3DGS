@@ -70,7 +70,7 @@ private:
   void zero_grads();
   float backward_pass(const Image &curr_image, const Camera &curr_camera, ForwardPassData &pass_data,
                       const float bg_color, const thrust::device_vector<float> &d_gt_image);
-  void optimizer_step(ForwardPassData pass_data);
+  void optimizer_step(ForwardPassData pass_data, Camera curr_camera);
   void add_sh_band();
   void adaptive_density_step();
 
@@ -153,23 +153,13 @@ void TrainerImpl::image_loader_loop() {
       buf_idx = 1;
 
     if (buf_idx == -1)
-      continue; // Should not happen
-
-    // Grab the index to load
-    // Note: In a real double buffering scenario, we'd need to know WHICH image index goes to WHICH buffer.
-    // For simplicity, we'll assume the main thread sets 'next_image_index' correctly before requesting.
-    // BUT, since we might pipeline, we need to be careful.
-    // Let's assume the main thread sets 'next_image_index' for the *current* request.
-    // Actually, to be robust, we should probably have a queue or array of indices.
-    // For now, let's assume the main thread manages the index and we just load what's asked.
-    // Wait, if we want to load N+2 while N is training, we need to know N+2.
-    // Let's assume the main thread updates 'next_image_index' and then sets 'request_load[buf_idx]'.
+      continue;
 
     int img_idx = next_image_index;
     request_load[buf_idx] = false; // Acknowledge request
     lock.unlock();                 // Release lock while doing heavy I/O
 
-    // 1. Disk I/O
+    // Disk I/O
     const Image &next_img = train_images[img_idx];
     cv::Mat bgr_image = cv::imread(next_img.name, cv::IMREAD_COLOR);
 
@@ -178,14 +168,14 @@ void TrainerImpl::image_loader_loop() {
       std::cerr << "Async Error: Failed to load " << next_img.name << std::endl;
       memset(h_pinned_image_buffer[buf_idx], 0, pinned_buffer_size);
     } else {
-      // 2. CPU Compute (Color conversion & Float cast)
+      // CPU Compute (Color conversion & Float cast)
       cv::Mat rgb_image;
       cv::cvtColor(bgr_image, rgb_image, cv::COLOR_BGR2RGB);
 
       cv::Mat float_image;
       rgb_image.convertTo(float_image, CV_32FC3, 1.0 / 255.0);
 
-      // 3. Write to Pinned Memory
+      // Write to Pinned Memory
       size_t copy_size = float_image.total() * float_image.elemSize();
       if (copy_size <= pinned_buffer_size) {
         memcpy(h_pinned_image_buffer[buf_idx], float_image.ptr<float>(0), copy_size);
@@ -263,6 +253,81 @@ void TrainerImpl::zero_grads() {
   thrust::fill_n(cuda.gradients.d_grad_precompute_rgb.begin(), num_gaussians * 3, 0.0f);
 }
 
+void TrainerImpl::evaluate() {
+  if (test_images.empty())
+    return;
+
+  std::cout << "\n[ITER " << iter << "] Evaluating on " << test_images.size() << " test images..." << std::endl;
+
+  float total_psnr = 0.0f;
+
+  // Use a separate device buffer for test image to avoid conflict with double buffering
+  thrust::device_vector<float> d_test_image;
+
+  for (const auto &img : test_images) {
+    // Load image synchronously
+    cv::Mat bgr_image = cv::imread(img.name, cv::IMREAD_COLOR);
+    if (bgr_image.empty()) {
+      std::cerr << "Failed to load test image: " << img.name << std::endl;
+      continue;
+    }
+
+    Camera cam = cameras[img.camera_id];
+
+    cv::Mat rgb_image;
+    cv::cvtColor(bgr_image, rgb_image, cv::COLOR_BGR2RGB);
+    cv::Mat float_image;
+    rgb_image.convertTo(float_image, CV_32FC3, 1.0 / 255.0);
+
+    int width = cam.width;
+    int height = cam.height;
+
+    // Resize device buffer if needed
+    if (d_test_image.size() != width * height * 3) {
+      d_test_image.resize(width * height * 3);
+    }
+
+    // Copy to device
+    cudaMemcpy(thrust::raw_pointer_cast(d_test_image.data()), float_image.ptr<float>(0),
+               width * height * 3 * sizeof(float), cudaMemcpyHostToDevice);
+
+    // Prepare camera data
+    float h_K[9] = {(float)cam.params[0],
+                    0.f,
+                    (float)cam.params[2],
+                    0.f,
+                    (float)cam.params[1],
+                    (float)cam.params[3],
+                    0.f,
+                    0.f,
+                    1.f};
+    Eigen::Matrix3d rot_mat_d = img.QvecToRotMat();
+    Eigen::Vector3d t_vec_d = img.tvec;
+    float h_T[12];
+    for (int i = 0; i < 3; ++i) {
+      for (int j = 0; j < 3; ++j)
+        h_T[i * 4 + j] = (float)rot_mat_d(i, j);
+      h_T[i * 4 + 3] = (float)t_vec_d(i);
+    }
+    thrust::copy(h_K, h_K + 9, cuda.camera.d_K.begin());
+    thrust::copy(h_T, h_T + 12, cuda.camera.d_T.begin());
+
+    // Render
+    ForwardPassData pass_data;
+    float bg_color = 0.0f; // Black background for eval
+
+    rasterize_image(num_gaussians, cam, config, cuda.camera, cuda.gaussians, pass_data, bg_color, l_max);
+
+    // Compute PSNR
+    float psnr = compute_psnr(thrust::raw_pointer_cast(pass_data.d_image_buffer.data()),
+                              thrust::raw_pointer_cast(d_test_image.data()), height, width);
+    total_psnr += psnr;
+  }
+
+  float avg_psnr = total_psnr / test_images.size();
+  std::cout << "[ITER " << iter << "] Eval PSNR: " << avg_psnr << std::endl;
+}
+
 struct SHIndexMapper {
   const int old_coeffs_per_gaussian;
   const int new_coeffs_per_gaussian;
@@ -338,23 +403,33 @@ struct ComputeScaleMax {
   }
 };
 
-// Identifies Gaussians to be pruned based on low opacity or large scale.
+// Identifies Gaussians to be pruned based on low opacity, large scale, or high anisotropy.
 struct IdentifyPrune {
   const float op_threshold;
-  const float scale_max;
+  const float scale_max_thresh;
+  const float max_anisotropy;
 
-  IdentifyPrune(float ot, float sm) : op_threshold(ot), scale_max(sm) {}
+  IdentifyPrune(float ot, float sm, float ma) : op_threshold(ot), scale_max_thresh(sm), max_anisotropy(ma) {}
 
-  __host__ __device__ bool operator()(const thrust::tuple<float, float> &t) const {
+  __host__ __device__ bool operator()(const thrust::tuple<float, float, float, float> &t) const {
     float opacity_logit = thrust::get<0>(t);
-    float scale = thrust::get<1>(t);
+    float s1 = expf(thrust::get<1>(t));
+    float s2 = expf(thrust::get<2>(t));
+    float s3 = expf(thrust::get<3>(t));
 
     // Prune if opacity is too low
     if (opacity_logit < op_threshold)
       return true;
 
+    float max_s = fmaxf(s1, fmaxf(s2, s3));
+
     // Prune if scale is too large
-    if (scale > scale_max)
+    if (max_s > scale_max_thresh)
+      return true;
+
+    // Prune if too anisotropic
+    float min_s = fminf(s1, fminf(s2, s3));
+    if (max_s > max_anisotropy * min_s)
       return true;
 
     return false;
@@ -409,7 +484,7 @@ struct BoolToInt {
 };
 
 void TrainerImpl::adaptive_density_step() {
-  // --- 1. Calculate Average Gradient Norms and Scale Max---
+  // Calculate Average Gradient Norms and Scale Max
   thrust::device_vector<float> d_avg_uv_grad_norm(num_gaussians);
 
   auto avg_uv_grad_iter_start = thrust::make_zip_iterator(
@@ -432,20 +507,21 @@ void TrainerImpl::adaptive_density_step() {
   const float max_scale = scene_extent * 0.1f;
   const float clone_scale_threshold = scene_extent * 0.01f;
 
-  // --- 2. Identify Gaussians to Prune ---
+  // Identify Gaussians to Prune
   // Inverse sigmoid: log(p / (1-p))
   const float op_threshold = logf(config.delete_opacity_threshold) - logf(1.0f - config.delete_opacity_threshold);
 
   auto prune_iter_start =
-      thrust::make_zip_iterator(thrust::make_tuple(cuda.gaussians.d_opacity.begin(), d_scale_max.begin()));
+      thrust::make_zip_iterator(thrust::make_tuple(cuda.gaussians.d_opacity.begin(), s1_it, s2_it, s3_it));
   auto prune_iter_end = prune_iter_start + num_gaussians;
 
   thrust::device_vector<bool> d_prune_mask(num_gaussians);
-  thrust::transform(prune_iter_start, prune_iter_end, d_prune_mask.begin(), IdentifyPrune(op_threshold, max_scale));
+  thrust::transform(prune_iter_start, prune_iter_end, d_prune_mask.begin(),
+                    IdentifyPrune(op_threshold, max_scale, config.max_anisotropy));
 
   int num_to_prune = thrust::count(d_prune_mask.begin(), d_prune_mask.end(), true);
 
-  // --- 3. Identify Gaussians to Clone ---
+  // Identify Gaussians to Clone
   auto densify_iter_start = thrust::make_zip_iterator(
       thrust::make_tuple(d_avg_uv_grad_norm.begin(), d_scale_max.begin(), d_prune_mask.begin()));
   auto densify_iter_end = densify_iter_start + num_gaussians;
@@ -456,14 +532,14 @@ void TrainerImpl::adaptive_density_step() {
 
   int num_to_clone = thrust::count(d_clone_mask.begin(), d_clone_mask.end(), true);
 
-  // --- 4. Identify Gaussians to Split ---
+  // Identify Gaussians to Split
   thrust::device_vector<bool> d_split_mask(num_gaussians);
   thrust::transform(densify_iter_start, densify_iter_end, d_split_mask.begin(),
                     IdentifySplit(config.uv_grad_threshold, clone_scale_threshold));
 
   int num_to_split = thrust::count(d_split_mask.begin(), d_split_mask.end(), true);
 
-  // --- 5. Check Capacity ---
+  // Check Capacity
   int num_to_remove = num_to_prune + num_to_split + num_to_clone;
   int num_to_add = (num_to_clone * 2) + (num_to_split * 2);
   int new_num_gaussians = num_gaussians - num_to_remove + num_to_add;
@@ -480,7 +556,7 @@ void TrainerImpl::adaptive_density_step() {
     return; // Nothing to do
   }
 
-  // --- 6. Generate New Gaussian Parameters (Kernels) ---
+  // Generate New Gaussian Parameters (Kernels)
   const int num_sh_coeffs = (l_max > 0) ? ((l_max + 1) * (l_max + 1) - 1) : 0;
 
   // Allocate temp device memory for new Gaussians
@@ -534,7 +610,7 @@ void TrainerImpl::adaptive_density_step() {
         thrust::raw_pointer_cast(d_new_split_sh.data()));
   }
 
-  // --- 8, 9, 10. Compact existing vectors and append new data ---
+  // Compact existing vectors and append new data
   // - Compact all params in keep mask
   // - Fill front with compact params
   // - Append Clone and Split params to back
@@ -730,14 +806,19 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
 
 // A functor to compute the norm of a 2D gradient
 struct PositionalGradientNorm {
+  const float width;
+  const float height;
+  PositionalGradientNorm(float w, float h) : width(w), height(w) {}
+
   __host__ __device__ float operator()(const float2 &grad) const {
-    const float u = grad.x;
-    const float v = grad.y;
+    // Scale grads to NDC
+    const float u = grad.x * 0.5f * width;
+    const float v = grad.y * 0.5f * height;
     return sqrtf(u * u + v * v);
   }
 };
 
-void TrainerImpl::optimizer_step(ForwardPassData pass_data) {
+void TrainerImpl::optimizer_step(ForwardPassData pass_data, Camera curr_camera) {
   auto d_xyz = compact_masked_array<3>(cuda.gaussians.d_xyz, pass_data.d_mask, pass_data.num_culled);
   auto d_rgb = compact_masked_array<3>(cuda.gaussians.d_rgb, pass_data.d_mask, pass_data.num_culled);
   auto d_op = compact_masked_array<1>(cuda.gaussians.d_opacity, pass_data.d_mask, pass_data.num_culled);
@@ -857,7 +938,7 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data) {
   thrust::transform(reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())),
                     reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())) +
                         pass_data.num_culled,
-                    d_uv_grad_norms.begin(), PositionalGradientNorm());
+                    d_uv_grad_norms.begin(), PositionalGradientNorm(curr_camera.width, curr_camera.height));
   thrust::transform(d_uv_accum_compact.begin(), d_uv_accum_compact.end(), d_uv_grad_norms.begin(),
                     d_uv_accum_compact.begin(), thrust::plus<float>());
 
@@ -1009,7 +1090,7 @@ void TrainerImpl::train() {
       float loss = backward_pass(curr_image, curr_camera, pass_data, bg_color, d_gt_image[curr_buf_idx]);
 
       // --- OPTIMIZER STEP ---
-      optimizer_step(pass_data);
+      optimizer_step(pass_data, curr_camera);
 
       // Log status
       progressBar.update(iter, loss, num_gaussians);
@@ -1100,81 +1181,6 @@ void TrainerImpl::train() {
     loader_thread.join();
   free_pinned_memory();
   progressBar.finish();
-}
-
-void TrainerImpl::evaluate() {
-  if (test_images.empty())
-    return;
-
-  std::cout << "\n[ITER " << iter << "] Evaluating on " << test_images.size() << " test images..." << std::endl;
-
-  float total_psnr = 0.0f;
-
-  // Use a separate device buffer for test image to avoid conflict with double buffering
-  thrust::device_vector<float> d_test_image;
-
-  for (const auto &img : test_images) {
-    // Load image synchronously
-    cv::Mat bgr_image = cv::imread(img.name, cv::IMREAD_COLOR);
-    if (bgr_image.empty()) {
-      std::cerr << "Failed to load test image: " << img.name << std::endl;
-      continue;
-    }
-
-    Camera cam = cameras[img.camera_id];
-
-    cv::Mat rgb_image;
-    cv::cvtColor(bgr_image, rgb_image, cv::COLOR_BGR2RGB);
-    cv::Mat float_image;
-    rgb_image.convertTo(float_image, CV_32FC3, 1.0 / 255.0);
-
-    int width = cam.width;
-    int height = cam.height;
-
-    // Resize device buffer if needed
-    if (d_test_image.size() != width * height * 3) {
-      d_test_image.resize(width * height * 3);
-    }
-
-    // Copy to device
-    cudaMemcpy(thrust::raw_pointer_cast(d_test_image.data()), float_image.ptr<float>(0),
-               width * height * 3 * sizeof(float), cudaMemcpyHostToDevice);
-
-    // Prepare camera data
-    float h_K[9] = {(float)cam.params[0],
-                    0.f,
-                    (float)cam.params[2],
-                    0.f,
-                    (float)cam.params[1],
-                    (float)cam.params[3],
-                    0.f,
-                    0.f,
-                    1.f};
-    Eigen::Matrix3d rot_mat_d = img.QvecToRotMat();
-    Eigen::Vector3d t_vec_d = img.tvec;
-    float h_T[12];
-    for (int i = 0; i < 3; ++i) {
-      for (int j = 0; j < 3; ++j)
-        h_T[i * 4 + j] = (float)rot_mat_d(i, j);
-      h_T[i * 4 + 3] = (float)t_vec_d(i);
-    }
-    thrust::copy(h_K, h_K + 9, cuda.camera.d_K.begin());
-    thrust::copy(h_T, h_T + 12, cuda.camera.d_T.begin());
-
-    // Render
-    ForwardPassData pass_data;
-    float bg_color = 0.0f; // Black background for eval
-
-    rasterize_image(num_gaussians, cam, config, cuda.camera, cuda.gaussians, pass_data, bg_color, l_max);
-
-    // Compute PSNR
-    float psnr = compute_psnr(thrust::raw_pointer_cast(pass_data.d_image_buffer.data()),
-                              thrust::raw_pointer_cast(d_test_image.data()), height, width);
-    total_psnr += psnr;
-  }
-
-  float avg_psnr = total_psnr / test_images.size();
-  std::cout << "[ITER " << iter << "] Eval PSNR: " << avg_psnr << std::endl;
 }
 
 // --- Implementation of Public Trainer Methods ---

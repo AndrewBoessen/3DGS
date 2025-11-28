@@ -67,6 +67,7 @@ struct ConfigParameters {
   double delete_opacity_threshold;
   double uv_grad_threshold;
   double split_scale_factor;
+  double max_anisotropy;
 };
 
 /**
