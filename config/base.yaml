@@ -21,7 +21,7 @@ opacity_lr_multiplier: 25
 rgb_lr_multiplier: 2.5
 sh_lr_multiplier: 0.125
 test_eval_interval: 500
-test_split_ratio: 0
+test_split_ratio: 9
 use_background: true
 use_background_end: 6600
 reset_opacity_interval: 3000
