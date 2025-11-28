@@ -65,10 +65,21 @@ The main executable, `gaussian_splatting`, will be located in the `build/` direc
 ## Using
 
 ![bicycle rendering](./assets/bicycle.gif)
+![bonsai training](./assets/bonsai.gif)
 
 ### Mip-NeRF 360
 
-![bonsai training](./assets/bonsai.gif)
+To train a scene from the Mip-NeRF 360 dataset specify the scene to train in the config file: `base.yaml` or `extended.yaml` and run the main executable
+
+```bash
+./build/gaussian_splatting <path_to_config> <path_to_dataset>
+```
+
+For example
+
+```bash
+./build/gaussian_splatting ./config/extended.yaml ../Downloads/360_v2
+```
 
 ### COLMAP
 
