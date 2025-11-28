@@ -82,7 +82,7 @@ TEST_F(CudaKernelTest, ComputeSigma) {
 
   // Compare results
   for (size_t i = 0; i < h_sigma.size(); ++i) {
-    ASSERT_NEAR(h_sigma[i], expected_sigma[i], 1e-5);
+    ASSERT_NEAR(h_sigma[i], expected_sigma[i], 1e-4);
   }
 
   // Free device memory

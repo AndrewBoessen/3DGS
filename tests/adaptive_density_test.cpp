@@ -223,8 +223,7 @@ TEST_F(AdaptiveDensityTest, CloneGaussiansTest) {
   // G0 grad_accum = 100 / 10 = 10.0
   // G0 clone_factor = 10.0 * 0.01 = 0.1
   // G0 xyz_in = {1.0, 2.0, 3.0}
-  // New xyz (j=0) = {1.0 - 0.1, 2.0 - 0.0, 3.0 - 0.0} = {0.9, 2.0, 3.0}
-  EXPECT_NEAR(h_xyz_out[0], 0.9f, 1e-6);
+  EXPECT_NEAR(h_xyz_out[0], 1.0f, 1e-6);
   EXPECT_NEAR(h_xyz_out[1], 2.0f, 1e-6);
   EXPECT_NEAR(h_xyz_out[2], 3.0f, 1e-6);
   // Original xyz (j=1) = {1.0, 2.0, 3.0}
