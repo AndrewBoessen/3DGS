@@ -136,6 +136,17 @@ float fused_loss(const float *predicted_data, const float *gt_data, int rows, in
                  float *image_grad, cudaStream_t stream = 0);
 
 /**
+ * @brief Compute PSNR between predicted and GT images.
+ * @param[in]  predicted_data  Device pointer to predicted image
+ * @param[in]  gt_data         Device pointer to GT image
+ * @param[in]  rows            Height
+ * @param[in]  cols            Width
+ * @param[in]  stream          CUDA stream
+ * @return PSNR in dB
+ */
+float compute_psnr(const float *predicted_data, const float *gt_data, int rows, int cols, cudaStream_t stream = 0);
+
+/**
  * @brief Launch CUDA kernel to accumulate gradients
  * @param[in] N Total number of param
  * @param[in] d_mask Maks of on output of size N
