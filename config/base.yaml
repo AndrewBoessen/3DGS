@@ -18,8 +18,8 @@ xyz_lr_multiplier_final: 1.6e-3
 quat_lr_multiplier: 1
 scale_lr_multiplier: 2.5
 opacity_lr_multiplier: 25
-rgb_lr_multiplier: 25
-sh_lr_multiplier: 1.25
+rgb_lr_multiplier: 2.5
+sh_lr_multiplier: 0.125
 test_eval_interval: 500
 test_split_ratio: 0
 use_background: true
