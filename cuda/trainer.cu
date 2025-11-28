@@ -956,8 +956,6 @@ void TrainerImpl::train() {
 
     Image curr_image = train_images[buffer_image_indices[curr_buf_idx]];
     Camera curr_camera = cameras[curr_image.camera_id];
-    int width = curr_camera.width;
-    int height = curr_camera.height;
 
     // 1. Wait for GT Image Transfer to complete on GPU
     // This ensures that the compute stream doesn't start using d_gt_image[curr] until copy is done.
