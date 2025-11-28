@@ -843,22 +843,30 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, Camera curr_camera) 
 
   const float xyz_decay_factor =
       pow((config.xyz_lr_multiplier_final / config.xyz_lr_multiplier_init), ((float)iter / (float)config.num_iters));
+
+  // Generic decay for other parameters (approx 100x reduction over training)
+  const float general_decay_factor = pow(0.01f, ((float)iter / (float)config.num_iters));
+
   adam_step(thrust::raw_pointer_cast(d_xyz.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz.data()),
             thrust::raw_pointer_cast(d_m_xyz.data()), thrust::raw_pointer_cast(d_v_xyz.data()),
             scene_extent * config.base_lr * config.xyz_lr_multiplier_init * xyz_decay_factor, B1, B2, EPS, bias1, bias2,
             pass_data.num_culled, 3);
   adam_step(thrust::raw_pointer_cast(d_rgb.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_rgb.data()),
             thrust::raw_pointer_cast(d_m_rgb.data()), thrust::raw_pointer_cast(d_v_rgb.data()),
-            config.base_lr * config.rgb_lr_multiplier, B1, B2, EPS, bias1, bias2, pass_data.num_culled, 3);
+            config.base_lr * config.rgb_lr_multiplier * general_decay_factor, B1, B2, EPS, bias1, bias2,
+            pass_data.num_culled, 3);
   adam_step(thrust::raw_pointer_cast(d_op.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_opacity.data()),
             thrust::raw_pointer_cast(d_m_op.data()), thrust::raw_pointer_cast(d_v_op.data()),
-            config.base_lr * config.opacity_lr_multiplier, B1, B2, EPS, bias1, bias2, pass_data.num_culled, 1);
+            config.base_lr * config.opacity_lr_multiplier * general_decay_factor, B1, B2, EPS, bias1, bias2,
+            pass_data.num_culled, 1);
   adam_step(thrust::raw_pointer_cast(d_scale.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_scale.data()),
             thrust::raw_pointer_cast(d_m_scale.data()), thrust::raw_pointer_cast(d_v_scale.data()),
-            config.base_lr * config.scale_lr_multiplier, B1, B2, EPS, bias1, bias2, pass_data.num_culled, 3);
+            config.base_lr * config.scale_lr_multiplier * general_decay_factor, B1, B2, EPS, bias1, bias2,
+            pass_data.num_culled, 3);
   adam_step(thrust::raw_pointer_cast(d_quat.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_quaternion.data()),
             thrust::raw_pointer_cast(d_m_quat.data()), thrust::raw_pointer_cast(d_v_quat.data()),
-            config.base_lr * config.quat_lr_multiplier, B1, B2, EPS, bias1, bias2, pass_data.num_culled, 4);
+            config.base_lr * config.quat_lr_multiplier * general_decay_factor, B1, B2, EPS, bias1, bias2,
+            pass_data.num_culled, 4);
 
   scatter_masked_array<3>(d_m_xyz, pass_data.d_mask, cuda.optimizer.m_grad_xyz);
   scatter_masked_array<3>(d_m_rgb, pass_data.d_mask, cuda.optimizer.m_grad_rgb);
@@ -893,7 +901,8 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, Camera curr_camera) 
 
       adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
                 thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
-                config.base_lr * config.sh_lr_multiplier, B1, B2, EPS, bias1, bias2, pass_data.num_culled, 9);
+                config.base_lr * config.sh_lr_multiplier * general_decay_factor, B1, B2, EPS, bias1, bias2,
+                pass_data.num_culled, 9);
 
       scatter_masked_array<9>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
       scatter_masked_array<9>(d_v_sh, pass_data.d_mask, cuda.optimizer.v_grad_sh);
@@ -905,7 +914,8 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, Camera curr_camera) 
       d_v_sh = compact_masked_array<24>(cuda.optimizer.v_grad_sh, pass_data.d_mask, pass_data.num_culled);
       adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
                 thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
-                config.base_lr * config.sh_lr_multiplier, B1, B2, EPS, bias1, bias2, pass_data.num_culled, 24);
+                config.base_lr * config.sh_lr_multiplier * general_decay_factor, B1, B2, EPS, bias1, bias2,
+                pass_data.num_culled, 24);
 
       scatter_masked_array<24>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
       scatter_masked_array<24>(d_v_sh, pass_data.d_mask, cuda.optimizer.v_grad_sh);
@@ -917,7 +927,8 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, Camera curr_camera) 
       d_v_sh = compact_masked_array<45>(cuda.optimizer.v_grad_sh, pass_data.d_mask, pass_data.num_culled);
       adam_step(thrust::raw_pointer_cast(d_sh.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
                 thrust::raw_pointer_cast(d_m_sh.data()), thrust::raw_pointer_cast(d_v_sh.data()),
-                config.base_lr * config.sh_lr_multiplier, B1, B2, EPS, bias1, bias2, pass_data.num_culled, 45);
+                config.base_lr * config.sh_lr_multiplier * general_decay_factor, B1, B2, EPS, bias1, bias2,
+                pass_data.num_culled, 45);
       scatter_masked_array<45>(d_m_sh, pass_data.d_mask, cuda.optimizer.m_grad_sh);
       scatter_masked_array<45>(d_v_sh, pass_data.d_mask, cuda.optimizer.v_grad_sh);
       scatter_masked_array<45>(d_sh, pass_data.d_mask, cuda.gaussians.d_sh);
