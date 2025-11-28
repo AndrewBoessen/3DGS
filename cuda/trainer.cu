@@ -70,7 +70,7 @@ private:
   void zero_grads();
   float backward_pass(const Image &curr_image, const Camera &curr_camera, ForwardPassData &pass_data,
                       const float bg_color, const thrust::device_vector<float> &d_gt_image);
-  void optimizer_step(ForwardPassData pass_data);
+  void optimizer_step(ForwardPassData pass_data, Camera curr_camera);
   void add_sh_band();
   void adaptive_density_step();
 
@@ -730,14 +730,19 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
 
 // A functor to compute the norm of a 2D gradient
 struct PositionalGradientNorm {
+  const float width;
+  const float height;
+  PositionalGradientNorm(float w, float h) : width(w), height(w) {}
+
   __host__ __device__ float operator()(const float2 &grad) const {
-    const float u = grad.x;
-    const float v = grad.y;
+    // Scale grads to NDC
+    const float u = grad.x * 0.5f * width;
+    const float v = grad.y * 0.5f * height;
     return sqrtf(u * u + v * v);
   }
 };
 
-void TrainerImpl::optimizer_step(ForwardPassData pass_data) {
+void TrainerImpl::optimizer_step(ForwardPassData pass_data, Camera curr_camera) {
   auto d_xyz = compact_masked_array<3>(cuda.gaussians.d_xyz, pass_data.d_mask, pass_data.num_culled);
   auto d_rgb = compact_masked_array<3>(cuda.gaussians.d_rgb, pass_data.d_mask, pass_data.num_culled);
   auto d_op = compact_masked_array<1>(cuda.gaussians.d_opacity, pass_data.d_mask, pass_data.num_culled);
@@ -857,7 +862,7 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data) {
   thrust::transform(reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())),
                     reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())) +
                         pass_data.num_culled,
-                    d_uv_grad_norms.begin(), PositionalGradientNorm());
+                    d_uv_grad_norms.begin(), PositionalGradientNorm(curr_camera.width, curr_camera.height));
   thrust::transform(d_uv_accum_compact.begin(), d_uv_accum_compact.end(), d_uv_grad_norms.begin(),
                     d_uv_accum_compact.begin(), thrust::plus<float>());
 
@@ -1009,7 +1014,7 @@ void TrainerImpl::train() {
       float loss = backward_pass(curr_image, curr_camera, pass_data, bg_color, d_gt_image[curr_buf_idx]);
 
       // --- OPTIMIZER STEP ---
-      optimizer_step(pass_data);
+      optimizer_step(pass_data, curr_camera);
 
       // Log status
       progressBar.update(iter, loss, num_gaussians);

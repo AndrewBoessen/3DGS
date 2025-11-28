@@ -39,5 +39,5 @@ adaptive_control_end: 6500
 adaptive_control_interval: 100
 max_gaussians: 4250000
 delete_opacity_threshold: 0.005
-uv_grad_threshold: 3e-7
+uv_grad_threshold: 2e-4
 split_scale_factor: 1.6
