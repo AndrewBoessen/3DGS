@@ -15,6 +15,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <mutex>
 #include <opencv2/opencv.hpp>
@@ -1107,7 +1108,13 @@ void TrainerImpl::train() {
       rendered_image.convertTo(rendered_image_8u, CV_8UC3, 255.0);
       cv::cvtColor(rendered_image_8u, rendered_image_8u, cv::COLOR_RGB2BGR);
 
-      std::string filename = "rendered_image_" + std::to_string(iter) + ".png";
+      // Create output directory if it doesn't exist
+      std::filesystem::path output_path(config.output_dir);
+      if (!std::filesystem::exists(output_path)) {
+        std::filesystem::create_directories(output_path);
+      }
+
+      std::string filename = (output_path / ("rendered_image_" + std::to_string(iter) + ".png")).string();
       cv::imwrite(filename, rendered_image_8u);
     }
 
