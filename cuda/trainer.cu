@@ -338,23 +338,33 @@ struct ComputeScaleMax {
   }
 };
 
-// Identifies Gaussians to be pruned based on low opacity or large scale.
+// Identifies Gaussians to be pruned based on low opacity, large scale, or high anisotropy.
 struct IdentifyPrune {
   const float op_threshold;
-  const float scale_max;
+  const float scale_max_thresh;
+  const float max_anisotropy;
 
-  IdentifyPrune(float ot, float sm) : op_threshold(ot), scale_max(sm) {}
+  IdentifyPrune(float ot, float sm, float ma) : op_threshold(ot), scale_max_thresh(sm), max_anisotropy(ma) {}
 
-  __host__ __device__ bool operator()(const thrust::tuple<float, float> &t) const {
+  __host__ __device__ bool operator()(const thrust::tuple<float, float, float, float> &t) const {
     float opacity_logit = thrust::get<0>(t);
-    float scale = thrust::get<1>(t);
+    float s1 = expf(thrust::get<1>(t));
+    float s2 = expf(thrust::get<2>(t));
+    float s3 = expf(thrust::get<3>(t));
 
     // Prune if opacity is too low
     if (opacity_logit < op_threshold)
       return true;
 
+    float max_s = fmaxf(s1, fmaxf(s2, s3));
+
     // Prune if scale is too large
-    if (scale > scale_max)
+    if (max_s > scale_max_thresh)
+      return true;
+
+    // Prune if too anisotropic
+    float min_s = fminf(s1, fminf(s2, s3));
+    if (max_s > max_anisotropy * min_s)
       return true;
 
     return false;
@@ -437,11 +447,12 @@ void TrainerImpl::adaptive_density_step() {
   const float op_threshold = logf(config.delete_opacity_threshold) - logf(1.0f - config.delete_opacity_threshold);
 
   auto prune_iter_start =
-      thrust::make_zip_iterator(thrust::make_tuple(cuda.gaussians.d_opacity.begin(), d_scale_max.begin()));
+      thrust::make_zip_iterator(thrust::make_tuple(cuda.gaussians.d_opacity.begin(), s1_it, s2_it, s3_it));
   auto prune_iter_end = prune_iter_start + num_gaussians;
 
   thrust::device_vector<bool> d_prune_mask(num_gaussians);
-  thrust::transform(prune_iter_start, prune_iter_end, d_prune_mask.begin(), IdentifyPrune(op_threshold, max_scale));
+  thrust::transform(prune_iter_start, prune_iter_end, d_prune_mask.begin(),
+                    IdentifyPrune(op_threshold, max_scale, config.max_anisotropy));
 
   int num_to_prune = thrust::count(d_prune_mask.begin(), d_prune_mask.end(), true);
 
