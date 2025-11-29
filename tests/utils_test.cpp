@@ -116,3 +116,38 @@ TEST_F(ConfigTest, ThrowsOnMissingKey) {
       },
       std::runtime_error);
 }
+
+TEST(PlyUtilsTest, SavePly) {
+  // Create dummy Gaussians
+  Gaussians g;
+  g.xyz.push_back(Eigen::Vector3f(1.0f, 2.0f, 3.0f));
+  g.rgb.push_back(Eigen::Vector3f(0.5f, 0.5f, 0.5f));   // Should result in f_dc = 0
+  g.opacity.push_back(0.0f);                            // Logit
+  g.scale.push_back(Eigen::Vector3f(0.0f, 0.0f, 0.0f)); // Log scale
+  g.quaternion.push_back(Eigen::Quaternionf(1.0f, 0.0f, 0.0f, 0.0f));
+
+  // Add SH
+  std::vector<Eigen::VectorXf> sh_vec;
+  Eigen::VectorXf sh_coeffs(3);
+  sh_coeffs << 0.1f, 0.2f, 0.3f;
+  sh_vec.push_back(sh_coeffs);
+  g.sh = sh_vec;
+
+  std::string filename = "test_output.ply";
+  save_ply(g, filename);
+
+  // Verify file exists
+  ASSERT_TRUE(std::filesystem::exists(filename));
+
+  // Verify file size > 0
+  ASSERT_GT(std::filesystem::file_size(filename), 0);
+
+  // Basic header check
+  std::ifstream infile(filename, std::ios::binary);
+  std::string line;
+  std::getline(infile, line);
+  EXPECT_EQ(line, "ply");
+
+  // Cleanup
+  std::filesystem::remove(filename);
+}
