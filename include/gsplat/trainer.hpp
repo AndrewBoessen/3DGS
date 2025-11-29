@@ -6,7 +6,6 @@
 #include "gsplat/gaussian.hpp"
 #include "gsplat/utils.hpp"
 #include <memory>
-#include <unordered_map>
 
 // Forward declaration of the implementation class.
 // The full definition will be hidden in the .cu file.
@@ -65,6 +64,12 @@ public:
    * functions at specified intervals.
    */
   void train();
+
+  /**
+   * @brief Save trained Gaussians to PLY file
+   * @param[in] filename Output filename
+   */
+  void save_to_ply(const std::string filename);
 
 private:
   /// @brief Pointer to the private implementation.
