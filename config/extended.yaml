@@ -23,7 +23,7 @@ sh_lr_multiplier: 5.0
 test_eval_interval: 500
 test_split_ratio: 9
 use_background: true
-use_background_end: 28000
+use_background_end: 20000
 reset_opacity_interval: 3000
 reset_opacity_value: 0.01
 reset_opacity_start: 1050
@@ -35,7 +35,7 @@ use_split: true
 use_clone: true
 use_delete: true
 adaptive_control_start: 500
-adaptive_control_end: 15000
+adaptive_control_end: 20000
 adaptive_control_interval: 100
 max_gaussians: 4250000
 delete_opacity_threshold: 0.005
