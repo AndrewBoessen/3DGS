@@ -144,12 +144,9 @@ void save_ply(const Gaussians &gaussians, const std::string &filename) {
     outfile.write(reinterpret_cast<const char *>(&zero), sizeof(float));
 
     // f_dc (from rgb)
-    float f_dc_0 = (gaussians.rgb[i].x() - 0.5f) / C0;
-    float f_dc_1 = (gaussians.rgb[i].y() - 0.5f) / C0;
-    float f_dc_2 = (gaussians.rgb[i].z() - 0.5f) / C0;
-    outfile.write(reinterpret_cast<const char *>(&f_dc_0), sizeof(float));
-    outfile.write(reinterpret_cast<const char *>(&f_dc_1), sizeof(float));
-    outfile.write(reinterpret_cast<const char *>(&f_dc_2), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&gaussians.rgb[i].x()), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&gaussians.rgb[i].y()), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&gaussians.rgb[i].z()), sizeof(float));
 
     // f_rest (SH)
     if (has_sh) {
