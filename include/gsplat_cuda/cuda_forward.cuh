@@ -58,15 +58,14 @@ void camera_intrinsic_projection(float *const xyz, const float *K, const int N, 
  * @param[in]  xyz          A device pointer to 3D corrdinates of gaussians in camera perspective
  * @param[in]  N            Number of Gaussians
  * @param[in]  near_thresh  Distance to cull guassians closer than threshold
- * @param[in]  far_thresh   Distance to cull gaussians farther than threshold
  * @param[in]  padding      Padding distance beyond image frame
  * @param[in]  width        Image width
  * @param[in]  height       Image height
  * @param[out] mask         A device pointer for mask on guassians
  * @param[in]  stream The CUDA stream to execute kernel on
  */
-void cull_gaussians(float *const uv, float *const xyz, const int N, const float near_thresh, const float far_thresh,
-                    const int padding, const int width, const int height, bool *mask, cudaStream_t stream = 0);
+void cull_gaussians(float *const uv, float *const xyz, const int N, const float near_thresh, const int padding,
+                    const int width, const int height, bool *mask, cudaStream_t stream = 0);
 
 /**
  * @brief Lanuches CUDA kernels to get gaussian tile intersections sorted by depth

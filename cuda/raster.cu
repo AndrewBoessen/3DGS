@@ -29,7 +29,7 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
                               thrust::raw_pointer_cast(camera_parameters.d_K.data()), num_gaussians,
                               thrust::raw_pointer_cast(pass_data.d_uv.data()));
   cull_gaussians(thrust::raw_pointer_cast(pass_data.d_uv.data()), thrust::raw_pointer_cast(pass_data.d_xyz_c.data()),
-                 num_gaussians, config.near_thresh, config.far_thresh, config.cull_mask_padding, width, height,
+                 num_gaussians, config.near_thresh, config.cull_mask_padding, width, height,
                  thrust::raw_pointer_cast(pass_data.d_mask.data()));
 
   pass_data.num_culled = thrust::count(pass_data.d_mask.begin(), pass_data.d_mask.end(), true);

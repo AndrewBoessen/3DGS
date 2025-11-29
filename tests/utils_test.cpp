@@ -26,7 +26,6 @@ protected:
         << "initial_scale_factor: 1.0\n"
         << "max_initial_scale: 1.0\n"
         << "near_thresh: 0.01\n"
-        << "far_thresh: 100.0\n"
         << "mh_dist: 1000.0\n"
         << "cull_mask_padding: 1\n"
         << "base_lr: 0.001\n"

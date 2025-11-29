@@ -11,17 +11,16 @@
 #include <thrust/reduce.h>
 #include <thrust/transform.h>
 
-__device__ __forceinline__ bool z_distance_culling(const float z, const float near_thresh, const float far_thresh) {
-  return z >= near_thresh && z <= far_thresh;
-}
+__device__ __forceinline__ bool z_distance_culling(const float z, const float near_thresh) { return z >= near_thresh; }
+
 __device__ __forceinline__ bool frustum_culling(const float u, const float v, const int padding, const int width,
                                                 const int height) {
   return u >= (-1 * padding) && u <= width + padding && v >= (-1 * padding) && v <= height + padding;
 }
 
 __global__ void frustum_culling_kernel(const float *__restrict__ uv, const float *__restrict__ xyz, const int N,
-                                       const float near_thresh, const float far_thresh, const int padding,
-                                       const int width, const int height, bool *mask) {
+                                       const float near_thresh, const int padding, const int width, const int height,
+                                       bool *mask) {
   constexpr int XYZ_STRIDE = 3;
   constexpr int UV_STRIDE = 2;
 
@@ -36,7 +35,7 @@ __global__ void frustum_culling_kernel(const float *__restrict__ uv, const float
 
   const float z = xyz[i * XYZ_STRIDE + 2];
 
-  mask[i] = z_distance_culling(z, near_thresh, far_thresh) && frustum_culling(u, v, padding, width, height);
+  mask[i] = z_distance_culling(z, near_thresh) && frustum_culling(u, v, padding, width, height);
 }
 
 __device__ __forceinline__ bool
@@ -323,8 +322,8 @@ __global__ void find_tile_boundaries_kernel(const double *__restrict__ sorted_ke
   }
 }
 
-void cull_gaussians(float *const uv, float *const xyz, const int N, const float near_thresh, const float far_thresh,
-                    const int padding, const int width, const int height, bool *mask, cudaStream_t stream) {
+void cull_gaussians(float *const uv, float *const xyz, const int N, const float near_thresh, const int padding,
+                    const int width, const int height, bool *mask, cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(uv);
   ASSERT_DEVICE_POINTER(xyz);
   ASSERT_DEVICE_POINTER(mask);
@@ -336,8 +335,7 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
   dim3 gridsize(num_blocks, 1, 1);
   dim3 blocksize(threads_per_block, 1, 1);
 
-  frustum_culling_kernel<<<gridsize, blocksize, 0, stream>>>(uv, xyz, N, near_thresh, far_thresh, padding, width,
-                                                             height, mask);
+  frustum_culling_kernel<<<gridsize, blocksize, 0, stream>>>(uv, xyz, N, near_thresh, padding, width, height, mask);
 }
 
 // Helper functor for strided copy (xyz -> z)

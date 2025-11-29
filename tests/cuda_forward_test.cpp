@@ -153,7 +153,6 @@ TEST_F(CudaKernelTest, GaussianCulling) {
   const int N = 7; // Number of points
   // Culling parameters
   const float near_thresh = 1.0f;
-  const float far_thresh = 10.0f;
   const int padding = 10;
   const int width = 1920;
   const int height = 1080;
@@ -163,7 +162,7 @@ TEST_F(CudaKernelTest, GaussianCulling) {
   const std::vector<float> h_xyz = {
       0.0f, 0.0f, 5.0f,  // Case 1: In view, should be kept.
       0.0f, 0.0f, 0.5f,  // Case 2: Too close (z < near), but in frustum, should be CULLED.
-      0.0f, 0.0f, 12.0f, // Case 3: Too far (z > far), but in frustum, should be CULLED.
+      0.0f, 0.0f, 12.0f, // Case 3: In frustum, should be kept.
       0.0f, 0.0f, 5.0f,  // Case 4: In left padding, should be kept.
       0.0f, 0.0f, 5.0f,  // Case 5: In right padding, should be kept.
       0.0f, 0.0f, 12.0f, // Case 6: Too far AND outside frustum, should be CULLED.
@@ -194,7 +193,7 @@ TEST_F(CudaKernelTest, GaussianCulling) {
   CUDA_CHECK(cudaMemcpy(d_uv, h_uv.data(), h_uv.size() * sizeof(float), cudaMemcpyHostToDevice));
 
   // Launch the kernel
-  cull_gaussians(d_uv, d_xyz, N, near_thresh, far_thresh, padding, width, height, d_mask);
+  cull_gaussians(d_uv, d_xyz, N, near_thresh, padding, width, height, d_mask);
   CUDA_CHECK(cudaDeviceSynchronize()); // Wait for the kernel to finish
 
   // Copy result data from device to host
@@ -205,7 +204,7 @@ TEST_F(CudaKernelTest, GaussianCulling) {
   const std::vector<bool> expected_mask = {
       true,  // Case 1: Keep
       false, // Case 2: CULL
-      false, // Case 3: CULL
+      true,  // Case 3: Keep
       true,  // Case 4: Keep
       true,  // Case 5: Keep
       false, // Case 6: CULL

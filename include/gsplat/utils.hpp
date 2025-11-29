@@ -28,7 +28,6 @@ struct ConfigParameters {
 
   // Rendering thresholds
   double near_thresh;
-  double far_thresh;
   double mh_dist;
   int cull_mask_padding;
 

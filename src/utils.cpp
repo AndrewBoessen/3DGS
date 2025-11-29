@@ -38,7 +38,6 @@ ConfigParameters parseConfig(const std::string &filename) {
 
     // Rendering thresholds
     params.near_thresh = getNodeValue<float>(config, "near_thresh");
-    params.far_thresh = getNodeValue<float>(config, "far_thresh");
     params.mh_dist = getNodeValue<float>(config, "mh_dist");
     params.cull_mask_padding = getNodeValue<int>(config, "cull_mask_padding");
 
