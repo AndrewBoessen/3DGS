@@ -92,6 +92,7 @@ int main(int argc, char *argv[]) {
 
   trainer.test_train_split();
   trainer.train();
+  trainer.save_to_ply("gaussians.ply");
 
   return 0; // Success
 }

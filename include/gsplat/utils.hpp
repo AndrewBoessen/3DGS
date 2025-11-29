@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "gsplat/gaussian.hpp"
 #include <string>
 
 // This struct holds all the configuration parameters read from the YAML file.
@@ -81,3 +82,11 @@ struct ConfigParameters {
  * @return A ConfigParameters struct containing the parsed values.
  */
 ConfigParameters parseConfig(const std::string &filename);
+
+/**
+ * @brief Saves the Gaussian parameters to a PLY file.
+ *
+ * @param gaussians The Gaussians object containing the parameters.
+ * @param filename The path to the output PLY file.
+ */
+void save_ply(const Gaussians &gaussians, const std::string &filename);

@@ -1,5 +1,6 @@
 // trainer.cu
 
+#include "gsplat/gaussian.hpp"
 #include "gsplat/trainer.hpp"
 
 #include "gsplat/progress_bar.hpp"
@@ -47,6 +48,7 @@ public:
   void test_train_split();
   void train();
   void evaluate();
+  void save_to_ply(const std::string filename);
 
 private:
   // --- All original private members ---
@@ -962,6 +964,40 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, Camera curr_camera) 
   scatter_masked_array<1>(d_accum_dur_compact, pass_data.d_mask, cuda.accumulators.d_grad_accum_dur);
 }
 
+void TrainerImpl::save_to_ply(const std::string filename) {
+  // Move trained Gaussians to host
+  thrust::host_vector<float> h_xyz = cuda.gaussians.d_xyz;
+  thrust::host_vector<float> h_rgb = cuda.gaussians.d_rgb;
+  thrust::host_vector<float> h_opacity = cuda.gaussians.d_opacity;
+  thrust::host_vector<float> h_scale = cuda.gaussians.d_scale;
+  thrust::host_vector<float> h_quaternion = cuda.gaussians.d_quaternion;
+  thrust::host_vector<float> h_sh = cuda.gaussians.d_sh;
+
+  std::vector<Eigen::Vector3f> xyz_vec(num_gaussians);
+  std::vector<Eigen::Vector3f> rgb_vec(num_gaussians);
+  std::vector<float> op_vec(num_gaussians);
+  std::vector<Eigen::Vector3f> scale_vec(num_gaussians);
+  std::vector<Eigen::Quaternionf> quat_vec(num_gaussians);
+  std::vector<Eigen::VectorXf> sh_vec;
+  sh_vec.reserve(num_gaussians);
+
+  // Copy to data structures
+  std::memcpy(xyz_vec.data(), h_xyz.data(), h_xyz.size() * sizeof(float));
+  std::memcpy(rgb_vec.data(), h_rgb.data(), h_rgb.size() * sizeof(float));
+  std::memcpy(op_vec.data(), h_opacity.data(), h_opacity.size() * sizeof(float));
+  std::memcpy(scale_vec.data(), h_scale.data(), h_scale.size() * sizeof(float));
+  std::memcpy(quat_vec.data(), h_quaternion.data(), h_quaternion.size() * sizeof(float));
+  const int num_sh_params = 3 * ((l_max + 1) * (l_max + 1) - 1);
+  float *sh_ptr = h_sh.data();
+  for (int i = 0; i < num_gaussians; i++)
+    sh_vec.push_back(Eigen::Map<Eigen::VectorXf>(sh_ptr + (i * num_sh_params), num_sh_params));
+
+  Gaussians trained_gaussians(std::move(xyz_vec), std::move(rgb_vec), std::move(op_vec), std::move(scale_vec),
+                              std::move(quat_vec), std::move(sh_vec));
+
+  save_ply(trained_gaussians, filename);
+}
+
 void TrainerImpl::train() {
   // Call the Impl member function
   reset_grad_accum();
@@ -1223,3 +1259,5 @@ Trainer &Trainer::operator=(Trainer &&) noexcept = default;
 void Trainer::test_train_split() { pImpl->test_train_split(); }
 
 void Trainer::train() { pImpl->train(); }
+
+void Trainer::save_to_ply(const std::string filename) { pImpl->save_to_ply(filename); }

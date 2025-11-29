@@ -1,5 +1,7 @@
 #include "gsplat/utils.hpp"
 #include "yaml-cpp/yaml.h"
+#include <fstream>
+#include <iostream>
 #include <stdexcept>
 
 // Helper function to safely get a value from a YAML node.
@@ -83,4 +85,96 @@ ConfigParameters parseConfig(const std::string &filename) {
     throw std::runtime_error("Failed to parse YAML file '" + filename + "': " + e.what());
   }
   return params;
+}
+
+void save_ply(const Gaussians &gaussians, const std::string &filename) {
+  std::ofstream outfile(filename, std::ios::binary);
+  if (!outfile.is_open()) {
+    std::cerr << "Error: Could not open file " << filename << " for writing." << std::endl;
+    return;
+  }
+
+  size_t num_gaussians = gaussians.size();
+  bool has_sh = gaussians.sh.has_value();
+  int num_sh_coeffs = 0;
+  if (has_sh && !gaussians.sh->empty()) {
+    num_sh_coeffs = gaussians.sh->at(0).size();
+  }
+
+  // Header
+  outfile << "ply" << std::endl;
+  outfile << "format binary_little_endian 1.0" << std::endl;
+  outfile << "element vertex " << num_gaussians << std::endl;
+  outfile << "property float x" << std::endl;
+  outfile << "property float y" << std::endl;
+  outfile << "property float z" << std::endl;
+  outfile << "property float nx" << std::endl;
+  outfile << "property float ny" << std::endl;
+  outfile << "property float nz" << std::endl;
+  outfile << "property float f_dc_0" << std::endl;
+  outfile << "property float f_dc_1" << std::endl;
+  outfile << "property float f_dc_2" << std::endl;
+
+  for (int i = 0; i < num_sh_coeffs; ++i) {
+    outfile << "property float f_rest_" << i << std::endl;
+  }
+
+  outfile << "property float opacity" << std::endl;
+  outfile << "property float scale_0" << std::endl;
+  outfile << "property float scale_1" << std::endl;
+  outfile << "property float scale_2" << std::endl;
+  outfile << "property float rot_0" << std::endl;
+  outfile << "property float rot_1" << std::endl;
+  outfile << "property float rot_2" << std::endl;
+  outfile << "property float rot_3" << std::endl;
+  outfile << "end_header" << std::endl;
+
+  // Data
+  const float C0 = 0.28209479177387814f;
+
+  for (size_t i = 0; i < num_gaussians; ++i) {
+    // Position
+    outfile.write(reinterpret_cast<const char *>(&gaussians.xyz[i].x()), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&gaussians.xyz[i].y()), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&gaussians.xyz[i].z()), sizeof(float));
+
+    // Normals (0, 0, 0)
+    float zero = 0.0f;
+    outfile.write(reinterpret_cast<const char *>(&zero), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&zero), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&zero), sizeof(float));
+
+    // f_dc (from rgb)
+    float f_dc_0 = (gaussians.rgb[i].x() - 0.5f) / C0;
+    float f_dc_1 = (gaussians.rgb[i].y() - 0.5f) / C0;
+    float f_dc_2 = (gaussians.rgb[i].z() - 0.5f) / C0;
+    outfile.write(reinterpret_cast<const char *>(&f_dc_0), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&f_dc_1), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&f_dc_2), sizeof(float));
+
+    // f_rest (SH)
+    if (has_sh) {
+      const auto &sh_coeffs = gaussians.sh->at(i);
+      for (int j = 0; j < num_sh_coeffs; ++j) {
+        outfile.write(reinterpret_cast<const char *>(&sh_coeffs[j]), sizeof(float));
+      }
+    }
+
+    // Opacity
+    outfile.write(reinterpret_cast<const char *>(&gaussians.opacity[i]), sizeof(float));
+
+    // Scale
+    outfile.write(reinterpret_cast<const char *>(&gaussians.scale[i].x()), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&gaussians.scale[i].y()), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&gaussians.scale[i].z()), sizeof(float));
+
+    // Rotation (Quaternion)
+    outfile.write(reinterpret_cast<const char *>(&gaussians.quaternion[i].w()), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&gaussians.quaternion[i].x()), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&gaussians.quaternion[i].y()), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&gaussians.quaternion[i].z()), sizeof(float));
+  }
+
+  outfile.close();
+  std::cout << "Saved PLY to " << filename << std::endl;
 }
