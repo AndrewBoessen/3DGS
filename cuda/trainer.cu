@@ -990,11 +990,11 @@ void TrainerImpl::save_to_ply(const std::string filename) {
   sh_vec.reserve(num_gaussians);
 
   // Copy to data structures
-  std::memcpy(xyz_vec.data(), h_xyz.data(), h_xyz.size() * sizeof(float));
-  std::memcpy(rgb_vec.data(), h_rgb.data(), h_rgb.size() * sizeof(float));
-  std::memcpy(op_vec.data(), h_opacity.data(), h_opacity.size() * sizeof(float));
-  std::memcpy(scale_vec.data(), h_scale.data(), h_scale.size() * sizeof(float));
-  std::memcpy(quat_vec.data(), h_quaternion.data(), h_quaternion.size() * sizeof(float));
+  std::memcpy(xyz_vec.data(), h_xyz.data(), num_gaussians * 3 * sizeof(float));
+  std::memcpy(rgb_vec.data(), h_rgb.data(), num_gaussians * 3 * sizeof(float));
+  std::memcpy(op_vec.data(), h_opacity.data(), num_gaussians * sizeof(float));
+  std::memcpy(scale_vec.data(), h_scale.data(), num_gaussians * 3 * sizeof(float));
+  std::memcpy(quat_vec.data(), h_quaternion.data(), num_gaussians * 4 * sizeof(float));
   const int num_sh_params = 3 * ((l_max + 1) * (l_max + 1) - 1);
   float *sh_ptr = h_sh.data();
   for (int i = 0; i < num_gaussians; i++)
