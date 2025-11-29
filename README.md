@@ -69,7 +69,7 @@ The main executable, `gaussian_splatting`, will be located in the `build/` direc
 
 ### Mip-NeRF 360
 
-To train a scene from the Mip-NeRF 360 dataset specify the scene to train in the config file: `base.yaml` or `extended.yaml` and run the main executable
+To train a scene from the Mip-NeRF 360 dataset specify the scene to train in the config file: `base.yaml` or `extended.yaml` and run the main executable.
 
 ```bash
 ./build/gaussian_splatting <path_to_config> <path_to_dataset>
@@ -80,6 +80,12 @@ For example
 ```bash
 ./build/gaussian_splatting ./config/extended.yaml ../Downloads/360_v2
 ```
+
+### Colab
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AndrewBoessen/3DGS/blob/main/assets/3DGS.ipynb)
+
+A Colab notebook is available to train a demo scene and view rendered images.
 
 ### COLMAP
 
