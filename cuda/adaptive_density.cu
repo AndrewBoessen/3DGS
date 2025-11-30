@@ -24,7 +24,7 @@ void __global__ clone_gaussians_kernel(const int N, const int num_sh_coef, const
   const bool is_cloned = mask[i];
 
   if (is_cloned) {
-    const int write_base = write_ids[i] * 2;
+    const int write_base = write_ids[i];
 
     const float3 xyz = {xyz_in[i * 3 + 0], xyz_in[i * 3 + 1], xyz_in[i * 3 + 2]};
     const float3 rgb = {rgb_in[i * 3 + 0], rgb_in[i * 3 + 1], rgb_in[i * 3 + 2]};
@@ -33,35 +33,33 @@ void __global__ clone_gaussians_kernel(const int N, const int num_sh_coef, const
     const float4 quat = {quat_in[i * 4 + 0], quat_in[i * 4 + 1], quat_in[i * 4 + 2], quat_in[i * 4 + 3]};
 
     // write cloned parameters
-    for (int j = 0; j < 2; j++) {
-      xyz_out[(write_base + j) * 3 + 0] = xyz.x;
-      xyz_out[(write_base + j) * 3 + 1] = xyz.y;
-      xyz_out[(write_base + j) * 3 + 2] = xyz.z;
+    xyz_out[write_base * 3 + 0] = xyz.x;
+    xyz_out[write_base * 3 + 1] = xyz.y;
+    xyz_out[write_base * 3 + 2] = xyz.z;
 
-      rgb_out[(write_base + j) * 3 + 0] = rgb.x;
-      rgb_out[(write_base + j) * 3 + 1] = rgb.y;
-      rgb_out[(write_base + j) * 3 + 2] = rgb.z;
+    rgb_out[write_base * 3 + 0] = rgb.x;
+    rgb_out[write_base * 3 + 1] = rgb.y;
+    rgb_out[write_base * 3 + 2] = rgb.z;
 
-      op_out[(write_base + j)] = op;
+    op_out[write_base] = op;
 
-      scale_out[(write_base + j) * 3 + 0] = scale.x;
-      scale_out[(write_base + j) * 3 + 1] = scale.y;
-      scale_out[(write_base + j) * 3 + 2] = scale.z;
+    scale_out[write_base * 3 + 0] = scale.x;
+    scale_out[write_base * 3 + 1] = scale.y;
+    scale_out[write_base * 3 + 2] = scale.z;
 
-      quat_out[(write_base + j) * 4 + 0] = quat.x;
-      quat_out[(write_base + j) * 4 + 1] = quat.y;
-      quat_out[(write_base + j) * 4 + 2] = quat.z;
-      quat_out[(write_base + j) * 4 + 3] = quat.w;
+    quat_out[write_base * 4 + 0] = quat.x;
+    quat_out[write_base * 4 + 1] = quat.y;
+    quat_out[write_base * 4 + 2] = quat.z;
+    quat_out[write_base * 4 + 3] = quat.w;
 
-      // handle SH coefficients
-      if (num_sh_coef > 0) {
-        for (int k = 0; k < num_sh_coef; k++) {
+    // handle SH coefficients
+    if (num_sh_coef > 0) {
+      for (int k = 0; k < num_sh_coef; k++) {
 #pragma unroll
-          for (int l = 0; l < 3; l++) {
-            const int sh_write_id = ((write_base + j) * num_sh_coef * 3) + (k * 3) + l;
-            const int sh_read_id = (i * num_sh_coef * 3) + (k * 3) + l;
-            sh_out[sh_write_id] = sh_in[sh_read_id];
-          }
+        for (int l = 0; l < 3; l++) {
+          const int sh_write_id = (write_base * num_sh_coef * 3) + (k * 3) + l;
+          const int sh_read_id = (i * num_sh_coef * 3) + (k * 3) + l;
+          sh_out[sh_write_id] = sh_in[sh_read_id];
         }
       }
     }

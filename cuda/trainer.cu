@@ -485,8 +485,7 @@ struct IdentifySplit {
 struct CombineMasks {
   __host__ __device__ bool operator()(const thrust::tuple<bool, bool, bool> &t) const {
     return !(thrust::get<0>(t) || // is_pruned
-             thrust::get<1>(t) || // is_split
-             thrust::get<2>(t));  // is_clone
+             thrust::get<1>(t));  // is_split
   }
 };
 
@@ -551,8 +550,8 @@ void TrainerImpl::adaptive_density_step() {
   int num_to_split = thrust::count(d_split_mask.begin(), d_split_mask.end(), true);
 
   // Check Capacity
-  int num_to_remove = num_to_prune + num_to_split + num_to_clone;
-  int num_to_add = (num_to_clone * 2) + (num_to_split * 2);
+  int num_to_remove = num_to_prune + num_to_split;
+  int num_to_add = num_to_clone + (num_to_split * 2);
   int new_num_gaussians = num_gaussians - num_to_remove + num_to_add;
 
   if (new_num_gaussians > config.max_gaussians) {
@@ -571,12 +570,12 @@ void TrainerImpl::adaptive_density_step() {
   const int num_sh_coeffs = (l_max > 0) ? ((l_max + 1) * (l_max + 1) - 1) : 0;
 
   // Allocate temp device memory for new Gaussians
-  thrust::device_vector<float> d_new_clone_xyz(num_to_clone * 2 * 3);
-  thrust::device_vector<float> d_new_clone_rgb(num_to_clone * 2 * 3);
-  thrust::device_vector<float> d_new_clone_opacity(num_to_clone * 2 * 1);
-  thrust::device_vector<float> d_new_clone_scale(num_to_clone * 2 * 3);
-  thrust::device_vector<float> d_new_clone_quat(num_to_clone * 2 * 4);
-  thrust::device_vector<float> d_new_clone_sh(num_to_clone * 2 * num_sh_coeffs * 3);
+  thrust::device_vector<float> d_new_clone_xyz(num_to_clone * 3);
+  thrust::device_vector<float> d_new_clone_rgb(num_to_clone * 3);
+  thrust::device_vector<float> d_new_clone_opacity(num_to_clone * 1);
+  thrust::device_vector<float> d_new_clone_scale(num_to_clone * 3);
+  thrust::device_vector<float> d_new_clone_quat(num_to_clone * 4);
+  thrust::device_vector<float> d_new_clone_sh(num_to_clone * num_sh_coeffs * 3);
 
   thrust::device_vector<float> d_new_split_xyz(num_to_split * 2 * 3);
   thrust::device_vector<float> d_new_split_rgb(num_to_split * 2 * 3);
@@ -727,25 +726,25 @@ void TrainerImpl::adaptive_density_step() {
   thrust::copy(d_new_clone_quat.begin(), d_new_clone_quat.end(), cuda.gaussians.d_quaternion.begin() + keep_size * 4);
 
   thrust::copy(d_new_split_xyz.begin(), d_new_split_xyz.end(),
-               cuda.gaussians.d_xyz.begin() + (keep_size + num_to_clone * 2) * 3);
+               cuda.gaussians.d_xyz.begin() + (keep_size + num_to_clone) * 3);
   thrust::copy(d_new_split_rgb.begin(), d_new_split_rgb.end(),
-               cuda.gaussians.d_rgb.begin() + (keep_size + num_to_clone * 2) * 3);
+               cuda.gaussians.d_rgb.begin() + (keep_size + num_to_clone) * 3);
   thrust::copy(d_new_split_opacity.begin(), d_new_split_opacity.end(),
-               cuda.gaussians.d_opacity.begin() + (keep_size + num_to_clone * 2));
+               cuda.gaussians.d_opacity.begin() + (keep_size + num_to_clone));
   thrust::copy(d_new_split_scale.begin(), d_new_split_scale.end(),
-               cuda.gaussians.d_scale.begin() + (keep_size + num_to_clone * 2) * 3);
+               cuda.gaussians.d_scale.begin() + (keep_size + num_to_clone) * 3);
   thrust::copy(d_new_split_quat.begin(), d_new_split_quat.end(),
-               cuda.gaussians.d_quaternion.begin() + (keep_size + num_to_clone * 2) * 4);
+               cuda.gaussians.d_quaternion.begin() + (keep_size + num_to_clone) * 4);
 
   if (l_max > 0) {
     thrust::copy(d_new_clone_sh.begin(), d_new_clone_sh.end(),
                  cuda.gaussians.d_sh.begin() + keep_size * num_sh_coeffs * 3);
     thrust::copy(d_new_split_sh.begin(), d_new_split_sh.end(),
-                 cuda.gaussians.d_sh.begin() + (keep_size + num_to_clone * 2) * num_sh_coeffs * 3);
+                 cuda.gaussians.d_sh.begin() + (keep_size + num_to_clone) * num_sh_coeffs * 3);
   }
 
   // --- 11. Update total Gaussian count ---
-  num_gaussians = keep_size + (num_to_clone + num_to_split) * 2;
+  num_gaussians = keep_size + num_to_clone + (num_to_split * 2);
 
   if (num_gaussians != new_num_gaussians) {
     std::cerr << "FATAL ERROR: Gaussian count mismatch in adaptive density!" << std::endl;
