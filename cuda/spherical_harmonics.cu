@@ -18,9 +18,9 @@ __global__ void compute_rgb_from_sh_kernel(const float *sh_coefficients, const f
   const float *point_sh_coeffs_band_0 = sh_coeffs_band_0 + idx * 3;
 
   // Initialize sums for each color channel with the band 0 coefficients
-  float r = point_sh_coeffs_band_0[0] * point_sph_vals[0];
-  float g = point_sh_coeffs_band_0[1] * point_sph_vals[0];
-  float b = point_sh_coeffs_band_0[2] * point_sph_vals[0];
+  float r = point_sh_coeffs_band_0[0] * point_sph_vals[0] + 0.5f;
+  float g = point_sh_coeffs_band_0[1] * point_sph_vals[0] + 0.5f;
+  float b = point_sh_coeffs_band_0[2] * point_sph_vals[0] + 0.5f;
 
   if (n_coeffs > 1) {
     // Sum the contributions from higher-order SH coefficients (l > 0)
