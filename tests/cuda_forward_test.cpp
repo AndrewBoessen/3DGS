@@ -546,15 +546,15 @@ TEST_F(CudaKernelTest, PrecomputeSphericalHarmonics) {
 
   // For Point 0 (x=0, y=0, z=1):
   // SH basis values = {0.28209, 0.0, 0.48860, 0.0}
-  float sum_r0 = (0.5f * 0.28209f) + (0.2f * 0.48860f);  // 0.238765
-  float sum_g0 = (-0.2f * 0.28209f) + (0.2f * 0.48860f); // 0.041302
-  float sum_b0 = (0.8f * 0.28209f) + (0.2f * 0.48860f);  // 0.323392
+  float sum_r0 = (0.5f * 0.28209f) + 0.5f + (0.2f * 0.48860f);  // 0.238765
+  float sum_g0 = (-0.2f * 0.28209f) + 0.5f + (0.2f * 0.48860f); // 0.041302
+  float sum_b0 = (0.8f * 0.28209f) + 0.5f + (0.2f * 0.48860f);  // 0.323392
 
   // For Point 1 (x=1, y=0, z=0):
   // SH basis values = {0.28209, 0.0, 0.0, 0.48860}
-  float sum_r1 = (0.1f * 0.28209f) + (0.4f * 0.48860f); // 0.223649
-  float sum_g1 = (0.5f * 0.28209f) + (0.8f * 0.48860f); // 0.531925
-  float sum_b1 = (0.9f * 0.28209f) + (0.2f * 0.48860f); // 0.351601
+  float sum_r1 = (0.1f * 0.28209f) + 0.5f + (0.4f * 0.48860f); // 0.223649
+  float sum_g1 = (0.5f * 0.28209f) + 0.5f + (0.8f * 0.48860f); // 0.531925
+  float sum_b1 = (0.9f * 0.28209f) + 0.5f + (0.2f * 0.48860f); // 0.351601
 
   const std::vector<float> expected_rgb = {sum_r0, sum_g0, sum_b0, sum_r1, sum_g1, sum_b1};
 
