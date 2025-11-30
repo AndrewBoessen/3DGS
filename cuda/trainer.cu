@@ -1000,6 +1000,11 @@ void TrainerImpl::save_to_ply(const std::string filename) {
   for (int i = 0; i < num_gaussians; i++)
     sh_vec.push_back(Eigen::Map<Eigen::VectorXf>(sh_ptr + (i * num_sh_params), num_sh_params));
 
+  // Normalize quaternions before saving
+  for (auto &q : quat_vec) {
+    q.normalize();
+  }
+
   Gaussians trained_gaussians(std::move(xyz_vec), std::move(rgb_vec), std::move(op_vec), std::move(scale_vec),
                               std::move(quat_vec), std::move(sh_vec));
 
