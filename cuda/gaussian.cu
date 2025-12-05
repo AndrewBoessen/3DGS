@@ -64,22 +64,19 @@ __global__ void compute_sigma_fused_kernel(const float *__restrict__ quaternion,
   float rs22 = r22 * sz;
 
   // Sigma is symmetric, so we can compute the upper-triangular part
-  // and reflect it to the lower-triangular part.
-  const int sigma_base_idx = 9 * i;
-  sigma[sigma_base_idx + 0] = rs00 * rs00 + rs01 * rs01 + rs02 * rs02; // S_00
-  sigma[sigma_base_idx + 1] = rs00 * rs10 + rs01 * rs11 + rs02 * rs12; // S_01
-  sigma[sigma_base_idx + 2] = rs00 * rs20 + rs01 * rs21 + rs02 * rs22; // S_02
-  sigma[sigma_base_idx + 3] = sigma[sigma_base_idx + 1];               // S_10 = S_01
-  sigma[sigma_base_idx + 4] = rs10 * rs10 + rs11 * rs11 + rs12 * rs12; // S_11
-  sigma[sigma_base_idx + 5] = rs10 * rs20 + rs11 * rs21 + rs12 * rs22; // S_12
-  sigma[sigma_base_idx + 6] = sigma[sigma_base_idx + 2];               // S_20 = S_02
-  sigma[sigma_base_idx + 7] = sigma[sigma_base_idx + 5];               // S_21 = S_12
-  sigma[sigma_base_idx + 8] = rs20 * rs20 + rs21 * rs21 + rs22 * rs22; // S_22
+  // and store only the unique 6 elements.
+  const int sigma_base_idx = 6 * i;
+  sigma[sigma_base_idx + 0] = rs00 * rs00 + rs01 * rs01 + rs02 * rs02; // S_00 (xx)
+  sigma[sigma_base_idx + 1] = rs00 * rs10 + rs01 * rs11 + rs02 * rs12; // S_01 (xy)
+  sigma[sigma_base_idx + 2] = rs00 * rs20 + rs01 * rs21 + rs02 * rs22; // S_02 (xz)
+  sigma[sigma_base_idx + 3] = rs10 * rs10 + rs11 * rs11 + rs12 * rs12; // S_11 (yy)
+  sigma[sigma_base_idx + 4] = rs10 * rs20 + rs11 * rs21 + rs12 * rs22; // S_12 (yz)
+  sigma[sigma_base_idx + 5] = rs20 * rs20 + rs21 * rs21 + rs22 * rs22; // S_22 (zz)
 }
 
 __global__ void compute_conic_kernel(const float *__restrict__ sigma, const float *__restrict__ view,
                                      const float *__restrict__ J, const int N, float *conic) {
-  constexpr int SIGMA_STRIDE = 9;
+  constexpr int SIGMA_STRIDE = 6;
   constexpr int J_STRIDE = 6;
   constexpr int CONIC_STRIDE = 3;
 
@@ -115,9 +112,9 @@ __global__ void compute_conic_kernel(const float *__restrict__ sigma, const floa
   const float s00 = sigma[sigma_base_idx + 0];
   const float s01 = sigma[sigma_base_idx + 1];
   const float s02 = sigma[sigma_base_idx + 2];
-  const float s11 = sigma[sigma_base_idx + 4];
-  const float s12 = sigma[sigma_base_idx + 5];
-  const float s22 = sigma[sigma_base_idx + 8];
+  const float s11 = sigma[sigma_base_idx + 3];
+  const float s12 = sigma[sigma_base_idx + 4];
+  const float s22 = sigma[sigma_base_idx + 5];
 
   // Load the per-Gaussian 2x3 projection Jacobian (J) into registers.
   const int j_base_idx = i * J_STRIDE;

@@ -48,7 +48,7 @@ TEST_F(CudaKernelTest, ComputeSigma) {
                                       // Case 2: Scales for rotated gaussian
                                       logf(1.0f), logf(2.0f), logf(3.0f)};
 
-  std::vector<float> h_sigma(N * 9); // Each sigma is a 3x3 matrix
+  std::vector<float> h_sigma(N * 6); // Each sigma is a symmetric 3x3 matrix (stored as 6 floats)
 
   // Device-side data pointers
   float *d_quaternion, *d_scale, *d_sigma;
@@ -71,14 +71,12 @@ TEST_F(CudaKernelTest, ComputeSigma) {
   CUDA_CHECK(cudaMemcpy(h_sigma.data(), d_sigma, h_sigma.size() * sizeof(float), cudaMemcpyDeviceToHost));
 
   // Expected results calculated on the host
-  // The output sigma is in COLUMN-MAJOR order.
+  // The output sigma is in stored as [xx, xy, xz, yy, yz, zz]
   const std::vector<float> expected_sigma = {// Case 1: R=I, S=diag(2,3,4). Sigma = diag(4,9,16)
-                                             // Column 1   Column 2   Column 3
-                                             4.0f, 0.0f, 0.0f, 0.0f, 9.0f, 0.0f, 0.0f, 0.0f, 16.0f,
+                                             4.0f, 0.0f, 0.0f, 9.0f, 0.0f, 16.0f,
 
                                              // Case 2: R=RotZ(90), S=diag(1,2,3). Sigma = diag(4,1,9) after rotation.
-                                             // Column 1   Column 2   Column 3
-                                             4.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 9.0f};
+                                             4.0f, 0.0f, 0.0f, 1.0f, 0.0f, 9.0f};
 
   // Compare results
   for (size_t i = 0; i < h_sigma.size(); ++i) {
@@ -321,7 +319,8 @@ TEST_F(CudaKernelTest, ComputeConic) {
   const std::vector<float> h_proj = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
                                      0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f};
 
-  const std::vector<float> h_sigma = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f}; // 3x3 Identity covariance
+  const std::vector<float> h_sigma = {1.0f, 0.0f, 0.0f,
+                                      1.0f, 0.0f, 1.0f}; // 3x3 Identity covariance (xx, xy, xz, yy, yz, zz)
   const std::vector<float> h_view = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
                                      0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f}; // Identity view
 

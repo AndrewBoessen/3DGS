@@ -255,19 +255,29 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
 
   // Host data
   std::vector<float> h_J = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
-  std::vector<float> h_sigma_world = {1.0f, 0.1f, 0.2f, 0.1f, 2.0f, 0.3f, 0.2f, 0.3f, 3.0f};
+  std::vector<float> h_sigma_world = {1.0f, 0.1f, 0.2f, 2.0f, 0.3f, 3.0f}; // xx, xy, xz, yy, yz, zz
   // View matrix (4x4)
   std::vector<float> h_view = {0.8f, -0.6f, 0.0f, 0.1f, 0.6f, 0.8f, 0.0f, 0.2f,
                                0.0f, 0.0f,  1.0f, 0.3f, 0.0f, 0.0f, 0.0f, 1.0f};
   std::vector<float> h_conic_grad_out = {0.5f, -0.2f, 0.8f};
   std::vector<float> h_J_grad_in(N * 6);
-  std::vector<float> h_sigma_world_grad_in(N * 9); // Kernel has i*9 indexing, so allocate 9 floats
+  std::vector<float> h_sigma_world_grad_in(N * 6); // Kernel has i*6 indexing, so allocate 6 floats
 
   // Compute h_conic (inverse covariance) for the test
   auto compute_conic_val = [&](const std::vector<float> &J_in, const std::vector<float> &sigma_in,
                                const std::vector<float> &view_in) {
     const float *J = J_in.data();
-    const float *S = sigma_in.data();
+    // Reconstruct full 3x3 sigma from 6 params
+    float S[9];
+    S[0] = sigma_in[0]; // xx
+    S[1] = sigma_in[1]; // xy
+    S[2] = sigma_in[2]; // xz
+    S[3] = sigma_in[1]; // yx
+    S[4] = sigma_in[3]; // yy
+    S[5] = sigma_in[4]; // yz
+    S[6] = sigma_in[2]; // zx
+    S[7] = sigma_in[4]; // zy
+    S[8] = sigma_in[5]; // zz
     const float W[9] = {view_in[0], view_in[1], view_in[2], view_in[4], view_in[5],
                         view_in[6], view_in[8], view_in[9], view_in[10]};
 
@@ -308,20 +318,20 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
 
   // Device data
   auto d_J = device_alloc<float>(N * 6);
-  auto d_sigma_world = device_alloc<float>(N * 9);
+  auto d_sigma_world = device_alloc<float>(N * 6);
   auto d_view = device_alloc<float>(16);
   auto d_conic = device_alloc<float>(N * 3);
   auto d_conic_grad_out = device_alloc<float>(N * 3);
   auto d_J_grad_in = device_alloc<float>(N * 6);
-  auto d_sigma_world_grad_in = device_alloc<float>(N * 9);
+  auto d_sigma_world_grad_in = device_alloc<float>(N * 6);
 
   CUDA_CHECK(cudaMemcpy(d_J, h_J.data(), N * 6 * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_sigma_world, h_sigma_world.data(), N * 9 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_sigma_world, h_sigma_world.data(), N * 6 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_view, h_view.data(), 16 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_conic, h_conic.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_conic_grad_out, h_conic_grad_out.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemset(d_J_grad_in, 0, N * 6 * sizeof(float)));
-  CUDA_CHECK(cudaMemset(d_sigma_world_grad_in, 0, N * 9 * sizeof(float)));
+  CUDA_CHECK(cudaMemset(d_sigma_world_grad_in, 0, N * 6 * sizeof(float)));
 
   // Run kernel
   compute_conic_backward(d_J, d_sigma_world, d_view, d_conic, d_conic_grad_out, N, d_J_grad_in, d_sigma_world_grad_in);
@@ -329,7 +339,7 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
 
   CUDA_CHECK(cudaMemcpy(h_J_grad_in.data(), d_J_grad_in, N * 6 * sizeof(float), cudaMemcpyDeviceToHost));
   CUDA_CHECK(
-      cudaMemcpy(h_sigma_world_grad_in.data(), d_sigma_world_grad_in, N * 9 * sizeof(float), cudaMemcpyDeviceToHost));
+      cudaMemcpy(h_sigma_world_grad_in.data(), d_sigma_world_grad_in, N * 6 * sizeof(float), cudaMemcpyDeviceToHost));
 
   auto compute_loss = [&](const std::vector<float> &conic) {
     return conic[0] * h_conic_grad_out[0] + 2.0f * conic[1] * h_conic_grad_out[1] + conic[2] * h_conic_grad_out[2];
@@ -347,20 +357,20 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
     EXPECT_NEAR(h_J_grad_in[i], numerical_grad, 1e-1);
   }
 
-  // Reconstruct full symmetric gradient for sigma from kernel output
-  std::vector<float> h_sigma_grad_analytic_full(9);
-  h_sigma_grad_analytic_full[0] = h_sigma_world_grad_in[0]; // (0,0)
-  h_sigma_grad_analytic_full[1] = h_sigma_world_grad_in[1]; // (0,1)
-  h_sigma_grad_analytic_full[2] = h_sigma_world_grad_in[2]; // (0,2)
-  h_sigma_grad_analytic_full[3] = h_sigma_world_grad_in[3]; // (1,0) = (0,1)
-  h_sigma_grad_analytic_full[4] = h_sigma_world_grad_in[4]; // (1,1)
-  h_sigma_grad_analytic_full[5] = h_sigma_world_grad_in[5]; // (1,2)
-  h_sigma_grad_analytic_full[6] = h_sigma_world_grad_in[6]; // (2,0) = (0,2)
-  h_sigma_grad_analytic_full[7] = h_sigma_world_grad_in[7]; // (2,1) = (1,2)
-  h_sigma_grad_analytic_full[8] = h_sigma_world_grad_in[8]; // (2,2)
+  // Reconstruct full symmetric gradient for sigma from kernel output (which is 6 params)
+  // The kernel accumulates gradients into the 6 unique elements.
+  // dL/dS_ij_full = dL/dS_ij_stored (if i==j)
+  // dL/dS_ij_full = 0.5 * dL/dS_ij_stored (if i!=j, because stored accumulates both ij and ji)
+  std::vector<float> h_sigma_grad_analytic_full(6);
+  h_sigma_grad_analytic_full[0] = h_sigma_world_grad_in[0]; // xx
+  h_sigma_grad_analytic_full[1] = h_sigma_world_grad_in[1]; // xy
+  h_sigma_grad_analytic_full[2] = h_sigma_world_grad_in[2]; // xz
+  h_sigma_grad_analytic_full[3] = h_sigma_world_grad_in[3]; // yy
+  h_sigma_grad_analytic_full[4] = h_sigma_world_grad_in[4]; // yz
+  h_sigma_grad_analytic_full[5] = h_sigma_world_grad_in[5]; // zz
 
-  // Check grad w.r.t. sigma_world
-  for (int i = 0; i < N * 9; ++i) {
+  // Check grad w.r.t. sigma_world (6 params)
+  for (int i = 0; i < N * 6; ++i) {
     std::vector<float> sigma_p = h_sigma_world;
     sigma_p[i] += h;
     std::vector<float> sigma_m = h_sigma_world;
@@ -387,20 +397,20 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
   // Host data
   std::vector<float> h_q = {0.70710678, 0.70710678, 0.0, 0.0}; // Gaussian 1: 90 deg rot around X
   std::vector<float> h_s = {-0.1, -0.2, -0.3};
-  std::vector<float> h_dSigma_in = {-0.1, -0.2, -0.3, -0.2, -0.4, -0.5, -0.3, -0.5, -0.6};
+  std::vector<float> h_dSigma_in = {-0.1, -0.2, -0.3, -0.4, -0.5, -0.6}; // xx, xy, xz, yy, yz, zz
   std::vector<float> h_dQ_in(N * 4);
   std::vector<float> h_dS_in(N * 3);
 
   // Device data
   auto d_q = device_alloc<float>(N * 4);
   auto d_s = device_alloc<float>(N * 3);
-  auto d_dSigma_in = device_alloc<float>(N * 9);
+  auto d_dSigma_in = device_alloc<float>(N * 6);
   auto d_dQ_in = device_alloc<float>(N * 4);
   auto d_dS_in = device_alloc<float>(N * 3);
 
   CUDA_CHECK(cudaMemcpy(d_q, h_q.data(), N * 4 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_s, h_s.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_dSigma_in, h_dSigma_in.data(), N * 9 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_dSigma_in, h_dSigma_in.data(), N * 6 * sizeof(float), cudaMemcpyHostToDevice));
 
   // Run kernel
   compute_sigma_backward(d_q, d_s, d_dSigma_in, N, d_dQ_in, d_dS_in);
@@ -411,7 +421,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
 
   // Numerical gradient check
   auto forward_sigma = [&](const std::vector<float> &q_in, const std::vector<float> &s_in) {
-    std::vector<float> sigma(N * 9);
+    std::vector<float> sigma(N * 6);
     for (int i = 0; i < N; ++i) {
       float qw = q_in[i * 4 + 0];
       float qx = q_in[i * 4 + 1];
@@ -451,15 +461,13 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
       M[8] = R[8] * S_z;
 
       // Sigma = M * M^T
-      sigma[i * 9 + 0] = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
-      sigma[i * 9 + 1] = M[0] * M[3] + M[1] * M[4] + M[2] * M[5];
-      sigma[i * 9 + 2] = M[0] * M[6] + M[1] * M[7] + M[2] * M[8];
-      sigma[i * 9 + 3] = sigma[i * 9 + 1];
-      sigma[i * 9 + 4] = M[3] * M[3] + M[4] * M[4] + M[5] * M[5];
-      sigma[i * 9 + 5] = M[3] * M[6] + M[4] * M[7] + M[5] * M[8];
-      sigma[i * 9 + 6] = sigma[i * 9 + 2];
-      sigma[i * 9 + 7] = sigma[i * 9 + 5];
-      sigma[i * 9 + 8] = M[6] * M[6] + M[7] * M[7] + M[8] * M[8];
+      // Store 6 params: xx, xy, xz, yy, yz, zz
+      sigma[i * 6 + 0] = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
+      sigma[i * 6 + 1] = M[0] * M[3] + M[1] * M[4] + M[2] * M[5];
+      sigma[i * 6 + 2] = M[0] * M[6] + M[1] * M[7] + M[2] * M[8];
+      sigma[i * 6 + 3] = M[3] * M[3] + M[4] * M[4] + M[5] * M[5];
+      sigma[i * 6 + 4] = M[3] * M[6] + M[4] * M[7] + M[5] * M[8];
+      sigma[i * 6 + 5] = M[6] * M[6] + M[7] * M[7] + M[8] * M[8];
     }
     return sigma;
   };

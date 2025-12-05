@@ -136,7 +136,7 @@ __global__ void conic_backward_kernel(const float *__restrict__ J, const float *
                                       const float *__restrict__ view, const float *__restrict__ conic,
                                       const float *__restrict__ conic_grad_out, const int N, float *J_grad_in,
                                       float *sigma_grad_in) {
-  constexpr int SIGMA_STRIDE = 9;
+  constexpr int SIGMA_STRIDE = 6;
   constexpr int J_STRIDE = 6;
   constexpr int CONIC_STRIDE = 3;
 
@@ -177,9 +177,9 @@ __global__ void conic_backward_kernel(const float *__restrict__ J, const float *
   const float s00 = sigma[sigma_base_idx + 0];
   const float s01 = sigma[sigma_base_idx + 1];
   const float s02 = sigma[sigma_base_idx + 2];
-  const float s11 = sigma[sigma_base_idx + 4];
-  const float s12 = sigma[sigma_base_idx + 5];
-  const float s22 = sigma[sigma_base_idx + 8];
+  const float s11 = sigma[sigma_base_idx + 3];
+  const float s12 = sigma[sigma_base_idx + 4];
+  const float s22 = sigma[sigma_base_idx + 5];
 
   // Recompute M = J @ W
   const float m00 = j00 * w00 + j01 * w10 + j02 * w20;
@@ -244,14 +244,11 @@ __global__ void conic_backward_kernel(const float *__restrict__ J, const float *
   float ds22 = dv20 * m02 + dv21 * m12;
 
   sigma_grad_in[sigma_base_idx + 0] += ds00;
-  sigma_grad_in[sigma_base_idx + 1] += ds01 * 0.5f; // Store upper triangle, sum contributions
-  sigma_grad_in[sigma_base_idx + 2] += ds02 * 0.5f;
-  sigma_grad_in[sigma_base_idx + 3] += ds01 * 0.5f; // s10
-  sigma_grad_in[sigma_base_idx + 4] += ds11;
-  sigma_grad_in[sigma_base_idx + 5] += ds12 * 0.5f;
-  sigma_grad_in[sigma_base_idx + 6] += ds02 * 0.5f; // s20
-  sigma_grad_in[sigma_base_idx + 7] += ds12 * 0.5f; // s21
-  sigma_grad_in[sigma_base_idx + 8] += ds22;
+  sigma_grad_in[sigma_base_idx + 1] += ds01; // Store upper triangle, sum contributions
+  sigma_grad_in[sigma_base_idx + 2] += ds02;
+  sigma_grad_in[sigma_base_idx + 3] += ds11;
+  sigma_grad_in[sigma_base_idx + 4] += ds12;
+  sigma_grad_in[sigma_base_idx + 5] += ds22;
 
   // Compute dL/dM (from Conic)
   float dm_from_conic_00 = d_c00 * v00 + d_c01 * v01;
@@ -367,15 +364,15 @@ __global__ void sigma_backward_kernel(const float *__restrict__ q, const float *
 
   // Load dSigma and reconstruct the full symmetric matrix
   float dSigma[9];
-  dSigma[0] = dSigma_in[idx * 9 + 0]; // xx
-  dSigma[1] = dSigma_in[idx * 9 + 1]; // xy
-  dSigma[2] = dSigma_in[idx * 9 + 2]; // xz
-  dSigma[3] = dSigma_in[idx * 9 + 3]; // yx
-  dSigma[4] = dSigma_in[idx * 9 + 4]; // yy
-  dSigma[5] = dSigma_in[idx * 9 + 5]; // yz
-  dSigma[6] = dSigma_in[idx * 9 + 6]; // zx
-  dSigma[7] = dSigma_in[idx * 9 + 7]; // zy
-  dSigma[8] = dSigma_in[idx * 9 + 8]; // zz
+  dSigma[0] = dSigma_in[idx * 6 + 0]; // xx
+  dSigma[1] = dSigma_in[idx * 6 + 1]; // xy
+  dSigma[2] = dSigma_in[idx * 6 + 2]; // xz
+  dSigma[3] = dSigma_in[idx * 6 + 1]; // yx = xy
+  dSigma[4] = dSigma_in[idx * 6 + 3]; // yy
+  dSigma[5] = dSigma_in[idx * 6 + 4]; // yz
+  dSigma[6] = dSigma_in[idx * 6 + 2]; // zx = xz
+  dSigma[7] = dSigma_in[idx * 6 + 4]; // zy = yz
+  dSigma[8] = dSigma_in[idx * 6 + 5]; // zz
 
   // dM = 2 * dSigma * M
   float dM[9];
