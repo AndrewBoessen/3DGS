@@ -227,11 +227,11 @@ __global__ void conic_backward_kernel(const float *__restrict__ J, const float *
   // c11 = m10*v01 + m11*v11 + m12*v21
 
   // Compute dL/dV
-  float dv00 = d_c00 * m00;
+  float dv00 = d_c00 * m00 + d_c01 * m10;
   float dv01 = d_c01 * m00 + d_c11 * m10;
-  float dv10 = d_c00 * m01;
+  float dv10 = d_c00 * m01 + d_c01 * m11;
   float dv11 = d_c01 * m01 + d_c11 * m11;
-  float dv20 = d_c00 * m02;
+  float dv20 = d_c00 * m02 + d_c01 * m12;
   float dv21 = d_c01 * m02 + d_c11 * m12;
 
   // Compute dL/dSigma = dL/dV @ M
@@ -257,9 +257,9 @@ __global__ void conic_backward_kernel(const float *__restrict__ J, const float *
   float dm_from_conic_00 = d_c00 * v00 + d_c01 * v01;
   float dm_from_conic_01 = d_c00 * v10 + d_c01 * v11;
   float dm_from_conic_02 = d_c00 * v20 + d_c01 * v21;
-  float dm_from_conic_10 = d_c11 * v01; // d_c01 * v00 is for c10, which is symmetric to c01
-  float dm_from_conic_11 = d_c11 * v11;
-  float dm_from_conic_12 = d_c11 * v21;
+  float dm_from_conic_10 = d_c01 * v00 + d_c11 * v01;
+  float dm_from_conic_11 = d_c01 * v10 + d_c11 * v11;
+  float dm_from_conic_12 = d_c01 * v20 + d_c11 * v21;
 
   // Compute dL/dM (from V = Sigma @ M^T) = (dL/dV)^T @ Sigma
   float dm_from_V_00 = dv00 * s00 + dv10 * s01 + dv20 * s02;

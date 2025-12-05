@@ -69,6 +69,7 @@ TEST_F(CudaBackwardKernelTest, ProjectToScreenBackward) {
   CUDA_CHECK(cudaMemcpy(d_xyz_c, h_xyz_c.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_proj, h_proj.data(), 16 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_uv_grad_out, h_uv_grad_out.data(), N * 2 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemset(d_xyz_c_grad_in, 0, N * 3 * sizeof(float)));
 
   // Run kernel
   project_to_screen_backward(d_xyz_c, d_proj, d_uv_grad_out, N, width, height, d_xyz_c_grad_in);
@@ -319,6 +320,8 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
   CUDA_CHECK(cudaMemcpy(d_view, h_view.data(), 16 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_conic, h_conic.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_conic_grad_out, h_conic_grad_out.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemset(d_J_grad_in, 0, N * 6 * sizeof(float)));
+  CUDA_CHECK(cudaMemset(d_sigma_world_grad_in, 0, N * 9 * sizeof(float)));
 
   // Run kernel
   compute_conic_backward(d_J, d_sigma_world, d_view, d_conic, d_conic_grad_out, N, d_J_grad_in, d_sigma_world_grad_in);
