@@ -50,7 +50,6 @@ __global__ void render_tiles_kernel(const int num_tiles_x, const int num_tiles_y
     float basic;
     float linear;
     float quad;
-    float inv_det;
 
     float3 color = {rgb[gaussian_idx * 3 + 0], rgb[gaussian_idx * 3 + 1], rgb[gaussian_idx * 3 + 2]};
     float opa = 1.0f / (1.0f + __expf(-opacity[gaussian_idx]));
@@ -58,13 +57,9 @@ __global__ void render_tiles_kernel(const int num_tiles_x, const int num_tiles_y
     d.x = uvs[gaussian_idx * 2 + 0] - (float)base_pixel_x;
     d.y = uvs[gaussian_idx * 2 + 1] - (float)base_pixel_y;
 
-    const float a = conic[gaussian_idx * 3 + 0] + 0.3f;
-    const float b = conic[gaussian_idx * 3 + 1];
-    const float c = conic[gaussian_idx * 3 + 2] + 0.3f;
-    inv_det = 1.0f / (a * c - b * b);
-    const float inv_cov00 = c * inv_det;
-    const float inv_cov01 = -b * inv_det;
-    const float inv_cov11 = a * inv_det;
+    const float inv_cov00 = conic[gaussian_idx * 3 + 0];
+    const float inv_cov01 = conic[gaussian_idx * 3 + 1];
+    const float inv_cov11 = conic[gaussian_idx * 3 + 2];
     basic = -0.5f * (inv_cov00 * d.x * d.x + 2.0f * inv_cov01 * d.x * d.y + inv_cov11 * d.y * d.y);
     linear = inv_cov11 * d.y + inv_cov01 * d.x;
     quad = -0.5f * inv_cov11;

@@ -3,25 +3,36 @@
 #include "checks.cuh"
 #include "gsplat_cuda/cuda_backward.cuh"
 
-__global__ void cam_intr_proj_backward_kernel(const float *__restrict__ xyz_c, const float *__restrict__ K,
-                                              const float *__restrict__ uv_grad_out, const int N,
-                                              float *__restrict__ xyz_c_grad_in) {
+__global__ void project_to_screen_backward_kernel(const float *__restrict__ xyz_c, const float *__restrict__ proj,
+                                                  const float *__restrict__ uv_grad_out, const int N, const int width,
+                                                  const int height, float *__restrict__ xyz_c_grad_in) {
   constexpr int XYZ_STRIDE = 3;
   constexpr int UV_STRIDE = 2;
 
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   const int lane_id = threadIdx.x & 0x1f; // lane_id in warp (0-31)
 
-  // Load and broadcast Intrinsic Matrix K within warp
-  // K = [fx, 0, cx, 0, fy, cy, 0, 0, 1] stored as [fx, cx, fy, cy]
-  float k_val = 0.0f;
-  if (lane_id < 9) {
-    k_val = K[lane_id];
+  // Load and broadcast Proj Matrix within warp
+  float p_val = 0.0f;
+  if (lane_id < 16) {
+    p_val = proj[lane_id];
   }
-  const float fx = __shfl_sync(0xffffffff, k_val, 0);
-  const float cx = __shfl_sync(0xffffffff, k_val, 2);
-  const float fy = __shfl_sync(0xffffffff, k_val, 4);
-  const float cy = __shfl_sync(0xffffffff, k_val, 5);
+  const float p00 = __shfl_sync(0xffffffff, p_val, 0);
+  const float p01 = __shfl_sync(0xffffffff, p_val, 1);
+  const float p02 = __shfl_sync(0xffffffff, p_val, 2);
+  const float p03 = __shfl_sync(0xffffffff, p_val, 3);
+  const float p10 = __shfl_sync(0xffffffff, p_val, 4);
+  const float p11 = __shfl_sync(0xffffffff, p_val, 5);
+  const float p12 = __shfl_sync(0xffffffff, p_val, 6);
+  const float p13 = __shfl_sync(0xffffffff, p_val, 7);
+  const float p20 = __shfl_sync(0xffffffff, p_val, 8);
+  const float p21 = __shfl_sync(0xffffffff, p_val, 9);
+  const float p22 = __shfl_sync(0xffffffff, p_val, 10);
+  const float p23 = __shfl_sync(0xffffffff, p_val, 11);
+  const float p30 = __shfl_sync(0xffffffff, p_val, 12);
+  const float p31 = __shfl_sync(0xffffffff, p_val, 13);
+  const float p32 = __shfl_sync(0xffffffff, p_val, 14);
+  const float p33 = __shfl_sync(0xffffffff, p_val, 15);
 
   if (i >= N) {
     return;
@@ -31,33 +42,43 @@ __global__ void cam_intr_proj_backward_kernel(const float *__restrict__ xyz_c, c
   const float y = xyz_c[i * XYZ_STRIDE + 1];
   const float z = xyz_c[i * XYZ_STRIDE + 2];
 
-  // Avoid division by zero or negative depth
-  if (z <= 1e-4f) {
-    xyz_c_grad_in[i * XYZ_STRIDE + 0] += 0.0f;
-    xyz_c_grad_in[i * XYZ_STRIDE + 1] += 0.0f;
-    xyz_c_grad_in[i * XYZ_STRIDE + 2] += 0.0f;
+  // Forward pass recomputation
+  float x_clip = p00 * x + p01 * y + p02 * z + p03;
+  float y_clip = p10 * x + p11 * y + p12 * z + p13;
+  float w_clip = p30 * x + p31 * y + p32 * z + p33;
+
+  // Avoid division by zero
+  if (fabsf(w_clip) < 1e-6f) {
     return;
   }
 
-  const float z_inv = 1.0f / (z + 1e-6f);
-  const float z_inv2 = z_inv * z_inv;
+  const float w_inv = 1.0f / w_clip;
+  const float w_inv2 = w_inv * w_inv;
 
   const float grad_u = uv_grad_out[i * UV_STRIDE + 0];
   const float grad_v = uv_grad_out[i * UV_STRIDE + 1];
 
-  // --- Gradient w.r.t. xyz_c ---
-  // du/dx = fx/z, dv/dy = fy/z
-  // du/dz = -fx*x/z^2, dv/dz = -fy*y/z^2
-  xyz_c_grad_in[i * XYZ_STRIDE + 0] += grad_u * fx * z_inv;
-  xyz_c_grad_in[i * XYZ_STRIDE + 1] += grad_v * fy * z_inv;
-  xyz_c_grad_in[i * XYZ_STRIDE + 2] += -(grad_u * fx * x * z_inv2 + grad_v * fy * y * z_inv2);
+  // d(NDC) / d(uv)
+  float dx_ndc = grad_u * 2.0f / width;
+  float dy_ndc = grad_v * 2.0f / height;
+
+  // d(Clip) / d(NDC)
+  float dx_clip = dx_ndc * w_inv;
+  float dy_clip = dy_ndc * w_inv;
+  float dw_clip = -dx_ndc * x_clip * w_inv2 - dy_ndc * y_clip * w_inv2;
+  float dz_clip = 0.0f;
+
+  // d(xyz_c) / d(Clip) = Proj^T * d(Clip)
+  xyz_c_grad_in[i * XYZ_STRIDE + 0] += p00 * dx_clip + p10 * dy_clip + p20 * dz_clip + p30 * dw_clip;
+  xyz_c_grad_in[i * XYZ_STRIDE + 1] += p01 * dx_clip + p11 * dy_clip + p21 * dz_clip + p31 * dw_clip;
+  xyz_c_grad_in[i * XYZ_STRIDE + 2] += p02 * dx_clip + p12 * dy_clip + p22 * dz_clip + p32 * dw_clip;
 }
 
-void camera_intrinsic_projection_backward(const float *const xyz_c, const float *const K,
-                                          const float *const uv_grad_out, const int N, float *xyz_c_grad_in,
-                                          cudaStream_t stream) {
+void project_to_screen_backward(const float *const xyz_c, const float *const proj, const float *const uv_grad_out,
+                                const int N, const int width, const int height, float *xyz_c_grad_in,
+                                cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(xyz_c);
-  ASSERT_DEVICE_POINTER(K);
+  ASSERT_DEVICE_POINTER(proj);
   ASSERT_DEVICE_POINTER(uv_grad_out);
   ASSERT_DEVICE_POINTER(xyz_c_grad_in);
 
@@ -67,35 +88,36 @@ void camera_intrinsic_projection_backward(const float *const xyz_c, const float 
   dim3 gridsize(num_blocks, 1, 1);
   dim3 blocksize(threads_per_block, 1, 1);
 
-  cam_intr_proj_backward_kernel<<<gridsize, blocksize, 0, stream>>>(xyz_c, K, uv_grad_out, N, xyz_c_grad_in);
+  project_to_screen_backward_kernel<<<gridsize, blocksize, 0, stream>>>(xyz_c, proj, uv_grad_out, N, width, height,
+                                                                        xyz_c_grad_in);
 }
 
-__global__ void cam_extr_proj_backward_kernel(const float *__restrict__ xyz_w, const float *__restrict__ T,
-                                              const float *__restrict__ xyz_c_grad_out, const int N,
-                                              float *__restrict__ xyz_w_grad_in) {
+__global__ void compute_camera_space_points_backward_kernel(const float *__restrict__ xyz_w,
+                                                            const float *__restrict__ view,
+                                                            const float *__restrict__ xyz_c_grad_out, const int N,
+                                                            float *__restrict__ xyz_w_grad_in) {
   constexpr int XYZ_STRIDE = 3;
 
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   const int lane_id = threadIdx.x & 0x1f;
 
-  // Load and broadcast Extrinsic Matrix T (3x4) within warp
-  float t_val = 0.0f;
-  if (lane_id < 12) {
-    t_val = T[lane_id];
+  // Load and broadcast View Matrix (4x4) within warp
+  float v_val = 0.0f;
+  if (lane_id < 16) {
+    v_val = view[lane_id];
   }
-  // T = [r00, r01, r02, t0, r10, r11, r12, t1, r20, r21, r22, t2]
-  const float r00 = __shfl_sync(0xffffffff, t_val, 0);
-  const float r01 = __shfl_sync(0xffffffff, t_val, 1);
-  const float r02 = __shfl_sync(0xffffffff, t_val, 2);
-  const float t0 = __shfl_sync(0xffffffff, t_val, 3);
-  const float r10 = __shfl_sync(0xffffffff, t_val, 4);
-  const float r11 = __shfl_sync(0xffffffff, t_val, 5);
-  const float r12 = __shfl_sync(0xffffffff, t_val, 6);
-  const float t1 = __shfl_sync(0xffffffff, t_val, 7);
-  const float r20 = __shfl_sync(0xffffffff, t_val, 8);
-  const float r21 = __shfl_sync(0xffffffff, t_val, 9);
-  const float r22 = __shfl_sync(0xffffffff, t_val, 10);
-  const float t2 = __shfl_sync(0xffffffff, t_val, 11);
+  const float v00 = __shfl_sync(0xffffffff, v_val, 0);
+  const float v01 = __shfl_sync(0xffffffff, v_val, 1);
+  const float v02 = __shfl_sync(0xffffffff, v_val, 2);
+  const float v03 = __shfl_sync(0xffffffff, v_val, 3);
+  const float v10 = __shfl_sync(0xffffffff, v_val, 4);
+  const float v11 = __shfl_sync(0xffffffff, v_val, 5);
+  const float v12 = __shfl_sync(0xffffffff, v_val, 6);
+  const float v13 = __shfl_sync(0xffffffff, v_val, 7);
+  const float v20 = __shfl_sync(0xffffffff, v_val, 8);
+  const float v21 = __shfl_sync(0xffffffff, v_val, 9);
+  const float v22 = __shfl_sync(0xffffffff, v_val, 10);
+  const float v23 = __shfl_sync(0xffffffff, v_val, 11);
 
   if (i >= N) {
     return;
@@ -106,17 +128,19 @@ __global__ void cam_extr_proj_backward_kernel(const float *__restrict__ xyz_w, c
   const float grad_z_c = xyz_c_grad_out[i * XYZ_STRIDE + 2];
 
   // --- Gradient w.r.t. xyz_w ---
-  // d(xyz_w) = R^T * d(xyz_c)
-  xyz_w_grad_in[i * XYZ_STRIDE + 0] = r00 * grad_x_c + r10 * grad_y_c + r20 * grad_z_c;
-  xyz_w_grad_in[i * XYZ_STRIDE + 1] = r01 * grad_x_c + r11 * grad_y_c + r21 * grad_z_c;
-  xyz_w_grad_in[i * XYZ_STRIDE + 2] = r02 * grad_x_c + r12 * grad_y_c + r22 * grad_z_c;
+  // d(xyz_w) = View^T * d(xyz_c) (ignoring translation part for direction vectors, but xyz_w is point)
+  // Actually, d(xyz_w) = R^T * d(xyz_c) because translation is constant w.r.t. xyz_w.
+  // The View matrix upper-left 3x3 is the rotation R.
+  xyz_w_grad_in[i * XYZ_STRIDE + 0] = v00 * grad_x_c + v10 * grad_y_c + v20 * grad_z_c;
+  xyz_w_grad_in[i * XYZ_STRIDE + 1] = v01 * grad_x_c + v11 * grad_y_c + v21 * grad_z_c;
+  xyz_w_grad_in[i * XYZ_STRIDE + 2] = v02 * grad_x_c + v12 * grad_y_c + v22 * grad_z_c;
 }
 
-void camera_extrinsic_projection_backward(const float *const xyz_w, const float *const T,
+void compute_camera_space_points_backward(const float *const xyz_w, const float *const view,
                                           const float *const xyz_c_grad_out, const int N, float *xyz_w_grad_in,
                                           cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(xyz_w);
-  ASSERT_DEVICE_POINTER(T);
+  ASSERT_DEVICE_POINTER(view);
   ASSERT_DEVICE_POINTER(xyz_c_grad_out);
   ASSERT_DEVICE_POINTER(xyz_w_grad_in);
 
@@ -126,5 +150,6 @@ void camera_extrinsic_projection_backward(const float *const xyz_w, const float 
   dim3 gridsize(num_blocks, 1, 1);
   dim3 blocksize(threads_per_block, 1, 1);
 
-  cam_extr_proj_backward_kernel<<<gridsize, blocksize, 0, stream>>>(xyz_w, T, xyz_c_grad_out, N, xyz_w_grad_in);
+  compute_camera_space_points_backward_kernel<<<gridsize, blocksize, 0, stream>>>(xyz_w, view, xyz_c_grad_out, N,
+                                                                                  xyz_w_grad_in);
 }

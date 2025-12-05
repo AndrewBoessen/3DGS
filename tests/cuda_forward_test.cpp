@@ -91,37 +91,37 @@ TEST_F(CudaKernelTest, ComputeSigma) {
   CUDA_CHECK(cudaFree(d_sigma));
 }
 
-// Test case for the camera_intrinsic_projection kernel.
-TEST_F(CudaKernelTest, CameraIntrinsicProjection) {
+// Test case for the project_to_screen kernel.
+TEST_F(CudaKernelTest, ProjectToScreen) {
   const int N = 4; // Number of points
+  const int width = 1920;
+  const int height = 1080;
 
-  // Host-side data
-  // K = [fx, 0, cx, 0, fy, cy, 0, 0, 1]
-  const std::vector<float> h_K = {100.0f, 0.0f, 50.0f, 0.0f, 120.0f, 60.0f, 0.0f, 0.0f, 1.0f};
-  const float fx = h_K[0], cx = h_K[2], fy = h_K[4], cy = h_K[5];
+  const std::vector<float> h_proj = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+                                     0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f};
 
   const std::vector<float> h_xyz = {
-      1.0f,  1.0f,  2.0f, // Point 0
-      2.0f,  -3.0f, 5.0f, // Point 1
-      0.0f,  0.0f,  1.0f, // Point 2
-      -4.0f, 2.0f,  10.0f // Point 3
+      1.0f,  1.0f,  2.0f, // Point 0: x/z = 0.5, y/z = 0.5 -> uv = (0.75*w, 0.75*h)
+      2.0f,  -3.0f, 5.0f, // Point 1: x/z = 0.4, y/z = -0.6 -> uv = (0.7*w, 0.2*h)
+      0.0f,  0.0f,  1.0f, // Point 2: 0, 0 -> uv = (0.5*w, 0.5*h)
+      -4.0f, 2.0f,  10.0f // Point 3: -0.4, 0.2 -> uv = (0.3*w, 0.6*h)
   };
   std::vector<float> h_uv(N * 2);
 
   // Device-side data pointers
-  float *d_K, *d_xyz, *d_uv;
+  float *d_proj, *d_xyz, *d_uv;
 
   // Allocate memory on the device
-  CUDA_CHECK(cudaMalloc(&d_K, h_K.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_proj, h_proj.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_xyz, h_xyz.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_uv, h_uv.size() * sizeof(float)));
 
   // Copy input data from host to device
-  CUDA_CHECK(cudaMemcpy(d_K, h_K.data(), h_K.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_proj, h_proj.data(), h_proj.size() * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_xyz, h_xyz.data(), h_xyz.size() * sizeof(float), cudaMemcpyHostToDevice));
 
   // Launch the kernel
-  camera_intrinsic_projection(d_xyz, d_K, N, d_uv);
+  project_to_screen(d_xyz, d_proj, N, width, height, d_uv);
   CUDA_CHECK(cudaDeviceSynchronize()); // Wait for the kernel to finish
 
   // Copy result data from device to host
@@ -133,17 +133,26 @@ TEST_F(CudaKernelTest, CameraIntrinsicProjection) {
     const float x = h_xyz[i * 3 + 0];
     const float y = h_xyz[i * 3 + 1];
     const float z = h_xyz[i * 3 + 2];
-    expected_uv[i * 2 + 0] = fx * x / z + cx;
-    expected_uv[i * 2 + 1] = fy * y / z + cy;
+    // With our custom Proj:
+    // x_clip = x
+    // y_clip = y
+    // w_clip = z
+    // x_ndc = x / z
+    // y_ndc = y / z
+    // u = (x_ndc * 0.5 + 0.5) * width
+    // v = (y_ndc * 0.5 + 0.5) * height
+
+    expected_uv[i * 2 + 0] = (x / z * 0.5f + 0.5f) * width;
+    expected_uv[i * 2 + 1] = (y / z * 0.5f + 0.5f) * height;
   }
 
   // Compare results
   for (int i = 0; i < N * 2; ++i) {
-    ASSERT_NEAR(h_uv[i], expected_uv[i], 1e-5);
+    ASSERT_NEAR(h_uv[i], expected_uv[i], 1e-4);
   }
 
   // Free device memory
-  CUDA_CHECK(cudaFree(d_K));
+  CUDA_CHECK(cudaFree(d_proj));
   CUDA_CHECK(cudaFree(d_xyz));
   CUDA_CHECK(cudaFree(d_uv));
 }
@@ -222,17 +231,23 @@ TEST_F(CudaKernelTest, GaussianCulling) {
   CUDA_CHECK(cudaFree(d_mask));
 }
 
-// Test case for the camera_extrinsic_projection function.
-TEST_F(CudaKernelTest, CameraExtrinsicProjection) {
+// Test case for the compute_camera_space_points function.
+TEST_F(CudaKernelTest, ComputeCameraSpacePoints) {
   const int N = 3; // Number of points
 
   // Host-side data
-  // Extrinsic matrix T = [R|t] is 3x4.
+  // View matrix V = [R|t] is 4x4.
   // R is identity, t = [10, 20, 30].
-  const std::vector<float> h_T = {
+  // V =
+  // 1 0 0 10
+  // 0 1 0 20
+  // 0 0 1 30
+  // 0 0 0 1
+  const std::vector<float> h_view = {
       1.0f, 0.0f, 0.0f, 10.0f, // Row 1
       0.0f, 1.0f, 0.0f, 20.0f, // Row 2
-      0.0f, 0.0f, 1.0f, 30.0f  // Row 3
+      0.0f, 0.0f, 1.0f, 30.0f, // Row 3
+      0.0f, 0.0f, 0.0f, 1.0f   // Row 4
   };
 
   // World coordinates (x, y, z)
@@ -246,35 +261,35 @@ TEST_F(CudaKernelTest, CameraExtrinsicProjection) {
   std::vector<float> h_xyz_c(N * 3);
 
   // Device-side data pointers
-  float *d_T, *d_xyz_w, *d_xyz_c;
+  float *d_view, *d_xyz_w, *d_xyz_c;
 
   // Allocate memory on the device
-  CUDA_CHECK(cudaMalloc(&d_T, h_T.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_view, h_view.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_xyz_w, h_xyz_w.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_xyz_c, h_xyz_c.size() * sizeof(float)));
 
   // Copy input data from host to device
-  CUDA_CHECK(cudaMemcpy(d_T, h_T.data(), h_T.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_view, h_view.data(), h_view.size() * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_xyz_w, h_xyz_w.data(), h_xyz_w.size() * sizeof(float), cudaMemcpyHostToDevice));
 
-  // Launch the function (which wraps a CUBLAS call)
-  camera_extrinsic_projection(d_xyz_w, d_T, N, d_xyz_c);
+  // Launch the function
+  compute_camera_space_points(d_xyz_w, d_view, N, d_xyz_c);
   CUDA_CHECK(cudaDeviceSynchronize()); // Wait for the kernel to finish
 
   // Copy result data from device to host
   CUDA_CHECK(cudaMemcpy(h_xyz_c.data(), d_xyz_c, h_xyz_c.size() * sizeof(float), cudaMemcpyDeviceToHost));
 
   // Calculate expected results on the host
-  // xyz_c = R * xyz_w + t
+  // xyz_c = V * xyz_w
   std::vector<float> expected_xyz_c(N * 3);
   for (int i = 0; i < N; ++i) {
     const float x_w = h_xyz_w[i * 3 + 0];
     const float y_w = h_xyz_w[i * 3 + 1];
     const float z_w = h_xyz_w[i * 3 + 2];
     // Since R is identity, this simplifies to x_c = x_w + t_x, etc.
-    expected_xyz_c[i * 3 + 0] = x_w + h_T[3];  // t_x
-    expected_xyz_c[i * 3 + 1] = y_w + h_T[7];  // t_y
-    expected_xyz_c[i * 3 + 2] = z_w + h_T[11]; // t_z
+    expected_xyz_c[i * 3 + 0] = x_w + h_view[3];  // t_x
+    expected_xyz_c[i * 3 + 1] = y_w + h_view[7];  // t_y
+    expected_xyz_c[i * 3 + 2] = z_w + h_view[11]; // t_z
   }
 
   // Compare results
@@ -283,7 +298,7 @@ TEST_F(CudaKernelTest, CameraExtrinsicProjection) {
   }
 
   // Free device memory
-  CUDA_CHECK(cudaFree(d_T));
+  CUDA_CHECK(cudaFree(d_view));
   CUDA_CHECK(cudaFree(d_xyz_w));
   CUDA_CHECK(cudaFree(d_xyz_c));
 }
@@ -295,34 +310,44 @@ TEST_F(CudaKernelTest, ComputeConic) {
 
   // Host-side input data
   const std::vector<float> h_xyz = {1.0f, 2.0f, 5.0f}; // Camera-space coordinates
-  const std::vector<float> h_K = {100.0f, 0.0f, 50.0f, 0.0f, 120.0f, 60.0f, 0.0f, 0.0f, 1.0f}; // Intrinsics
+  // Proj matrix (4x4)
+  // Use simple identity-like projection for easy Jacobian verification
+  // P =
+  // 1 0 0 0
+  // 0 1 0 0
+  // 0 0 0 1
+  // 0 0 1 0
+  // This means x_proj = x/z, y_proj = y/z
+  const std::vector<float> h_proj = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+                                     0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+
   const std::vector<float> h_sigma = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f}; // 3x3 Identity covariance
-  const std::vector<float> h_T = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
-                                  0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f}; // Identity extrinsics
+  const std::vector<float> h_view = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+                                     0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f}; // Identity view
 
   // Host-side output buffers
   std::vector<float> h_J(N * 6);
   std::vector<float> h_conic(N * 3);
 
   // Device-side pointers
-  float *d_xyz, *d_K, *d_sigma, *d_T, *d_J, *d_conic;
+  float *d_xyz, *d_proj, *d_sigma, *d_view, *d_J, *d_conic;
 
   // Allocate memory on the device
   CUDA_CHECK(cudaMalloc(&d_xyz, h_xyz.size() * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&d_K, h_K.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_proj, h_proj.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_sigma, h_sigma.size() * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&d_T, h_T.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_view, h_view.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_J, h_J.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_conic, h_conic.size() * sizeof(float)));
 
   // Copy input data from host to device
   CUDA_CHECK(cudaMemcpy(d_xyz, h_xyz.data(), h_xyz.size() * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_K, h_K.data(), h_K.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_proj, h_proj.data(), h_proj.size() * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_sigma, h_sigma.data(), h_sigma.size() * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_T, h_T.data(), h_T.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_view, h_view.data(), h_view.size() * sizeof(float), cudaMemcpyHostToDevice));
 
   // Launch the function to be tested
-  compute_conic(d_xyz, d_K, d_sigma, d_T, N, d_J, d_conic);
+  compute_conic(d_xyz, d_view, d_sigma, d_proj, N, d_J, d_conic);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // Copy result from device to host
@@ -330,23 +355,39 @@ TEST_F(CudaKernelTest, ComputeConic) {
 
   // --- Calculate expected results on the host for verification ---
   const float x = h_xyz[0], y = h_xyz[1], z = h_xyz[2];
-  const float fx = h_K[0], fy = h_K[4];
+  // With our simple Proj:
+  // x_ndc = x / z
+  // y_ndc = y / z
+  // J = d(uv)/d(xyz)
+  // u = x/z * W/2 + W/2
+  // v = y/z * H/2 + H/2
+  // But wait, the kernel computes J for NDC coordinates (or screen? check kernel)
+  // The kernel computes J = d(x_proj, y_proj) / d(x, y, z)
+  // J = [ 1/z, 0, -x/z^2 ]
+  //     [ 0, 1/z, -y/z^2 ]
+  // (Assuming p_proj.x = x/z, p_proj.y = y/z)
 
-  // 1. Expected Jacobian J
-  const float j00 = fx / z;
-  const float j02 = -fx * x / (z * z);
-  const float j11 = fy / z;
-  const float j12 = -fy * y / (z * z);
+  const float j00 = 1.0f / z;
+  const float j02 = -x / (z * z);
+  const float j11 = 1.0f / z;
+  const float j12 = -y / (z * z);
 
-  // 2. W is identity because T is identity
+  // 2. W is identity because View is identity
   // 3. M = J @ W = J
   // 4. V = Sigma @ M^T = Identity @ J^T = J^T
-  // 5. Conic = M @ V = J @ J^T
-  const float c00 = j00 * j00 + 0.0f * 0.0f + j02 * j02;
-  const float c01 = j00 * 0.0f + 0.0f * j11 + j02 * j12 * 2;
-  const float c11 = 0.0f * 0.0f + j11 * j11 + j12 * j12;
+  // 5. Covariance = M @ V = J @ J^T
+  const float cov00 = j00 * j00 + 0.0f * 0.0f + j02 * j02 + 0.3f;
+  const float cov01 = j00 * 0.0f + 0.0f * j11 + j02 * j12;
+  const float cov11 = 0.0f * 0.0f + j11 * j11 + j12 * j12 + 0.3f;
 
-  const std::vector<float> expected_conic = {c00, c01 / 2.0f, c11};
+  // 6. Conic = Inverse(Covariance)
+  const float det = cov00 * cov11 - cov01 * cov01;
+  const float inv_det = 1.0f / det;
+  const float expected_c00 = cov11 * inv_det;
+  const float expected_c01 = -cov01 * inv_det;
+  const float expected_c11 = cov00 * inv_det;
+
+  const std::vector<float> expected_conic = {expected_c00, expected_c01, expected_c11};
 
   // Compare results
   for (size_t i = 0; i < h_conic.size(); ++i) {
@@ -355,9 +396,9 @@ TEST_F(CudaKernelTest, ComputeConic) {
 
   // Free device memory
   CUDA_CHECK(cudaFree(d_xyz));
-  CUDA_CHECK(cudaFree(d_K));
+  CUDA_CHECK(cudaFree(d_proj));
   CUDA_CHECK(cudaFree(d_sigma));
-  CUDA_CHECK(cudaFree(d_T));
+  CUDA_CHECK(cudaFree(d_view));
   CUDA_CHECK(cudaFree(d_J));
   CUDA_CHECK(cudaFree(d_conic));
 }
@@ -654,12 +695,12 @@ TEST_F(CudaKernelTest, RenderImageMultipleGaussians) {
       const float u_diff = u_pixel - u_mean;
       const float v_diff = v_pixel - v_mean;
 
-      const float a = h_conic[gaussian_idx * 3 + 0] + 0.3f;
-      const float b_c = h_conic[gaussian_idx * 3 + 1];
-      const float c = h_conic[gaussian_idx * 3 + 2] + 0.3f;
+      const float inv_cov00 = h_conic[gaussian_idx * 3 + 0];
+      const float inv_cov01 = h_conic[gaussian_idx * 3 + 1];
+      const float inv_cov11 = h_conic[gaussian_idx * 3 + 2];
 
-      const float det = a * c - b_c * b_c;
-      const float mh_sq = (c * u_diff * u_diff - (b_c + b_c) * u_diff * v_diff + a * v_diff * v_diff) / det;
+      const float mh_sq =
+          (inv_cov00 * u_diff * u_diff + 2.0f * inv_cov01 * u_diff * v_diff + inv_cov11 * v_diff * v_diff);
 
       float alpha = 0.0f;
       if (mh_sq > 0.0f) {

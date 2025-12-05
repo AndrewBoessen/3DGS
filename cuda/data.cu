@@ -94,8 +94,8 @@ GradientAccumulators::GradientAccumulators(size_t max_gaussians) {
 CameraParameters::CameraParameters() {
   try {
     // Allocate camera parameters
-    d_K.resize(9);  // 3x3 matrix
-    d_T.resize(12); // 3x4 matrix
+    d_view.resize(16); // 4x4 matrix
+    d_proj.resize(16); // 4x4 matrix
   } catch (const std::exception &e) {
     fprintf(stderr, "CUDA Memory Allocation Error (CudaDataManager): %s\n", e.what());
     exit(EXIT_FAILURE);

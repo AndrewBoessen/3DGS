@@ -47,7 +47,7 @@ struct GradientAccumulators {
 // Holds buffer to storing current camera parameters
 struct CameraParameters {
   // Camera parameters
-  thrust::device_vector<float> d_K, d_T;
+  thrust::device_vector<float> d_view, d_proj;
 
   CameraParameters();
 };
