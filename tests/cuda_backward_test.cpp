@@ -57,7 +57,7 @@ TEST_F(CudaBackwardKernelTest, ProjectToScreenBackward) {
   // v = (y/z * 0.5 + 0.5) * height
   std::vector<float> h_proj = {1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0};
 
-  std::vector<float> h_uv_grad_out = {0.1, 0.2, 0.3, 0.4};
+  std::vector<float> h_uv_grad_out = {0.01, 0.02, 0.03, 0.04};
   std::vector<float> h_xyz_c_grad_in(N * 3);
 
   // Device data

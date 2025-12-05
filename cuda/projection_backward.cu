@@ -59,8 +59,8 @@ __global__ void project_to_screen_backward_kernel(const float *__restrict__ xyz_
   const float grad_v = uv_grad_out[i * UV_STRIDE + 1];
 
   // d(NDC) / d(uv)
-  float dx_ndc = grad_u * 2.0f / width;
-  float dy_ndc = grad_v * 2.0f / height;
+  float dx_ndc = grad_u * width * 0.5f;
+  float dy_ndc = grad_v * height * 0.5f;
 
   // d(Clip) / d(NDC)
   float dx_clip = dx_ndc * w_inv;
