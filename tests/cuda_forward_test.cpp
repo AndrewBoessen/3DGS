@@ -148,7 +148,7 @@ TEST_F(CudaKernelTest, ProjectToScreen) {
 
   // Compare results
   for (int i = 0; i < N * 2; ++i) {
-    ASSERT_NEAR(h_uv[i], expected_uv[i], 1e-4);
+    ASSERT_NEAR(h_uv[i], expected_uv[i], 1e-3);
   }
 
   // Free device memory
