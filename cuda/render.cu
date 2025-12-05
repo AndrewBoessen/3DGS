@@ -29,13 +29,13 @@ __global__ void render_tiles_kernel(const int num_tiles_x, const int num_tiles_y
   const int total_splats = splat_idx_end - splat_idx_start;
 
   // Pixel-local accumulators
-  float alpha_accum[PIXELS_PER_THREAD];
+  float T[PIXELS_PER_THREAD];
   float3 accumulated_rgb[PIXELS_PER_THREAD];
   int num_splats[PIXELS_PER_THREAD];
 
 #pragma unroll
   for (int i = 0; i < PIXELS_PER_THREAD; i++) {
-    alpha_accum[i] = 0.0f;
+    T[i] = 1.0f;
     accumulated_rgb[i] = {0.0f, 0.0f, 0.0f};
     num_splats[i] = 0;
   }
@@ -43,6 +43,7 @@ __global__ void render_tiles_kernel(const int num_tiles_x, const int num_tiles_y
   unsigned int any_active = 0xFFFFFFFF;
   int index_in_tile = 0;
   const int *splats_in_tile = &gaussian_idx_by_splat_idx[splat_idx_start];
+  bool done = false;
 
   // Iterate on splats in the tile front to back
   for (; (index_in_tile < total_splats) && (any_active != 0); index_in_tile++) {
@@ -68,21 +69,22 @@ __global__ void render_tiles_kernel(const int num_tiles_x, const int num_tiles_y
     for (int i = 0; i < PIXELS_PER_THREAD; i++) {
       const float power = fminf(0.0f, basic + linear * i + quad * i * i);
 
-      const float valid_alpha = alpha_accum[i] <= 0.9999f;
-      any_active |= __ballot_sync(0xFFFFFFFF, valid_alpha);
-
       float alpha = fminf(0.99f, opa * __expf(power));
-      alpha = (valid_alpha && (alpha > 0.00392156862f)) ? alpha : 0.0f;
+      alpha = (alpha > 0.00392156862f) ? !done * alpha : 0.0f;
 
-      // Alpha blending: C_out = α * C_in + (1 - α) * C_bg
-      const float weight = alpha * (1.0f - alpha_accum[i]);
+      const float test_T = T[i] * (1.0f - alpha);
+      done = test_T < 0.0001f;
+
+      any_active |= __ballot_sync(0xFFFFFFFF, !done);
+
+      const float weight = alpha * T[i];
 
       accumulated_rgb[i].x += color.x * weight;
       accumulated_rgb[i].y += color.y * weight;
       accumulated_rgb[i].z += color.z * weight;
 
-      alpha_accum[i] += weight;
-      num_splats[i] += valid_alpha;
+      T[i] = test_T;
+      num_splats[i] += !done;
     }
   }
 
@@ -95,18 +97,12 @@ __global__ void render_tiles_kernel(const int num_tiles_x, const int num_tiles_y
 
     if (valid_pixel) {
       splats_per_pixel[global_pixel_y * image_width + global_pixel_x] = num_splats[i];
-      final_weight_per_pixel[global_pixel_y * image_width + global_pixel_x] = 1.0f - alpha_accum[i];
-
-      // Background contribution
-      float background_val = 0.0f;
-      if (alpha_accum[i] < 0.999f) {
-        background_val = background_opacity * (1.0f - alpha_accum[i]);
-      }
+      final_weight_per_pixel[global_pixel_y * image_width + global_pixel_x] = T[i];
 
       const int pixel_idx = (global_pixel_y * image_width + global_pixel_x) * 3;
-      image[pixel_idx + 0] = accumulated_rgb[i].x + background_val; // R
-      image[pixel_idx + 1] = accumulated_rgb[i].y + background_val; // G
-      image[pixel_idx + 2] = accumulated_rgb[i].z + background_val; // B
+      image[pixel_idx + 0] = accumulated_rgb[i].x + T[i] * background_opacity; // R
+      image[pixel_idx + 1] = accumulated_rgb[i].y + T[i] * background_opacity; // G
+      image[pixel_idx + 2] = accumulated_rgb[i].z + T[i] * background_opacity; // B
     }
   }
 }
