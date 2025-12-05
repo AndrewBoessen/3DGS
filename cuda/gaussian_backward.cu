@@ -442,11 +442,10 @@ __global__ void sigma_backward_kernel(const float *__restrict__ q, const float *
 
   // The gradient of the norm is zero for directions orthogonal to the vector.
   // We subtract the parallel component (the projection) and scale by the inverse norm.
-
-  dQ_in[idx * 4 + 0] = inv_norm * (d_norm_q[0] - dot * w);
-  dQ_in[idx * 4 + 1] = inv_norm * (d_norm_q[1] - dot * x);
-  dQ_in[idx * 4 + 2] = inv_norm * (d_norm_q[2] - dot * y);
-  dQ_in[idx * 4 + 3] = inv_norm * (d_norm_q[3] - dot * z);
+  dQ_in[idx * 4 + 0] = inv_norm * 0.5f * (d_norm_q[0] - dot * w);
+  dQ_in[idx * 4 + 1] = inv_norm * 0.5f * (d_norm_q[1] - dot * x);
+  dQ_in[idx * 4 + 2] = inv_norm * 0.5f * (d_norm_q[2] - dot * y);
+  dQ_in[idx * 4 + 3] = inv_norm * 0.5f * (d_norm_q[3] - dot * z);
 }
 
 void compute_sigma_backward(const float *const quaternion, const float *const scale, const float *const sigma_grad_out,

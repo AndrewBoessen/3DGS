@@ -354,7 +354,7 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
     auto loss_p = compute_loss(compute_conic_val(J_p, h_sigma_world, h_view));
     auto loss_m = compute_loss(compute_conic_val(J_m, h_sigma_world, h_view));
     float numerical_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_J_grad_in[i], numerical_grad, 1e-1);
+    EXPECT_NEAR(h_J_grad_in[i], numerical_grad, 1e-2);
   }
 
   // Reconstruct full symmetric gradient for sigma from kernel output (which is 6 params)
@@ -378,7 +378,7 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
     auto loss_p = compute_loss(compute_conic_val(h_J, sigma_p, h_view));
     auto loss_m = compute_loss(compute_conic_val(h_J, sigma_m, h_view));
     float numerical_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_sigma_grad_analytic_full[i], numerical_grad, 1e-1);
+    EXPECT_NEAR(h_sigma_grad_analytic_full[i], numerical_grad, 1e-2);
   }
 
   CUDA_CHECK(cudaFree(d_J));
@@ -494,7 +494,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float loss_m = compute_loss(sigma_m);
 
     float numerical_grad = (loss_p - loss_m) / (2 * h);
-    EXPECT_NEAR(h_dQ_in[i], numerical_grad, 1e-1);
+    EXPECT_NEAR(h_dQ_in[i], numerical_grad, 1e-2);
   }
 
   // Check grad w.r.t s
@@ -511,7 +511,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float loss_m = compute_loss(sigma_m);
 
     float numerical_grad = (loss_p - loss_m) / (2 * h);
-    EXPECT_NEAR(h_dS_in[i], numerical_grad, 1e-1);
+    EXPECT_NEAR(h_dS_in[i], numerical_grad, 1e-2);
   }
 
   CUDA_CHECK(cudaFree(d_q));
