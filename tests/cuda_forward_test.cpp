@@ -346,7 +346,7 @@ TEST_F(CudaKernelTest, ComputeConic) {
   CUDA_CHECK(cudaMemcpy(d_view, h_view.data(), h_view.size() * sizeof(float), cudaMemcpyHostToDevice));
 
   // Launch the function to be tested
-  compute_conic(d_xyz, d_view, d_sigma, d_proj, N, d_J, d_conic);
+  compute_conic(d_xyz, d_view, d_sigma, 1.0f, 1.0f, 1.0f, 1.0f, N, d_J, d_conic);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // Copy result from device to host

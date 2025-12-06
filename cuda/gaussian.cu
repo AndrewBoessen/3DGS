@@ -158,31 +158,13 @@ __global__ void compute_conic_kernel(const float *__restrict__ sigma, const floa
   conic[conic_base_idx + 2] = cov00 * inv_det;
 }
 
-__global__ void compute_projection_jacobian_kernel(const float *__restrict__ xyz, const float *__restrict__ proj,
-                                                   const int N, float *J) {
+__global__ void compute_projection_jacobian_kernel(const float *__restrict__ xyz, const float *__restrict__ view,
+                                                   const float focal_x, const float focal_y, const float tan_fovx,
+                                                   const float tan_fovy, const int N, float *J) {
   constexpr int XYZ_STRIDE = 3;
   constexpr int J_STRIDE = 6;
 
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
-  const int lane_id = threadIdx.x & 0x1f;
-
-  // load and broadcast Proj to all threads in warp
-  float p_val = 0.0f;
-  if (lane_id < 16) {
-    p_val = proj[lane_id];
-  }
-  const float p00 = __shfl_sync(0xffffffff, p_val, 0);
-  const float p01 = __shfl_sync(0xffffffff, p_val, 1);
-  const float p02 = __shfl_sync(0xffffffff, p_val, 2);
-  const float p03 = __shfl_sync(0xffffffff, p_val, 3);
-  const float p10 = __shfl_sync(0xffffffff, p_val, 4);
-  const float p11 = __shfl_sync(0xffffffff, p_val, 5);
-  const float p12 = __shfl_sync(0xffffffff, p_val, 6);
-  const float p13 = __shfl_sync(0xffffffff, p_val, 7);
-  const float p30 = __shfl_sync(0xffffffff, p_val, 12);
-  const float p31 = __shfl_sync(0xffffffff, p_val, 13);
-  const float p32 = __shfl_sync(0xffffffff, p_val, 14);
-  const float p33 = __shfl_sync(0xffffffff, p_val, 15);
 
   if (i >= N) {
     return;
@@ -192,13 +174,8 @@ __global__ void compute_projection_jacobian_kernel(const float *__restrict__ xyz
   float y = xyz[i * XYZ_STRIDE + 1];
   float z = xyz[i * XYZ_STRIDE + 2];
 
-  // Clip coordinates
-  float xc = p00 * x + p01 * y + p02 * z + p03;
-  float yc = p10 * x + p11 * y + p12 * z + p13;
-  float wc = p30 * x + p31 * y + p32 * z + p33;
-
   // Avoid division by zero
-  if (fabsf(wc) < 1e-6f) {
+  if (fabsf(z) < 1e-6f) {
     J[i * J_STRIDE + 0] = 0;
     J[i * J_STRIDE + 1] = 0;
     J[i * J_STRIDE + 2] = 0;
@@ -208,23 +185,20 @@ __global__ void compute_projection_jacobian_kernel(const float *__restrict__ xyz
     return;
   }
 
-  float wc_inv = 1.0f / wc;
-  float wc_inv2 = wc_inv * wc_inv;
+  const float limx = 1.3f * tan_fovx;
+  const float limy = 1.3f * tan_fovy;
+  const float txtz = x / z;
+  const float tytz = y / z;
+  x = min(limx, max(-limx, txtz)) * z;
+  y = min(limy, max(-limy, tytz)) * z;
 
   // Jacobian of NDC coordinates (x/w, y/w) w.r.t. camera coordinates (x, y, z)
-  // d(x/w)/dx = (dx_c/dx * w - x_c * dw_c/dx) / w^2
-  // dx_c/dx = p00, dw_c/dx = p30
-  // d(x/w)/dx = p00/w - xc*p30/w^2
-
-  // Row 0: d(x_ndc) / d(x, y, z)
-  J[i * J_STRIDE + 0] = (p00 * wc - xc * p30) * wc_inv2; // dx
-  J[i * J_STRIDE + 1] = (p01 * wc - xc * p31) * wc_inv2; // dy
-  J[i * J_STRIDE + 2] = (p02 * wc - xc * p32) * wc_inv2; // dz
-
-  // Row 1: d(y_ndc) / d(x, y, z)
-  J[i * J_STRIDE + 3] = (p10 * wc - yc * p30) * wc_inv2; // dx
-  J[i * J_STRIDE + 4] = (p11 * wc - yc * p31) * wc_inv2; // dy
-  J[i * J_STRIDE + 5] = (p12 * wc - yc * p32) * wc_inv2; // dz
+  J[i * J_STRIDE + 0] = focal_x / z;
+  J[i * J_STRIDE + 1] = 0.0f;
+  J[i * J_STRIDE + 2] = -(focal_x * x) / (z * z);
+  J[i * J_STRIDE + 3] = 0;
+  J[i * J_STRIDE + 4] = focal_y / z;
+  J[i * J_STRIDE + 5] = -(focal_y * y) / (z * z);
 }
 
 void compute_sigma(float *const quaternion, float *const scale, const int N, float *sigma, cudaStream_t stream) {
@@ -244,11 +218,11 @@ void compute_sigma(float *const quaternion, float *const scale, const int N, flo
   compute_sigma_fused_kernel<<<gridsize, blocksize, 0, stream>>>(quaternion, scale, N, sigma);
 }
 
-void compute_conic(float *const xyz, const float *view, float *const sigma, const float *proj, const int N, float *J,
-                   float *conic, cudaStream_t stream) {
+void compute_conic(float *const xyz, const float *view, float *const sigma, const float focal_x, const float focal_y,
+                   const float tan_fovx, const float tan_fovy, const int N, float *J, float *conic,
+                   cudaStream_t stream) {
   // Ensure all provided pointers are valid GPU device pointers.
   ASSERT_DEVICE_POINTER(xyz);
-  ASSERT_DEVICE_POINTER(proj);
   ASSERT_DEVICE_POINTER(sigma);
   ASSERT_DEVICE_POINTER(view);
   ASSERT_DEVICE_POINTER(J);
@@ -263,7 +237,8 @@ void compute_conic(float *const xyz, const float *view, float *const sigma, cons
   const dim3 blocksize(threads_per_block, 1, 1);
 
   // This kernel computes the Jacobian (J) for each Gaussian.
-  compute_projection_jacobian_kernel<<<gridsize, blocksize, 0, stream>>>(xyz, proj, N, J);
+  compute_projection_jacobian_kernel<<<gridsize, blocksize, 0, stream>>>(xyz, view, focal_x, focal_y, tan_fovx,
+                                                                         tan_fovy, N, J);
 
   // This kernel uses the world-space covariance (sigma), the camera transform (View),
   // and the Jacobian (J) computed in the previous step to find the 2D conic.

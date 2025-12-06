@@ -9,17 +9,21 @@ inline constexpr int TILE_SIZE_FWD = 16;
 
 /**
  * @brief Compute conic of projected 2D covariance matrix
- * @param[in]  xyz    A device pointer to 3D points
- * @param[in]  K      Camera intrinsic projection matrix
- * @param[in]  sigma  3D Gaussian covariance matrix
- * @param[in]  T      Camera extrinsic projection matrix
- * @param[in]  N      The total number of points
- * @param[out] J      A device pointer to ouput Jacobian
- * @param[out] conic  A device pointer to output conic values
- * @param[in]  stream The CUDA stream to execute kernel on
+ * @param[in]  xyz      A device pointer to 3D points
+ * @param[in]  view     Camera view matrix
+ * @param[in]  sigma    3D Gaussian covariance matrix
+ * @param[in]  focal_x  Camera focal length x
+ * @param[in]  focal_y  Camera focal length y
+ * @param[in]  tan_fovx 3D Gaussian covariance matrix
+ * @param[in]  tan_fovy 3D Gaussian covariance matrix
+ * @param[in]  N        The total number of points
+ * @param[out] J        A device pointer to ouput Jacobian
+ * @param[out] conic    A device pointer to output conic values
+ * @param[in]  stream   The CUDA stream to execute kernel on
  */
-void compute_conic(float *const xyz, const float *view, float *const sigma, const float *proj, const int N, float *J,
-                   float *conic, cudaStream_t stream = 0);
+void compute_conic(float *const xyz, const float *view, float *const sigma, const float focal_x, const float focal_y,
+                   const float tan_fovx, const float tan_fovy, const int N, float *J, float *conic,
+                   cudaStream_t stream = 0);
 
 /**
  * @brief Compute covariance matrix of Gaussian from quaternion and scale vector
