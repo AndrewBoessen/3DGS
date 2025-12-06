@@ -68,7 +68,7 @@ GaussianGradients::GaussianGradients(size_t max_gaussians) {
     d_grad_conic.resize(max_gaussians * 3);
     d_grad_uv.resize(max_gaussians * 2);
     d_grad_J.resize(max_gaussians * 6);
-    d_grad_sigma.resize(max_gaussians * 9);
+    d_grad_sigma.resize(max_gaussians * 6);
     d_grad_xyz_c.resize(max_gaussians * 3);
     d_grad_precompute_rgb.resize(max_gaussians * 3);
   } catch (const std::exception &e) {
@@ -94,8 +94,8 @@ GradientAccumulators::GradientAccumulators(size_t max_gaussians) {
 CameraParameters::CameraParameters() {
   try {
     // Allocate camera parameters
-    d_K.resize(9);  // 3x3 matrix
-    d_T.resize(12); // 3x4 matrix
+    d_view.resize(16); // 4x4 matrix
+    d_proj.resize(16); // 4x4 matrix
   } catch (const std::exception &e) {
     fprintf(stderr, "CUDA Memory Allocation Error (CudaDataManager): %s\n", e.what());
     exit(EXIT_FAILURE);

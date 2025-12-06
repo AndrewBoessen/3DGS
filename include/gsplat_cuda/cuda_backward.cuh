@@ -10,55 +10,58 @@ inline constexpr int TILE_SIZE_BWD = 16;
 /**
  * @brief Compute gradients for the camera intrinsic projection.
  * @param[in]  xyz_c          A device pointer to 3D points in camera coordinates.
- * @param[in]  K              A device pointer to the camera intrinsic matrix values [fx, cx, fy, cy].
+ * @param[in]  proj           A device pointer to the camera projection matrix (4x4).
  * @param[in]  uv_grad_out    A device pointer to the upstream gradients from the 2D projection.
  * @param[in]  N              The total number of points.
+ * @param[in]  width          Image width.
+ * @param[in]  height         Image height.
  * @param[out] xyz_c_grad_in  A device pointer to store the computed gradients for xyz_c.
  * @param[in]  stream         The CUDA stream to execute the kernel on.
  */
-void camera_intrinsic_projection_backward(const float *const xyz_c, const float *const K,
-                                          const float *const uv_grad_out, const int N, float *xyz_c_grad_in,
-                                          cudaStream_t stream = 0);
+void project_to_screen_backward(const float *const xyz_c, const float *const proj, const float *const uv_grad_out,
+                                const int N, const int width, const int height, float *xyz_c_grad_in,
+                                cudaStream_t stream = 0);
 
 /**
  * @brief Compute gradients for the camera extrinsic transformation.
  * @param[in]  xyz_w           A device pointer to 3D points in world coordinates.
- * @param[in]  T               A device pointer to the camera extrinsic matrix (3x4).
+ * @param[in]  view            A device pointer to the camera view matrix (4x4).
  * @param[in]  xyz_c_grad_out  A device pointer to the upstream gradients from camera-space coordinates.
  * @param[in]  N               The total number of points.
  * @param[out] xyz_w_grad_in   A device pointer to store the computed gradients for xyz_w.
  * @param[in]  stream          The CUDA stream to execute the kernel on.
  */
-void camera_extrinsic_projection_backward(const float *const xyz_w, const float *const T,
+void compute_camera_space_points_backward(const float *const xyz_w, const float *const view,
                                           const float *const xyz_c_grad_out, const int N, float *xyz_w_grad_in,
                                           cudaStream_t stream = 0);
 
 /**
  * @brief Compute gradients for the projection Jacobian.
  * @param[in]  xyz_c            A device pointer to 3D points in camera coordinates.
- * @param[in]  K                A device pointer to the camera intrinsic matrix values [fx, cx, fy, cy].
+ * @param[in]  proj             A device pointer to the camera projection matrix (4x4).
  * @param[in]  J_grad_out       A device pointer to the upstream gradients for the Jacobian J.
  * @param[in]  N                The total number of points.
  * @param[out] xyz_c_grad_in    A device pointer to store the computed gradients for xyz_c.
  * @param[in]  stream           The CUDA stream to execute the kernel on.
  */
-void compute_projection_jacobian_backward(const float *const xyz_c, const float *const K, const float *const J_grad_out,
-                                          const int N, float *xyz_c_grad_in, cudaStream_t stream = 0);
+void compute_projection_jacobian_backward(const float *const xyz_c, const float *const proj,
+                                          const float *const J_grad_out, const int N, float *xyz_c_grad_in,
+                                          cudaStream_t stream = 0);
 
 /**
  * @brief Compute gradients for the 2D conic projection.
  * @param[in]  J                A device pointer to the projection Jacobians.
  * @param[in]  sigma            A device pointer to the 3D covariance matrices.
- * @param[in]  T                A device pointer to the camera extrinsic matrix (3x4).
+ * @param[in]  view             A device pointer to the camera view matrix (4x4).
  * @param[in]  conic_grad_out   A device pointer to the upstream gradients for the conic.
  * @param[in]  N                The total number of points.
  * @param[out] J_grad_in        A device pointer to store the computed gradients for J.
  * @param[out] sigma_grad_in    A device pointer to store the computed gradients for sigma.
  * @param[in]  stream           The CUDA stream to execute the kernel on.
  */
-void compute_conic_backward(const float *const J, const float *const sigma, const float *const T,
-                            const float *const conic_grad_out, const int N, float *J_grad_in, float *sigma_grad_in,
-                            cudaStream_t stream = 0);
+void compute_conic_backward(const float *const J, const float *const sigma, const float *const view,
+                            const float *const conic, const float *const conic_grad_out, const int N, float *J_grad_in,
+                            float *sigma_grad_in, cudaStream_t stream = 0);
 
 /**
  * @brief Compute gradients for the 3D covariance matrix (sigma).

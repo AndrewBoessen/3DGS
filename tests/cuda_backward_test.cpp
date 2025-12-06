@@ -37,41 +37,57 @@ protected:
   }
 };
 
-// Test for camera_intrinsic_projection_backward
-TEST_F(CudaBackwardKernelTest, CameraIntrinsicProjectionBackward) {
+// Test for project_to_screen_backward
+TEST_F(CudaBackwardKernelTest, ProjectToScreenBackward) {
   const int N = 2;
+  const int width = 1920;
+  const int height = 1080;
   const float h = 1e-4;
 
   // Host data
   std::vector<float> h_xyz_c = {1.0, 2.0, 3.0, -1.0, -2.0, 4.0};
-  std::vector<float> h_K = {100.0, 0.0, 160.0, 0.0, 120.0, 120.0, 0.0, 0.0, 1.0}; // fx, cx, fy, cy
-  std::vector<float> h_uv_grad_out = {0.1, 0.2, 0.3, 0.4};
+  // Proj matrix (4x4) - Identity-like for simplicity
+  // P =
+  // 1 0 0 0
+  // 0 1 0 0
+  // 0 0 0 1
+  // 0 0 1 0
+  // x_proj = x/z, y_proj = y/z
+  // u = (x/z * 0.5 + 0.5) * width
+  // v = (y/z * 0.5 + 0.5) * height
+  std::vector<float> h_proj = {1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0};
+
+  std::vector<float> h_uv_grad_out = {0.01, 0.02, 0.03, 0.04};
   std::vector<float> h_xyz_c_grad_in(N * 3);
-  std::vector<float> h_K_grad_in(4);
 
   // Device data
   float *d_xyz_c = device_alloc<float>(N * 3);
-  float *d_K = device_alloc<float>(9);
+  float *d_proj = device_alloc<float>(16);
   float *d_uv_grad_out = device_alloc<float>(N * 2);
   float *d_xyz_c_grad_in = device_alloc<float>(N * 3);
 
   CUDA_CHECK(cudaMemcpy(d_xyz_c, h_xyz_c.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_K, h_K.data(), 9 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_proj, h_proj.data(), 16 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_uv_grad_out, h_uv_grad_out.data(), N * 2 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemset(d_xyz_c_grad_in, 0, N * 3 * sizeof(float)));
 
   // Run kernel
-  camera_intrinsic_projection_backward(d_xyz_c, d_K, d_uv_grad_out, N, d_xyz_c_grad_in);
+  project_to_screen_backward(d_xyz_c, d_proj, d_uv_grad_out, N, width, height, d_xyz_c_grad_in);
 
   CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(cudaMemcpy(h_xyz_c_grad_in.data(), d_xyz_c_grad_in, N * 3 * sizeof(float), cudaMemcpyDeviceToHost));
 
   // Numerical gradient check
-  auto forward_proj = [&](const std::vector<float> &xyz_c, const std::vector<float> &K) {
+  auto forward_proj = [&](const std::vector<float> &xyz_c, const std::vector<float> &proj) {
     std::vector<float> uv(N * 2);
     for (int i = 0; i < N; ++i) {
-      uv[i * 2 + 0] = K[0] * xyz_c[i * 3 + 0] / xyz_c[i * 3 + 2] + K[2];
-      uv[i * 2 + 1] = K[5] * xyz_c[i * 3 + 1] / xyz_c[i * 3 + 2] + K[5];
+      float x = xyz_c[i * 3 + 0];
+      float y = xyz_c[i * 3 + 1];
+      float z = xyz_c[i * 3 + 2];
+      // With our custom Proj:
+      uv[i * 2 + 0] = (x / z * 0.5f + 0.5f) * width;
+      uv[i * 2 + 1] = (y / z * 0.5f + 0.5f) * height;
     }
     return uv;
   };
@@ -82,8 +98,8 @@ TEST_F(CudaBackwardKernelTest, CameraIntrinsicProjectionBackward) {
     xyz_c_p[i] += h;
     std::vector<float> xyz_c_m = h_xyz_c;
     xyz_c_m[i] -= h;
-    auto uv_p = forward_proj(xyz_c_p, h_K);
-    auto uv_m = forward_proj(xyz_c_m, h_K);
+    auto uv_p = forward_proj(xyz_c_p, h_proj);
+    auto uv_m = forward_proj(xyz_c_m, h_proj);
     float numerical_grad = 0;
     for (int j = 0; j < N * 2; ++j)
       numerical_grad += (uv_p[j] - uv_m[j]) / (2 * h) * h_uv_grad_out[j];
@@ -91,44 +107,45 @@ TEST_F(CudaBackwardKernelTest, CameraIntrinsicProjectionBackward) {
   }
 
   CUDA_CHECK(cudaFree(d_xyz_c));
-  CUDA_CHECK(cudaFree(d_K));
+  CUDA_CHECK(cudaFree(d_proj));
   CUDA_CHECK(cudaFree(d_uv_grad_out));
   CUDA_CHECK(cudaFree(d_xyz_c_grad_in));
 }
 
-// Test for camera_extrinsic_projection_backward
-TEST_F(CudaBackwardKernelTest, CameraExtrinsicProjectionBackward) {
+// Test for compute_camera_space_points_backward
+TEST_F(CudaBackwardKernelTest, ComputeCameraSpacePointsBackward) {
   const int N = 1;
   const float h = 1e-4;
 
   // Host data
   std::vector<float> h_xyz_w = {1.0, 2.0, 3.0};
-  std::vector<float> h_T = {0.8, -0.6, 0.0, 0.1, 0.6, 0.8, 0.0, 0.2, 0.0, 0.0, 1.0, 0.3};
+  // View matrix (4x4)
+  std::vector<float> h_view = {0.8, -0.6, 0.0, 0.1, 0.6, 0.8, 0.0, 0.2, 0.0, 0.0, 1.0, 0.3, 0.0, 0.0, 0.0, 1.0};
   std::vector<float> h_xyz_c_grad_in = {0.1, 0.2, 0.3};
   std::vector<float> h_xyz_w_grad_in(N * 3);
-  std::vector<float> h_T_grad_in(12);
 
   // Device data
   auto d_xyz_w = device_alloc<float>(N * 3);
-  auto d_T = device_alloc<float>(12);
+  auto d_view = device_alloc<float>(16);
   auto d_xyz_c_grad_in = device_alloc<float>(N * 3);
   auto d_xyz_w_grad_in = device_alloc<float>(N * 3);
 
   CUDA_CHECK(cudaMemcpy(d_xyz_w, h_xyz_w.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_T, h_T.data(), 12 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_view, h_view.data(), 16 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_xyz_c_grad_in, h_xyz_c_grad_in.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
 
-  camera_extrinsic_projection_backward(d_xyz_w, d_T, d_xyz_c_grad_in, N, d_xyz_w_grad_in);
+  compute_camera_space_points_backward(d_xyz_w, d_view, d_xyz_c_grad_in, N, d_xyz_w_grad_in);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(cudaMemcpy(h_xyz_w_grad_in.data(), d_xyz_w_grad_in, N * 3 * sizeof(float), cudaMemcpyDeviceToHost));
 
-  auto forward_ext = [&](const std::vector<float> &xyz_w, const std::vector<float> &T) {
+  auto forward_ext = [&](const std::vector<float> &xyz_w, const std::vector<float> &view) {
     std::vector<float> xyz_c(N * 3);
     for (int i = 0; i < N; ++i) {
-      xyz_c[i * 3 + 0] = T[0] * xyz_w[i * 3 + 0] + T[1] * xyz_w[i * 3 + 1] + T[2] * xyz_w[i * 3 + 2] + T[3];
-      xyz_c[i * 3 + 1] = T[4] * xyz_w[i * 3 + 0] + T[5] * xyz_w[i * 3 + 1] + T[6] * xyz_w[i * 3 + 2] + T[7];
-      xyz_c[i * 3 + 2] = T[8] * xyz_w[i * 3 + 0] + T[9] * xyz_w[i * 3 + 1] + T[10] * xyz_w[i * 3 + 2] + T[11];
+      xyz_c[i * 3 + 0] = view[0] * xyz_w[i * 3 + 0] + view[1] * xyz_w[i * 3 + 1] + view[2] * xyz_w[i * 3 + 2] + view[3];
+      xyz_c[i * 3 + 1] = view[4] * xyz_w[i * 3 + 0] + view[5] * xyz_w[i * 3 + 1] + view[6] * xyz_w[i * 3 + 2] + view[7];
+      xyz_c[i * 3 + 2] =
+          view[8] * xyz_w[i * 3 + 0] + view[9] * xyz_w[i * 3 + 1] + view[10] * xyz_w[i * 3 + 2] + view[11];
     }
     return xyz_c;
   };
@@ -138,8 +155,8 @@ TEST_F(CudaBackwardKernelTest, CameraExtrinsicProjectionBackward) {
     xyz_w_p[i] += h;
     std::vector<float> xyz_w_m = h_xyz_w;
     xyz_w_m[i] -= h;
-    auto xyz_c_p = forward_ext(xyz_w_p, h_T);
-    auto xyz_c_m = forward_ext(xyz_w_m, h_T);
+    auto xyz_c_p = forward_ext(xyz_w_p, h_view);
+    auto xyz_c_m = forward_ext(xyz_w_m, h_view);
     float numerical_grad = 0;
     for (int j = 0; j < N * 3; ++j)
       numerical_grad += (xyz_c_p[j] - xyz_c_m[j]) / (2 * h) * h_xyz_c_grad_in[j];
@@ -147,7 +164,7 @@ TEST_F(CudaBackwardKernelTest, CameraExtrinsicProjectionBackward) {
   }
 
   CUDA_CHECK(cudaFree(d_xyz_w));
-  CUDA_CHECK(cudaFree(d_T));
+  CUDA_CHECK(cudaFree(d_view));
   CUDA_CHECK(cudaFree(d_xyz_c_grad_in));
   CUDA_CHECK(cudaFree(d_xyz_w_grad_in));
 }
@@ -159,45 +176,54 @@ TEST_F(CudaBackwardKernelTest, ProjectionJacobianBackward) {
 
   // Host data
   std::vector<float> h_xyz_c = {1.0, 2.0, 3.0, -1.0, -2.0, 4.0};
-  std::vector<float> h_K = {100.0, 0.0, 160.0, 0.0, 120.0, 120.0, 0.0, 0.0, 1.0};
+  // Proj matrix (4x4) - Identity-like for simplicity
+  // P =
+  // 1 0 0 0
+  // 0 1 0 0
+  // 0 0 0 1
+  // 0 0 1 0
+  std::vector<float> h_proj = {1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0};
+
   std::vector<float> h_J_grad_in = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2};
   std::vector<float> h_xyz_c_grad_out(N * 3);
 
   // Device data
   float *d_xyz_c = device_alloc<float>(N * 3);
-  float *d_K = device_alloc<float>(9);
+  float *d_proj = device_alloc<float>(16);
   float *d_J_grad_in = device_alloc<float>(N * 6);
   float *d_xyz_c_grad_out = device_alloc<float>(N * 3);
 
   CUDA_CHECK(cudaMemcpy(d_xyz_c, h_xyz_c.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_K, h_K.data(), 9 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_proj, h_proj.data(), 16 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_J_grad_in, h_J_grad_in.data(), N * 6 * sizeof(float), cudaMemcpyHostToDevice));
 
   // Run kernel
-  compute_projection_jacobian_backward(d_xyz_c, d_K, d_J_grad_in, N, d_xyz_c_grad_out);
+  compute_projection_jacobian_backward(d_xyz_c, d_proj, d_J_grad_in, N, d_xyz_c_grad_out);
 
   CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(cudaMemcpy(h_xyz_c_grad_out.data(), d_xyz_c_grad_out, N * 3 * sizeof(float), cudaMemcpyDeviceToHost));
 
   // Numerical gradient check
-  auto forward_jacobian = [&](const std::vector<float> &xyz_c, const std::vector<float> &K) {
+  auto forward_jacobian = [&](const std::vector<float> &xyz_c, const std::vector<float> &proj) {
     std::vector<float> J(N * 6);
     for (int i = 0; i < N; ++i) {
       float x = xyz_c[i * 3 + 0];
       float y = xyz_c[i * 3 + 1];
       float z = xyz_c[i * 3 + 2];
-      float fx = K[0], fy = K[4];
       float z_inv = 1.0f / z;
       float z_inv2 = z_inv * z_inv;
 
       // Jacobian: du/dx, du/dy, du/dz, dv/dx, dv/dy, dv/dz
-      J[i * 6 + 0] = fx * z_inv;       // du/dx
-      J[i * 6 + 1] = 0.0f;             // du/dy
-      J[i * 6 + 2] = -fx * x * z_inv2; // du/dz
-      J[i * 6 + 3] = 0.0f;             // dv/dx
-      J[i * 6 + 4] = fy * z_inv;       // dv/dy
-      J[i * 6 + 5] = -fy * y * z_inv2; // dv/dz
+      // With our simple Proj:
+      // J = [ 1/z, 0, -x/z^2 ]
+      //     [ 0, 1/z, -y/z^2 ]
+      J[i * 6 + 0] = z_inv;       // du/dx
+      J[i * 6 + 1] = 0.0f;        // du/dy
+      J[i * 6 + 2] = -x * z_inv2; // du/dz
+      J[i * 6 + 3] = 0.0f;        // dv/dx
+      J[i * 6 + 4] = z_inv;       // dv/dy
+      J[i * 6 + 5] = -y * z_inv2; // dv/dz
     }
     return J;
   };
@@ -208,8 +234,8 @@ TEST_F(CudaBackwardKernelTest, ProjectionJacobianBackward) {
     xyz_c_p[i] += h;
     std::vector<float> xyz_c_m = h_xyz_c;
     xyz_c_m[i] -= h;
-    auto J_p = forward_jacobian(xyz_c_p, h_K);
-    auto J_m = forward_jacobian(xyz_c_m, h_K);
+    auto J_p = forward_jacobian(xyz_c_p, h_proj);
+    auto J_m = forward_jacobian(xyz_c_m, h_proj);
     float numerical_grad = 0;
     for (int j = 0; j < N * 6; ++j)
       numerical_grad += (J_p[j] - J_m[j]) / (2 * h) * h_J_grad_in[j];
@@ -217,7 +243,7 @@ TEST_F(CudaBackwardKernelTest, ProjectionJacobianBackward) {
   }
 
   CUDA_CHECK(cudaFree(d_xyz_c));
-  CUDA_CHECK(cudaFree(d_K));
+  CUDA_CHECK(cudaFree(d_proj));
   CUDA_CHECK(cudaFree(d_J_grad_in));
   CUDA_CHECK(cudaFree(d_xyz_c_grad_out));
 }
@@ -229,39 +255,31 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
 
   // Host data
   std::vector<float> h_J = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
-  std::vector<float> h_sigma_world = {1.0f, 0.1f, 0.2f, 0.1f, 2.0f, 0.3f, 0.2f, 0.3f, 3.0f};
-  std::vector<float> h_T = {0.8f, -0.6f, 0.0f, 0.1f, 0.6f, 0.8f, 0.0f, 0.2f, 0.0f, 0.0f, 1.0f, 0.3f};
+  std::vector<float> h_sigma_world = {1.0f, 0.1f, 0.2f, 2.0f, 0.3f, 3.0f}; // xx, xy, xz, yy, yz, zz
+  // View matrix (4x4)
+  std::vector<float> h_view = {0.8f, -0.6f, 0.0f, 0.1f, 0.6f, 0.8f, 0.0f, 0.2f,
+                               0.0f, 0.0f,  1.0f, 0.3f, 0.0f, 0.0f, 0.0f, 1.0f};
   std::vector<float> h_conic_grad_out = {0.5f, -0.2f, 0.8f};
   std::vector<float> h_J_grad_in(N * 6);
-  std::vector<float> h_sigma_world_grad_in(N * 9); // Kernel has i*9 indexing, so allocate 9 floats
+  std::vector<float> h_sigma_world_grad_in(N * 6); // Kernel has i*6 indexing, so allocate 6 floats
 
-  // Device data
-  auto d_J = device_alloc<float>(N * 6);
-  auto d_sigma_world = device_alloc<float>(N * 9);
-  auto d_T = device_alloc<float>(12);
-  auto d_conic_grad_out = device_alloc<float>(N * 3);
-  auto d_J_grad_in = device_alloc<float>(N * 6);
-  auto d_sigma_world_grad_in = device_alloc<float>(N * 9);
-
-  CUDA_CHECK(cudaMemcpy(d_J, h_J.data(), N * 6 * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_sigma_world, h_sigma_world.data(), N * 9 * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_T, h_T.data(), 12 * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_conic_grad_out, h_conic_grad_out.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
-
-  // Run kernel
-  compute_conic_backward(d_J, d_sigma_world, d_T, d_conic_grad_out, N, d_J_grad_in, d_sigma_world_grad_in);
-  CUDA_CHECK(cudaDeviceSynchronize());
-
-  CUDA_CHECK(cudaMemcpy(h_J_grad_in.data(), d_J_grad_in, N * 6 * sizeof(float), cudaMemcpyDeviceToHost));
-  CUDA_CHECK(
-      cudaMemcpy(h_sigma_world_grad_in.data(), d_sigma_world_grad_in, N * 9 * sizeof(float), cudaMemcpyDeviceToHost));
-
-  // Numerical gradient check
-  auto forward_conic = [&](const std::vector<float> &J_in, const std::vector<float> &sigma_in,
-                           const std::vector<float> &T_in) {
+  // Compute h_conic (inverse covariance) for the test
+  auto compute_conic_val = [&](const std::vector<float> &J_in, const std::vector<float> &sigma_in,
+                               const std::vector<float> &view_in) {
     const float *J = J_in.data();
-    const float *S = sigma_in.data();
-    const float W[9] = {T_in[0], T_in[1], T_in[2], T_in[4], T_in[5], T_in[6], T_in[8], T_in[9], T_in[10]};
+    // Reconstruct full 3x3 sigma from 6 params
+    float S[9];
+    S[0] = sigma_in[0]; // xx
+    S[1] = sigma_in[1]; // xy
+    S[2] = sigma_in[2]; // xz
+    S[3] = sigma_in[1]; // yx
+    S[4] = sigma_in[3]; // yy
+    S[5] = sigma_in[4]; // yz
+    S[6] = sigma_in[2]; // zx
+    S[7] = sigma_in[4]; // zy
+    S[8] = sigma_in[5]; // zz
+    const float W[9] = {view_in[0], view_in[1], view_in[2], view_in[4], view_in[5],
+                        view_in[6], view_in[8], view_in[9], view_in[10]};
 
     // JW = J @ W (2x3)
     float JW[6];
@@ -281,13 +299,47 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
     temp[4] = JW[3] * S[1] + JW[4] * S[4] + JW[5] * S[7];
     temp[5] = JW[3] * S[2] + JW[4] * S[5] + JW[5] * S[8];
 
-    // conic = temp @ JW.T (2x2 symmetric, storing 3 values)
+    // cov = temp @ JW.T (2x2 symmetric)
+    float cov00 = temp[0] * JW[0] + temp[1] * JW[1] + temp[2] * JW[2] + 0.3f;
+    float cov01 = temp[0] * JW[3] + temp[1] * JW[4] + temp[2] * JW[5];
+    float cov11 = temp[3] * JW[3] + temp[4] * JW[4] + temp[5] * JW[5] + 0.3f;
+
+    // Invert
+    float det = cov00 * cov11 - cov01 * cov01;
+    float inv_det = 1.0f / det;
     std::vector<float> conic(3);
-    conic[0] = temp[0] * JW[0] + temp[1] * JW[1] + temp[2] * JW[2]; // (0,0)
-    conic[1] = temp[0] * JW[3] + temp[1] * JW[4] + temp[2] * JW[5]; // (0,1)
-    conic[2] = temp[3] * JW[3] + temp[4] * JW[4] + temp[5] * JW[5]; // (1,1)
+    conic[0] = cov11 * inv_det;
+    conic[1] = -cov01 * inv_det;
+    conic[2] = cov00 * inv_det;
     return conic;
   };
+
+  std::vector<float> h_conic = compute_conic_val(h_J, h_sigma_world, h_view);
+
+  // Device data
+  auto d_J = device_alloc<float>(N * 6);
+  auto d_sigma_world = device_alloc<float>(N * 6);
+  auto d_view = device_alloc<float>(16);
+  auto d_conic = device_alloc<float>(N * 3);
+  auto d_conic_grad_out = device_alloc<float>(N * 3);
+  auto d_J_grad_in = device_alloc<float>(N * 6);
+  auto d_sigma_world_grad_in = device_alloc<float>(N * 6);
+
+  CUDA_CHECK(cudaMemcpy(d_J, h_J.data(), N * 6 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_sigma_world, h_sigma_world.data(), N * 6 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_view, h_view.data(), 16 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_conic, h_conic.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_conic_grad_out, h_conic_grad_out.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemset(d_J_grad_in, 0, N * 6 * sizeof(float)));
+  CUDA_CHECK(cudaMemset(d_sigma_world_grad_in, 0, N * 6 * sizeof(float)));
+
+  // Run kernel
+  compute_conic_backward(d_J, d_sigma_world, d_view, d_conic, d_conic_grad_out, N, d_J_grad_in, d_sigma_world_grad_in);
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  CUDA_CHECK(cudaMemcpy(h_J_grad_in.data(), d_J_grad_in, N * 6 * sizeof(float), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(
+      cudaMemcpy(h_sigma_world_grad_in.data(), d_sigma_world_grad_in, N * 6 * sizeof(float), cudaMemcpyDeviceToHost));
 
   auto compute_loss = [&](const std::vector<float> &conic) {
     return conic[0] * h_conic_grad_out[0] + 2.0f * conic[1] * h_conic_grad_out[1] + conic[2] * h_conic_grad_out[2];
@@ -299,39 +351,40 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
     J_p[i] += h;
     std::vector<float> J_m = h_J;
     J_m[i] -= h;
-    auto loss_p = compute_loss(forward_conic(J_p, h_sigma_world, h_T));
-    auto loss_m = compute_loss(forward_conic(J_m, h_sigma_world, h_T));
+    auto loss_p = compute_loss(compute_conic_val(J_p, h_sigma_world, h_view));
+    auto loss_m = compute_loss(compute_conic_val(J_m, h_sigma_world, h_view));
     float numerical_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_J_grad_in[i], numerical_grad, 1e-1);
+    EXPECT_NEAR(h_J_grad_in[i], numerical_grad, 1e-2);
   }
 
-  // Reconstruct full symmetric gradient for sigma from kernel output
-  std::vector<float> h_sigma_grad_analytic_full(9);
-  h_sigma_grad_analytic_full[0] = h_sigma_world_grad_in[0]; // (0,0)
-  h_sigma_grad_analytic_full[1] = h_sigma_world_grad_in[1]; // (0,1)
-  h_sigma_grad_analytic_full[2] = h_sigma_world_grad_in[2]; // (0,2)
-  h_sigma_grad_analytic_full[3] = h_sigma_world_grad_in[3]; // (1,0) = (0,1)
-  h_sigma_grad_analytic_full[4] = h_sigma_world_grad_in[4]; // (1,1)
-  h_sigma_grad_analytic_full[5] = h_sigma_world_grad_in[5]; // (1,2)
-  h_sigma_grad_analytic_full[6] = h_sigma_world_grad_in[6]; // (2,0) = (0,2)
-  h_sigma_grad_analytic_full[7] = h_sigma_world_grad_in[7]; // (2,1) = (1,2)
-  h_sigma_grad_analytic_full[8] = h_sigma_world_grad_in[8]; // (2,2)
+  // Reconstruct full symmetric gradient for sigma from kernel output (which is 6 params)
+  // The kernel accumulates gradients into the 6 unique elements.
+  // dL/dS_ij_full = dL/dS_ij_stored (if i==j)
+  // dL/dS_ij_full = 0.5 * dL/dS_ij_stored (if i!=j, because stored accumulates both ij and ji)
+  std::vector<float> h_sigma_grad_analytic_full(6);
+  h_sigma_grad_analytic_full[0] = h_sigma_world_grad_in[0]; // xx
+  h_sigma_grad_analytic_full[1] = h_sigma_world_grad_in[1]; // xy
+  h_sigma_grad_analytic_full[2] = h_sigma_world_grad_in[2]; // xz
+  h_sigma_grad_analytic_full[3] = h_sigma_world_grad_in[3]; // yy
+  h_sigma_grad_analytic_full[4] = h_sigma_world_grad_in[4]; // yz
+  h_sigma_grad_analytic_full[5] = h_sigma_world_grad_in[5]; // zz
 
-  // Check grad w.r.t. sigma_world
-  for (int i = 0; i < N * 9; ++i) {
+  // Check grad w.r.t. sigma_world (6 params)
+  for (int i = 0; i < N * 6; ++i) {
     std::vector<float> sigma_p = h_sigma_world;
     sigma_p[i] += h;
     std::vector<float> sigma_m = h_sigma_world;
     sigma_m[i] -= h;
-    auto loss_p = compute_loss(forward_conic(h_J, sigma_p, h_T));
-    auto loss_m = compute_loss(forward_conic(h_J, sigma_m, h_T));
+    auto loss_p = compute_loss(compute_conic_val(h_J, sigma_p, h_view));
+    auto loss_m = compute_loss(compute_conic_val(h_J, sigma_m, h_view));
     float numerical_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_sigma_grad_analytic_full[i], numerical_grad, 1e-1);
+    EXPECT_NEAR(h_sigma_grad_analytic_full[i], numerical_grad, 1e-2);
   }
 
   CUDA_CHECK(cudaFree(d_J));
   CUDA_CHECK(cudaFree(d_sigma_world));
-  CUDA_CHECK(cudaFree(d_T));
+  CUDA_CHECK(cudaFree(d_view));
+  CUDA_CHECK(cudaFree(d_conic));
   CUDA_CHECK(cudaFree(d_conic_grad_out));
   CUDA_CHECK(cudaFree(d_J_grad_in));
   CUDA_CHECK(cudaFree(d_sigma_world_grad_in));
@@ -344,20 +397,20 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
   // Host data
   std::vector<float> h_q = {0.70710678, 0.70710678, 0.0, 0.0}; // Gaussian 1: 90 deg rot around X
   std::vector<float> h_s = {-0.1, -0.2, -0.3};
-  std::vector<float> h_dSigma_in = {-0.1, -0.2, -0.3, -0.2, -0.4, -0.5, -0.3, -0.5, -0.6};
+  std::vector<float> h_dSigma_in = {-0.1, -0.2, -0.3, -0.4, -0.5, -0.6}; // xx, xy, xz, yy, yz, zz
   std::vector<float> h_dQ_in(N * 4);
   std::vector<float> h_dS_in(N * 3);
 
   // Device data
   auto d_q = device_alloc<float>(N * 4);
   auto d_s = device_alloc<float>(N * 3);
-  auto d_dSigma_in = device_alloc<float>(N * 9);
+  auto d_dSigma_in = device_alloc<float>(N * 6);
   auto d_dQ_in = device_alloc<float>(N * 4);
   auto d_dS_in = device_alloc<float>(N * 3);
 
   CUDA_CHECK(cudaMemcpy(d_q, h_q.data(), N * 4 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_s, h_s.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_dSigma_in, h_dSigma_in.data(), N * 9 * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_dSigma_in, h_dSigma_in.data(), N * 6 * sizeof(float), cudaMemcpyHostToDevice));
 
   // Run kernel
   compute_sigma_backward(d_q, d_s, d_dSigma_in, N, d_dQ_in, d_dS_in);
@@ -368,7 +421,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
 
   // Numerical gradient check
   auto forward_sigma = [&](const std::vector<float> &q_in, const std::vector<float> &s_in) {
-    std::vector<float> sigma(N * 9);
+    std::vector<float> sigma(N * 6);
     for (int i = 0; i < N; ++i) {
       float qw = q_in[i * 4 + 0];
       float qx = q_in[i * 4 + 1];
@@ -408,15 +461,13 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
       M[8] = R[8] * S_z;
 
       // Sigma = M * M^T
-      sigma[i * 9 + 0] = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
-      sigma[i * 9 + 1] = M[0] * M[3] + M[1] * M[4] + M[2] * M[5];
-      sigma[i * 9 + 2] = M[0] * M[6] + M[1] * M[7] + M[2] * M[8];
-      sigma[i * 9 + 3] = sigma[i * 9 + 1];
-      sigma[i * 9 + 4] = M[3] * M[3] + M[4] * M[4] + M[5] * M[5];
-      sigma[i * 9 + 5] = M[3] * M[6] + M[4] * M[7] + M[5] * M[8];
-      sigma[i * 9 + 6] = sigma[i * 9 + 2];
-      sigma[i * 9 + 7] = sigma[i * 9 + 5];
-      sigma[i * 9 + 8] = M[6] * M[6] + M[7] * M[7] + M[8] * M[8];
+      // Store 6 params: xx, xy, xz, yy, yz, zz
+      sigma[i * 6 + 0] = M[0] * M[0] + M[1] * M[1] + M[2] * M[2];
+      sigma[i * 6 + 1] = M[0] * M[3] + M[1] * M[4] + M[2] * M[5];
+      sigma[i * 6 + 2] = M[0] * M[6] + M[1] * M[7] + M[2] * M[8];
+      sigma[i * 6 + 3] = M[3] * M[3] + M[4] * M[4] + M[5] * M[5];
+      sigma[i * 6 + 4] = M[3] * M[6] + M[4] * M[7] + M[5] * M[8];
+      sigma[i * 6 + 5] = M[6] * M[6] + M[7] * M[7] + M[8] * M[8];
     }
     return sigma;
   };
@@ -443,7 +494,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float loss_m = compute_loss(sigma_m);
 
     float numerical_grad = (loss_p - loss_m) / (2 * h);
-    EXPECT_NEAR(h_dQ_in[i], numerical_grad, 1e-1);
+    EXPECT_NEAR(h_dQ_in[i], numerical_grad, 1e-2);
   }
 
   // Check grad w.r.t s
@@ -460,7 +511,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float loss_m = compute_loss(sigma_m);
 
     float numerical_grad = (loss_p - loss_m) / (2 * h);
-    EXPECT_NEAR(h_dS_in[i], numerical_grad, 1e-1);
+    EXPECT_NEAR(h_dS_in[i], numerical_grad, 1e-2);
   }
 
   CUDA_CHECK(cudaFree(d_q));
@@ -580,9 +631,9 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
   const float h = 1e-6f;
 
   // Host data
-  std::vector<float> h_uvs = {8.1f, 8.1f, 2.1f, 2.1f, 4.1f, 4.1f};
-  std::vector<float> h_opacity = {1.0f, 2.0f, 5.0f};
-  std::vector<float> h_conic = {5.0f, 0.1f, 5.0f, 5.0f, 0.1f, 5.0f, 5.0f, 0.1f, 5.0f}; // Gaussian 1
+  std::vector<float> h_uvs = {4.5f, 4.5f, 8.5f, 8.5f, 12.5f, 12.5f};
+  std::vector<float> h_opacity = {10.0f, 10.0f, 10.0f};
+  std::vector<float> h_conic = {2.0f, 0.1f, 2.0f, 2.0f, 0.1f, 2.0f, 2.0f, 0.1f, 2.0f}; // Gaussian 1
   std::vector<float> h_rgb = {0.5f, 0.2f, 0.2f, 0.2f, 0.2f, 0.5f, 0.2f, 0.5f, 0.2f};   // Gaussian 1
   const float background_opacity = 0.5f;
   std::vector<float> h_grad_image(image_width * image_height * 3);
@@ -603,72 +654,58 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     for (int v_splat = 0; v_splat < image_height; ++v_splat) {
       for (int u_splat = 0; u_splat < image_width; ++u_splat) {
         int splat_count = 0;
+        float T = 1.0f;
         float pixel_rgb[3] = {0.0f, 0.0f, 0.0f};
-        float alpha_accum = 0.0f;
-        float alpha_weight = 0.0f;
 
         // Get splat range for this tile.
         const int splat_idx_start = h_splat_range_by_tile[0];
         const int splat_idx_end = h_splat_range_by_tile[1];
 
+        bool done = false;
+
         for (int splat_idx = splat_idx_start; splat_idx < splat_idx_end; ++splat_idx) {
-          if (alpha_accum > 0.9999f)
-            break;
-          const int i = h_sorted_splats[splat_idx]; // <-- UPDATED: Use indirection
+          const int i = h_sorted_splats[splat_idx];
 
           const float u_mean = uvs[i * 2 + 0];
           const float v_mean = uvs[i * 2 + 1];
           const float u_diff = (float)u_splat - u_mean;
           const float v_diff = (float)v_splat - v_mean;
 
-          const float a = conic[i * 3 + 0] + 0.3f; // Match kernel
-          const float b = conic[i * 3 + 1];
-          const float c = conic[i * 3 + 2] + 0.3f; // Match kernel
-
-          const float det = a * c - b * b;
-          const float reciprocal_det = 1.0f / det;
-          const float mh_sq = (c * u_diff * u_diff - 2.0f * b * u_diff * v_diff + a * v_diff * v_diff) * reciprocal_det;
-
           const float opa = 1.0f / (1.0f + expf(-opacity[i]));
 
-          float norm_prob = 0.0f;
-          if (mh_sq <= 0.0f) { // Match kernel's `mh_sq > 0.0f` check
-            splat_count++;
-            continue;
-          }
-          norm_prob = std::exp(-0.5f * mh_sq);
+          const float inv_cov00 = conic[i * 3 + 0];
+          const float inv_cov01 = conic[i * 3 + 1];
+          const float inv_cov11 = conic[i * 3 + 2];
+
+          const float power = fminf(0.0f, -0.5f * (inv_cov00 * u_diff * u_diff + 2.0f * inv_cov01 * u_diff * v_diff +
+                                                   inv_cov11 * v_diff * v_diff));
+
+          float norm_prob = std::exp(power);
 
           // Match kernel: opacity logit -> sigmoid
           float alpha = std::min(0.99f, opa * norm_prob);
+          alpha = (alpha > 0.00392156862f) ? !done * alpha : 0.0f;
 
-          if (alpha < 0.00392156862f) {
-            splat_count++;
-            continue;
-          }
+          const float test_T = T * (1.0f - alpha);
+          done = test_T < 0.0001f;
 
-          alpha_weight = 1.0f - alpha_accum;
-          const float weight = alpha * (1.0f - alpha_accum);
+          const float weight = alpha * T;
 
           pixel_rgb[0] += rgb[i * 3 + 0] * weight;
           pixel_rgb[1] += rgb[i * 3 + 1] * weight;
           pixel_rgb[2] += rgb[i * 3 + 2] * weight;
 
-          alpha_accum += weight;
-          splat_count++;
+          T = test_T;
+          splat_count += !done;
         }
 
         int pixel_idx = v_splat * image_width + u_splat;
-        float background_val = 0.0f;
-        if (alpha_accum < 0.999f) {
-          background_val = background_opacity * (1.0f - alpha_accum);
-        }
-
-        image[pixel_idx * 3 + 0] = pixel_rgb[0] + background_val;
-        image[pixel_idx * 3 + 1] = pixel_rgb[1] + background_val;
-        image[pixel_idx * 3 + 2] = pixel_rgb[2] + background_val;
+        image[pixel_idx * 3 + 0] = pixel_rgb[0] + T * background_opacity;
+        image[pixel_idx * 3 + 1] = pixel_rgb[1] + T * background_opacity;
+        image[pixel_idx * 3 + 2] = pixel_rgb[2] + T * background_opacity;
 
         num_splats_per_pixel[pixel_idx] = splat_count;
-        final_weight_per_pixel[pixel_idx] = alpha_weight;
+        final_weight_per_pixel[pixel_idx] = T;
       }
     }
     return image;
@@ -749,7 +786,8 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
     float norm_factor = (i % 2 == 0) ? (0.5f * image_width) : (0.5f * image_height);
-    EXPECT_NEAR(h_grad_uv[i], num_grad * norm_factor, 1e-2);
+    num_grad *= norm_factor;
+    EXPECT_NEAR(h_grad_uv[i], num_grad, 1e-3);
   }
 
   // Gradients for opacity
@@ -762,7 +800,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_grad_opacity[i], num_grad, 1e-2);
+    EXPECT_NEAR(h_grad_opacity[i], num_grad, 1e-3);
   }
 
   // Gradients for conic
@@ -775,7 +813,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_grad_conic[i], num_grad, 1e-2);
+    EXPECT_NEAR(h_grad_conic[i], num_grad, 1e-3);
   }
 
   // Gradients for rgb
@@ -788,7 +826,7 @@ TEST_F(CudaBackwardKernelTest, RenderBackward) {
     double loss_p = compute_loss(image_p);
     double loss_m = compute_loss(image_m);
     float num_grad = (loss_p - loss_m) / (2.0f * h);
-    EXPECT_NEAR(h_grad_rgb[i], num_grad, 1e-2);
+    EXPECT_NEAR(h_grad_rgb[i], num_grad, 1e-3);
   }
 
   // Cleanup

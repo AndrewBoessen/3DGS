@@ -22,12 +22,12 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
   pass_data.d_uv.resize(num_gaussians * 2);
 
   // Step 1: Projections and Culling
-  camera_extrinsic_projection(thrust::raw_pointer_cast(gaussians.d_xyz.data()),
-                              thrust::raw_pointer_cast(camera_parameters.d_T.data()), num_gaussians,
+  compute_camera_space_points(thrust::raw_pointer_cast(gaussians.d_xyz.data()),
+                              thrust::raw_pointer_cast(camera_parameters.d_view.data()), num_gaussians,
                               thrust::raw_pointer_cast(pass_data.d_xyz_c.data()));
-  camera_intrinsic_projection(thrust::raw_pointer_cast(pass_data.d_xyz_c.data()),
-                              thrust::raw_pointer_cast(camera_parameters.d_K.data()), num_gaussians,
-                              thrust::raw_pointer_cast(pass_data.d_uv.data()));
+  project_to_screen(thrust::raw_pointer_cast(pass_data.d_xyz_c.data()),
+                    thrust::raw_pointer_cast(camera_parameters.d_proj.data()), num_gaussians, width, height,
+                    thrust::raw_pointer_cast(pass_data.d_uv.data()));
   cull_gaussians(thrust::raw_pointer_cast(pass_data.d_uv.data()), thrust::raw_pointer_cast(pass_data.d_xyz_c.data()),
                  num_gaussians, config.near_thresh, config.cull_mask_padding, width, height,
                  thrust::raw_pointer_cast(pass_data.d_mask.data()));
@@ -80,14 +80,19 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
   pass_data.d_conic.resize(pass_data.num_culled * 3);
   pass_data.d_J.resize(pass_data.num_culled * 6);
 
+  const float focal_x = camera.params[0];
+  const float focal_y = camera.params[1];
+
+  const float tan_fovx = camera.width / (2.0f * focal_x);
+  const float tan_fovy = camera.height / (2.0f * focal_y);
+
   compute_sigma(thrust::raw_pointer_cast(d_quaternion_selected.data()),
                 thrust::raw_pointer_cast(d_scale_selected.data()), pass_data.num_culled,
                 thrust::raw_pointer_cast(pass_data.d_sigma.data()));
-  compute_conic(thrust::raw_pointer_cast(d_xyz_c_selected.data()),
-                thrust::raw_pointer_cast(camera_parameters.d_K.data()),
-                thrust::raw_pointer_cast(pass_data.d_sigma.data()),
-                thrust::raw_pointer_cast(camera_parameters.d_T.data()), pass_data.num_culled,
-                thrust::raw_pointer_cast(pass_data.d_J.data()), thrust::raw_pointer_cast(pass_data.d_conic.data()));
+  compute_conic(
+      thrust::raw_pointer_cast(d_xyz_c_selected.data()), thrust::raw_pointer_cast(camera_parameters.d_view.data()),
+      thrust::raw_pointer_cast(pass_data.d_sigma.data()), focal_x, focal_y, tan_fovx, tan_fovy, pass_data.num_culled,
+      thrust::raw_pointer_cast(pass_data.d_J.data()), thrust::raw_pointer_cast(pass_data.d_conic.data()));
 
   // Step 5: Sort Gaussians by tile
   const int n_tiles_x = (width + TILE_SIZE_FWD - 1) / TILE_SIZE_FWD;

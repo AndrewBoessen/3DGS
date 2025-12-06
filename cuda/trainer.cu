@@ -73,7 +73,7 @@ private:
   void zero_grads();
   float backward_pass(const Image &curr_image, const Camera &curr_camera, ForwardPassData &pass_data,
                       const float bg_color, const thrust::device_vector<float> &d_gt_image);
-  void optimizer_step(ForwardPassData pass_data, Camera curr_camera);
+  void optimizer_step(ForwardPassData pass_data);
   void add_sh_band();
   void adaptive_density_step();
 
@@ -295,25 +295,50 @@ void TrainerImpl::evaluate() {
                width * height * 3 * sizeof(float), cudaMemcpyHostToDevice);
 
     // Prepare camera data
-    float h_K[9] = {(float)cam.params[0],
-                    0.f,
-                    (float)cam.params[2],
-                    0.f,
-                    (float)cam.params[1],
-                    (float)cam.params[3],
-                    0.f,
-                    0.f,
-                    1.f};
+    // Prepare camera data
+    float h_view[16];
+    float h_proj[16];
+
+    // View Matrix (World -> Camera)
     Eigen::Matrix3d rot_mat_d = img.QvecToRotMat();
     Eigen::Vector3d t_vec_d = img.tvec;
-    float h_T[12];
+
+    // View = [R | t; 0 0 0 1]
     for (int i = 0; i < 3; ++i) {
       for (int j = 0; j < 3; ++j)
-        h_T[i * 4 + j] = (float)rot_mat_d(i, j);
-      h_T[i * 4 + 3] = (float)t_vec_d(i);
+        h_view[i * 4 + j] = (float)rot_mat_d(i, j);
+      h_view[i * 4 + 3] = (float)t_vec_d(i);
     }
-    thrust::copy(h_K, h_K + 9, cuda.camera.d_K.begin());
-    thrust::copy(h_T, h_T + 12, cuda.camera.d_T.begin());
+    h_view[12] = 0.0f;
+    h_view[13] = 0.0f;
+    h_view[14] = 0.0f;
+    h_view[15] = 1.0f;
+
+    // Projection Matrix
+    const float znear = 0.01f;
+    const float zfar = 100.0f;
+    const float fov_x = 2 * atan(cam.width / (2 * cam.params[0]));
+    const float fov_y = 2 * atan(cam.height / (2 * cam.params[1]));
+
+    const float tan_half_fov_x = tan(fov_x / 2.0f);
+    const float tan_half_fov_y = tan(fov_y / 2.0f);
+
+    const float top = tan_half_fov_y * znear;
+    const float bottom = -top;
+    const float right = tan_half_fov_x * znear;
+    const float left = -right;
+
+    std::fill(h_proj, h_proj + 16, 0.0f);
+    h_proj[0] = 2.0f * znear / (right - left);
+    h_proj[5] = 2.0f * znear / (top - bottom);
+    h_proj[8] = (right + left) / (right - left);
+    h_proj[9] = (top + bottom) / (top - bottom);
+    h_proj[10] = (zfar + znear) / (zfar - znear);
+    h_proj[11] = -(2.0f * zfar * znear) / (zfar - znear);
+    h_proj[14] = 1.0f;
+
+    thrust::copy(h_proj, h_proj + 16, cuda.camera.d_proj.begin());
+    thrust::copy(h_view, h_view + 16, cuda.camera.d_view.begin());
 
     // Render
     ForwardPassData pass_data;
@@ -790,11 +815,12 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
                                           thrust::raw_pointer_cast(cuda.gradients.d_grad_rgb.data()));
   compute_conic_backward(
       thrust::raw_pointer_cast(pass_data.d_J.data()), thrust::raw_pointer_cast(pass_data.d_sigma.data()),
-      thrust::raw_pointer_cast(cuda.camera.d_T.data()), thrust::raw_pointer_cast(cuda.gradients.d_grad_conic.data()),
-      pass_data.num_culled, thrust::raw_pointer_cast(cuda.gradients.d_grad_J.data()),
+      thrust::raw_pointer_cast(cuda.camera.d_view.data()), thrust::raw_pointer_cast(pass_data.d_conic.data()),
+      thrust::raw_pointer_cast(cuda.gradients.d_grad_conic.data()), pass_data.num_culled,
+      thrust::raw_pointer_cast(cuda.gradients.d_grad_J.data()),
       thrust::raw_pointer_cast(cuda.gradients.d_grad_sigma.data()));
   compute_projection_jacobian_backward(thrust::raw_pointer_cast(d_xyz_c_selected.data()),
-                                       thrust::raw_pointer_cast(cuda.camera.d_K.data()),
+                                       thrust::raw_pointer_cast(cuda.camera.d_proj.data()),
                                        thrust::raw_pointer_cast(cuda.gradients.d_grad_J.data()), pass_data.num_culled,
                                        thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz_c.data()));
   compute_sigma_backward(thrust::raw_pointer_cast(d_quaternion_selected.data()),
@@ -802,12 +828,12 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
                          thrust::raw_pointer_cast(cuda.gradients.d_grad_sigma.data()), pass_data.num_culled,
                          thrust::raw_pointer_cast(cuda.gradients.d_grad_quaternion.data()),
                          thrust::raw_pointer_cast(cuda.gradients.d_grad_scale.data()));
-  camera_intrinsic_projection_backward(thrust::raw_pointer_cast(d_xyz_c_selected.data()),
-                                       thrust::raw_pointer_cast(cuda.camera.d_K.data()),
-                                       thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data()), pass_data.num_culled,
-                                       thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz_c.data()));
-  camera_extrinsic_projection_backward(
-      thrust::raw_pointer_cast(d_xyz_selected.data()), thrust::raw_pointer_cast(cuda.camera.d_T.data()),
+  project_to_screen_backward(thrust::raw_pointer_cast(d_xyz_c_selected.data()),
+                             thrust::raw_pointer_cast(cuda.camera.d_proj.data()),
+                             thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data()), pass_data.num_culled, width,
+                             height, thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz_c.data()));
+  compute_camera_space_points_backward(
+      thrust::raw_pointer_cast(d_xyz_selected.data()), thrust::raw_pointer_cast(cuda.camera.d_view.data()),
       thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz_c.data()), pass_data.num_culled,
       thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz.data()));
 
@@ -816,19 +842,15 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
 
 // A functor to compute the norm of a 2D gradient
 struct PositionalGradientNorm {
-  const float width;
-  const float height;
-  PositionalGradientNorm(float w, float h) : width(w), height(w) {}
-
   __host__ __device__ float operator()(const float2 &grad) const {
     // Scale grads to NDC
-    const float u = grad.x * 0.5f * width;
-    const float v = grad.y * 0.5f * height;
+    const float u = grad.x;
+    const float v = grad.y;
     return sqrtf(u * u + v * v);
   }
 };
 
-void TrainerImpl::optimizer_step(ForwardPassData pass_data, Camera curr_camera) {
+void TrainerImpl::optimizer_step(ForwardPassData pass_data) {
   auto d_xyz = compact_masked_array<3>(cuda.gaussians.d_xyz, pass_data.d_mask, pass_data.num_culled);
   auto d_rgb = compact_masked_array<3>(cuda.gaussians.d_rgb, pass_data.d_mask, pass_data.num_culled);
   auto d_op = compact_masked_array<1>(cuda.gaussians.d_opacity, pass_data.d_mask, pass_data.num_culled);
@@ -959,7 +981,7 @@ void TrainerImpl::optimizer_step(ForwardPassData pass_data, Camera curr_camera) 
   thrust::transform(reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())),
                     reinterpret_cast<float2 *>(thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data())) +
                         pass_data.num_culled,
-                    d_uv_grad_norms.begin(), PositionalGradientNorm(curr_camera.width, curr_camera.height));
+                    d_uv_grad_norms.begin(), PositionalGradientNorm());
   thrust::transform(d_uv_accum_compact.begin(), d_uv_accum_compact.end(), d_uv_grad_norms.begin(),
                     d_uv_accum_compact.begin(), thrust::plus<float>());
 
@@ -1088,6 +1110,9 @@ void TrainerImpl::train() {
   // Calculate scene extent for adaptive density
   scene_extent = 1.1f * computeMaxDiagonal(images);
 
+  const float znear = 0.01f;
+  const float zfar = 100.0f;
+
   ProgressBar progressBar(config.num_iters);
 
   // TRAINING LOOP
@@ -1107,26 +1132,43 @@ void TrainerImpl::train() {
     zero_grads();
 
     // Prepare and copy camera parameters to device (member 'cuda.camera')
-    float h_K[9] = {(float)curr_camera.params[0],
-                    0.f,
-                    (float)curr_camera.params[2],
-                    0.f,
-                    (float)curr_camera.params[1],
-                    (float)curr_camera.params[3],
-                    0.f,
-                    0.f,
-                    1.f};
+    const float fov_x = 2 * atan(curr_camera.width / (2 * curr_camera.params[0]));
+    const float fov_y = 2 * atan(curr_camera.height / (2 * curr_camera.params[1]));
+
+    const float tan_half_fov_x = tan(fov_x / 2.0f);
+    const float tan_half_fov_y = tan(fov_x / 2.0f);
+
+    const float top = tan_half_fov_y * znear;
+    const float bottom = -top;
+    const float right = tan_half_fov_x * znear;
+    const float left = -right;
+
+    float h_proj[16];
+    std::fill(h_proj, h_proj + 16, 0.0f);
+    h_proj[0] = 2.0f * znear / (right - left);
+    h_proj[5] = 2.0f * znear / (top - bottom);
+    h_proj[8] = (right + left) / (right - left);
+    h_proj[9] = (top + bottom) / (top - bottom);
+    h_proj[10] = (zfar + znear) / (zfar - znear);
+    h_proj[11] = -(2.0f * zfar * znear) / (zfar - znear);
+    h_proj[14] = 1.0f;
+
     Eigen::Matrix3d rot_mat_d = curr_image.QvecToRotMat();
     Eigen::Vector3d t_vec_d = curr_image.tvec;
-    float h_T[12];
+    float h_view[16];
     for (int i = 0; i < 3; ++i) {
       for (int j = 0; j < 3; ++j)
-        h_T[i * 4 + j] = (float)rot_mat_d(i, j);
-      h_T[i * 4 + 3] = (float)t_vec_d(i);
+        h_view[i * 4 + j] = (float)rot_mat_d(i, j);
+      h_view[i * 4 + 3] = (float)t_vec_d(i);
     }
+    h_view[12] = 0.0f;
+    h_view[13] = 0.0f;
+    h_view[14] = 0.0f;
+    h_view[15] = 1.0f;
+
     try {
-      thrust::copy(h_K, h_K + 9, cuda.camera.d_K.begin());
-      thrust::copy(h_T, h_T + 12, cuda.camera.d_T.begin());
+      thrust::copy(h_proj, h_proj + 16, cuda.camera.d_proj.begin());
+      thrust::copy(h_view, h_view + 16, cuda.camera.d_view.begin());
     } catch (const std::exception &e) {
       fprintf(stderr, "Error copying camera data to device: %s\\n", e.what());
       exit(EXIT_FAILURE);
@@ -1150,7 +1192,7 @@ void TrainerImpl::train() {
       float loss = backward_pass(curr_image, curr_camera, pass_data, bg_color, d_gt_image[curr_buf_idx]);
 
       // --- OPTIMIZER STEP ---
-      optimizer_step(pass_data, curr_camera);
+      optimizer_step(pass_data);
 
       // Log status
       progressBar.update(iter, loss, num_gaussians);

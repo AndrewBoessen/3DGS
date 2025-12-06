@@ -9,17 +9,21 @@ inline constexpr int TILE_SIZE_FWD = 16;
 
 /**
  * @brief Compute conic of projected 2D covariance matrix
- * @param[in]  xyz    A device pointer to 3D points
- * @param[in]  K      Camera intrinsic projection matrix
- * @param[in]  sigma  3D Gaussian covariance matrix
- * @param[in]  T      Camera extrinsic projection matrix
- * @param[in]  N      The total number of points
- * @param[out] J      A device pointer to ouput Jacobian
- * @param[out] conic  A device pointer to output conic values
- * @param[in]  stream The CUDA stream to execute kernel on
+ * @param[in]  xyz      A device pointer to 3D points
+ * @param[in]  view     Camera view matrix
+ * @param[in]  sigma    3D Gaussian covariance matrix
+ * @param[in]  focal_x  Camera focal length x
+ * @param[in]  focal_y  Camera focal length y
+ * @param[in]  tan_fovx 3D Gaussian covariance matrix
+ * @param[in]  tan_fovy 3D Gaussian covariance matrix
+ * @param[in]  N        The total number of points
+ * @param[out] J        A device pointer to ouput Jacobian
+ * @param[out] conic    A device pointer to output conic values
+ * @param[in]  stream   The CUDA stream to execute kernel on
  */
-void compute_conic(float *const xyz, const float *K, float *const sigma, const float *T, const int N, float *J,
-                   float *conic, cudaStream_t stream = 0);
+void compute_conic(float *const xyz, const float *view, float *const sigma, const float focal_x, const float focal_y,
+                   const float tan_fovx, const float tan_fovy, const int N, float *J, float *conic,
+                   cudaStream_t stream = 0);
 
 /**
  * @brief Compute covariance matrix of Gaussian from quaternion and scale vector
@@ -32,25 +36,28 @@ void compute_conic(float *const xyz, const float *K, float *const sigma, const f
 void compute_sigma(float *const quaternion, float *const scale, const int N, float *sigma, cudaStream_t stream = 0);
 
 /**
- * @brief Compute camera view of points from rotation matrix and translation vector
+ * @brief Compute camera view of points from View matrix
  * @param[in]  xyz_w  A device pointer to world view of points
- * @param[in]  T      A device pointer to camera extrinsic matrix
+ * @param[in]  view   A device pointer to camera view matrix (4x4)
  * @param[in]  N      The total number of points
  * @param[out] xyz_c  A device porinter to output camera view
  * @param[in]  stream The CUDA stream to execute kernel on
  */
-void camera_extrinsic_projection(float *const xyz_w, const float *T, const int N, float *xyz_c,
+void compute_camera_space_points(float *const xyz_w, const float *view, const int N, float *xyz_c,
                                  cudaStream_t stream = 0);
 
 /**
  * @brief Launches the CUDA kernel for projecting 3D points to 2D image coordinates.
- * @param[in]  xyz  A device pointer to the input array of 3D points.
- * @param[in]  K    A device pointer to the camera intrinsic matrix.
- * @param[in]  N    The total number of points.
- * @param[out] uv   A device pointer to the output array for 2D coordinates.
+ * @param[in]  xyz    A device pointer to the input array of 3D points.
+ * @param[in]  proj   A device pointer to the camera projection matrix (4x4).
+ * @param[in]  N      The total number of points.
+ * @param[in]  width  Image width.
+ * @param[in]  height Image height.
+ * @param[out] uv     A device pointer to the output array for 2D coordinates.
  * @param[in]  stream The CUDA stream to execute kernel on
  */
-void camera_intrinsic_projection(float *const xyz, const float *K, const int N, float *uv, cudaStream_t stream = 0);
+void project_to_screen(float *const xyz, const float *proj, const int N, const int width, const int height, float *uv,
+                       cudaStream_t stream = 0);
 
 /**
  * @brief Lauches CUDA kernel to perform frustum culling on guassians.
