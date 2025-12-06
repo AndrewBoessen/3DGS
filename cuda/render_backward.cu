@@ -36,8 +36,8 @@ __global__ void render_tiles_backward_kernel(
 
   // Per-pixel variables stored in registers
   float T[PIXELS_PER_THREAD];
+  float T_final[PIXELS_PER_THREAD];
   float3 color_accum[PIXELS_PER_THREAD];
-  bool background_initialized[PIXELS_PER_THREAD];
 
   const int in_tile_x = threadIdx.x % TILE_SIZE_BWD;                     // local tile x
   const int in_tile_y = threadIdx.x / TILE_SIZE_BWD * PIXELS_PER_THREAD; // local tile y
@@ -68,8 +68,8 @@ __global__ void render_tiles_backward_kernel(
       T[i] = 0.0f;
       _splats_per_pixel[i][threadIdx.y * blockDim.x + threadIdx.x] = 0;
     }
+    T_final[i] = T[i];
     color_accum[i] = {0.0f, 0.0f, 0.0f};
-    background_initialized[i] = false;
   }
   index_in_tile = cg::reduce(warp, index_in_tile, cg::greater<int>()) - 1; // max depth in tile
 
@@ -121,7 +121,7 @@ __global__ void render_tiles_backward_kernel(
       // Mask out low alpha and depth
       bool valid_splat = valid_pixel;
       valid_splat &= (alpha >= 0.00392156862f);
-      valid_splat &= (index_in_tile < _splats_per_pixel[i][threadIdx.y * blockDim.x + threadIdx.x]);
+      valid_splat &= (index_in_tile <= _splats_per_pixel[i][threadIdx.y * blockDim.x + threadIdx.x]);
 
       const unsigned int valid_mask = __any_sync(0xFFFFFFFF, valid_splat);
 
@@ -129,20 +129,7 @@ __global__ void render_tiles_backward_kernel(
         alpha *= valid_splat;
         g *= valid_splat;
 
-        if (valid_splat && !background_initialized[i]) {
-          const float background_weight = 1.0f - (alpha * T[i] + 1.0f - T[i]);
-          if (background_weight > 0.001f) {
-            color_accum[i].x += background_opacity * background_weight;
-            color_accum[i].y += background_opacity * background_weight;
-            color_accum[i].z += background_opacity * background_weight;
-          }
-          background_initialized[i] = true;
-        }
-        // alpha reciprical
-        float ra = 1.0f / (1.0f - alpha);
-
-        if (index_in_tile < _splats_per_pixel[i][threadIdx.y * blockDim.x + threadIdx.x] - 1)
-          T[i] *= ra;
+        T[i] *= 1.0f / (1.0f - alpha);
 
         // RGB gradients
         grad_rgb_tile.x += alpha * T[i] * _image_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
@@ -151,19 +138,24 @@ __global__ void render_tiles_backward_kernel(
 
         float grad_alpha = 0.0f;
         // alpha gradient
-        grad_alpha +=
-            (T[i] * color.x - color_accum[i].x * ra) * _image_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
-        grad_alpha +=
-            (T[i] * color.y - color_accum[i].y * ra) * _image_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
-        grad_alpha +=
-            (T[i] * color.z - color_accum[i].z * ra) * _image_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
+        grad_alpha += (color.x - color_accum[i].x) * _image_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
+        grad_alpha += (color.y - color_accum[i].y) * _image_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
+        grad_alpha += (color.z - color_accum[i].z) * _image_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
+        grad_alpha *= T[i];
+
+        // account for background contribution
+        float bg_dot_pixel = 0;
+        bg_dot_pixel += background_opacity * _image_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
+        bg_dot_pixel += background_opacity * _image_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
+        bg_dot_pixel += background_opacity * _image_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
+        grad_alpha += (-T_final[i] / (1.0f - alpha)) * bg_dot_pixel;
 
         // opacity gradient
         grad_opacity_tile += g * grad_alpha * opa * (1.0f - opa);
 
-        color_accum[i].x += alpha * T[i] * color.x;
-        color_accum[i].y += alpha * T[i] * color.y;
-        color_accum[i].z += alpha * T[i] * color.z;
+        color_accum[i].x = alpha * color.x + (1.0f - alpha) * color_accum[i].x;
+        color_accum[i].y = alpha * color.y + (1.0f - alpha) * color_accum[i].y;
+        color_accum[i].z = alpha * color.z + (1.0f - alpha) * color_accum[i].z;
 
         // G gradient
         const float grad_g = grad_alpha * opa;
@@ -188,11 +180,11 @@ __global__ void render_tiles_backward_kernel(
       float grad_u_tile = 0.0f;
       float grad_v_tile = 0.0f;
 
-      grad_u_tile = grad_basic * -(inv_cov00 * d.x + inv_cov01 * d.y) + (grad_linear * inv_cov01);
-      grad_v_tile = grad_basic * -(inv_cov01 * d.x + inv_cov11 * d.y) + (grad_linear * inv_cov11);
+      grad_u_tile = (-inv_cov00 * d.x - inv_cov01 * d.y) * grad_basic + inv_cov01 * grad_linear;
+      grad_v_tile = (-inv_cov11 * d.y - inv_cov01 * d.x) * grad_basic + inv_cov11 * grad_linear;
 
-      // grad_u_tile *= 0.5f * image_width;
-      // grad_v_tile *= 0.5f * image_height;
+      grad_u_tile *= 0.5f * image_width;
+      grad_v_tile *= 0.5f * image_height;
 
       grad_u_tile = cg::reduce(warp, grad_u_tile, cg::plus<float>());
       grad_v_tile = cg::reduce(warp, grad_v_tile, cg::plus<float>());
