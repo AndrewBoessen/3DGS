@@ -44,9 +44,9 @@ void compute_camera_space_points_backward(const float *const xyz_w, const float 
  * @param[out] xyz_c_grad_in    A device pointer to store the computed gradients for xyz_c.
  * @param[in]  stream           The CUDA stream to execute the kernel on.
  */
-void compute_projection_jacobian_backward(const float *const xyz_c, const float *const proj,
-                                          const float *const J_grad_out, const int N, float *xyz_c_grad_in,
-                                          cudaStream_t stream = 0);
+void compute_projection_jacobian_backward(const float *const xyz_c, const float focal_x, const float focal_y,
+                                          const float tan_fovx, const float tan_fovy, const float *const J_grad_out,
+                                          const int N, float *xyz_c_grad_in, cudaStream_t stream = 0);
 
 /**
  * @brief Compute gradients for the 2D conic projection.

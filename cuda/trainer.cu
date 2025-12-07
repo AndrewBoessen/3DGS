@@ -819,8 +819,12 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
       thrust::raw_pointer_cast(cuda.gradients.d_grad_conic.data()), pass_data.num_culled,
       thrust::raw_pointer_cast(cuda.gradients.d_grad_J.data()),
       thrust::raw_pointer_cast(cuda.gradients.d_grad_sigma.data()));
-  compute_projection_jacobian_backward(thrust::raw_pointer_cast(d_xyz_c_selected.data()),
-                                       thrust::raw_pointer_cast(cuda.camera.d_proj.data()),
+  const float fov_x = 2.0f * atan(curr_camera.width / (2.0f * curr_camera.params[0]));
+  const float fov_y = 2.0f * atan(curr_camera.height / (2.0f * curr_camera.params[1]));
+  const float tan_fovx = tan(fov_x * 0.5f);
+  const float tan_fovy = tan(fov_y * 0.5f);
+  compute_projection_jacobian_backward(thrust::raw_pointer_cast(d_xyz_c_selected.data()), curr_camera.params[0],
+                                       curr_camera.params[1], tan_fovx, tan_fovy,
                                        thrust::raw_pointer_cast(cuda.gradients.d_grad_J.data()), pass_data.num_culled,
                                        thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz_c.data()));
   compute_sigma_backward(thrust::raw_pointer_cast(d_quaternion_selected.data()),

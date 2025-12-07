@@ -3,122 +3,84 @@
 #include "checks.cuh"
 #include "gsplat_cuda/cuda_backward.cuh"
 
-__global__ void compute_projection_jacobian_backward_kernel(const float *__restrict__ xyz,
-                                                            const float *__restrict__ proj,
-                                                            const float *__restrict__ J_grad_out, const int N,
-                                                            float *xyz_grad_in) {
+__global__ void compute_projection_jacobian_backward_kernel(const float *__restrict__ xyz, const float focal_x,
+                                                            const float focal_y, const float tan_fovx,
+                                                            const float tan_fovy, const float *__restrict__ J_grad_out,
+                                                            const int N, float *xyz_grad_in) {
   constexpr int XYZ_STRIDE = 3;
   constexpr int J_STRIDE = 6;
 
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
-  const int lane_id = threadIdx.x & 0x1f;
-
-  // load and broadcast Proj to all threads in warp
-  float p_val = 0.0f;
-  if (lane_id < 16) {
-    p_val = proj[lane_id];
-  }
-  const float p00 = __shfl_sync(0xffffffff, p_val, 0);
-  const float p01 = __shfl_sync(0xffffffff, p_val, 1);
-  const float p02 = __shfl_sync(0xffffffff, p_val, 2);
-  const float p03 = __shfl_sync(0xffffffff, p_val, 3);
-  const float p10 = __shfl_sync(0xffffffff, p_val, 4);
-  const float p11 = __shfl_sync(0xffffffff, p_val, 5);
-  const float p12 = __shfl_sync(0xffffffff, p_val, 6);
-  const float p13 = __shfl_sync(0xffffffff, p_val, 7);
-  const float p30 = __shfl_sync(0xffffffff, p_val, 12);
-  const float p31 = __shfl_sync(0xffffffff, p_val, 13);
-  const float p32 = __shfl_sync(0xffffffff, p_val, 14);
-  const float p33 = __shfl_sync(0xffffffff, p_val, 15);
 
   if (i >= N) {
     return;
   }
 
-  float x = xyz[i * XYZ_STRIDE + 0];
-  float y = xyz[i * XYZ_STRIDE + 1];
-  float z = xyz[i * XYZ_STRIDE + 2];
+  const float x = xyz[i * XYZ_STRIDE + 0];
+  const float y = xyz[i * XYZ_STRIDE + 1];
+  const float z = xyz[i * XYZ_STRIDE + 2];
 
-  // Clip coordinates
-  float xc = p00 * x + p01 * y + p02 * z + p03;
-  float yc = p10 * x + p11 * y + p12 * z + p13;
-  float wc = p30 * x + p31 * y + p32 * z + p33;
-
-  if (fabsf(wc) < 1e-6f) {
+  if (fabsf(z) < 1e-6f) {
     return;
   }
 
-  float wc_inv = 1.0f / wc;
-  float wc_inv2 = wc_inv * wc_inv;
-  float wc_inv3 = wc_inv2 * wc_inv;
+  const float z_inv = 1.0f / (z + 1e-6f);
+  const float z_inv2 = z_inv * z_inv;
+  const float z_inv3 = z_inv2 * z_inv;
 
-  // Gradients of J
-  float dJ_00 = J_grad_out[i * J_STRIDE + 0];
-  float dJ_01 = J_grad_out[i * J_STRIDE + 1];
-  float dJ_02 = J_grad_out[i * J_STRIDE + 2];
-  float dJ_10 = J_grad_out[i * J_STRIDE + 3];
-  float dJ_11 = J_grad_out[i * J_STRIDE + 4];
-  float dJ_12 = J_grad_out[i * J_STRIDE + 5];
+  const float limx = 1.3f * tan_fovx;
+  const float limy = 1.3f * tan_fovy;
+  const float txtz = x * z_inv;
+  const float tytz = y * z_inv;
 
-  // Backprop through J calculation
-  // J00 = (p00*wc - xc*p30) / wc^2
-  // Let Num00 = p00*wc - xc*p30
-  // J00 = Num00 * wc^-2
-  // dNum00 = dJ00 * wc^-2
-  // dwc += dJ00 * Num00 * (-2 * wc^-3) = dJ00 * J00 * (-2/wc)
-  // But we don't have J00 computed here.
-  // Alternatively:
-  // d(J00)/d(xc) = -p30 / wc^2
-  // d(J00)/d(wc) = (p00 * wc^2 - (p00*wc - xc*p30) * 2*wc) / wc^4
-  //              = (p00*wc - 2*(p00*wc - xc*p30)) / wc^3
-  //              = (p00*wc - 2*p00*wc + 2*xc*p30) / wc^3
-  //              = (2*xc*p30 - p00*wc) / wc^3
+  const float dJ_00 = J_grad_out[i * J_STRIDE + 0];
+  // const float dJ_01 = J_grad_out[i * J_STRIDE + 1]; // 0
+  const float dJ_02 = J_grad_out[i * J_STRIDE + 2];
+  // const float dJ_10 = J_grad_out[i * J_STRIDE + 3]; // 0
+  const float dJ_11 = J_grad_out[i * J_STRIDE + 4];
+  const float dJ_12 = J_grad_out[i * J_STRIDE + 5];
 
-  float dxc = 0.0f;
-  float dyc = 0.0f;
-  float dwc = 0.0f;
+  float dx = 0.0f;
+  float dy = 0.0f;
+  float dz = 0.0f;
 
-  // Row 0
-  // J00
-  dxc += dJ_00 * (-p30 * wc_inv2);
-  dwc += dJ_00 * (2.0f * xc * p30 - p00 * wc) * wc_inv3;
-  // J01
-  dxc += dJ_01 * (-p31 * wc_inv2);
-  dwc += dJ_01 * (2.0f * xc * p31 - p01 * wc) * wc_inv3;
-  // J02
-  dxc += dJ_02 * (-p32 * wc_inv2);
-  dwc += dJ_02 * (2.0f * xc * p32 - p02 * wc) * wc_inv3;
+  // J00 = focal_x / z
+  // dL/dz += dL/dJ00 * (-focal_x / z^2)
+  dz += dJ_00 * (-focal_x * z_inv2);
 
-  // Row 1
-  // J10
-  dyc += dJ_10 * (-p30 * wc_inv2);
-  dwc += dJ_10 * (2.0f * yc * p30 - p10 * wc) * wc_inv3;
-  // J11
-  dyc += dJ_11 * (-p31 * wc_inv2);
-  dwc += dJ_11 * (2.0f * yc * p31 - p11 * wc) * wc_inv3;
-  // J12
-  dyc += dJ_12 * (-p32 * wc_inv2);
-  dwc += dJ_12 * (2.0f * yc * p32 - p12 * wc) * wc_inv3;
+  // J02 = -focal_x * clamp(x/z) / z
+  if (fabsf(txtz) <= limx) {
+    // Inside clamp: J02 = -focal_x * x / z^2
+    dx += dJ_02 * (-focal_x * z_inv2);
+    dz += dJ_02 * (2.0f * focal_x * x * z_inv3);
+  } else {
+    // Outside clamp: J02 = -focal_x * lim * sgn(x/z) / z
+    // u_clamped is constant w.r.t small changes in x, z (locally constant)
+    const float clamped_x = (txtz > 0.0f ? limx : -limx);
+    dz += dJ_02 * (focal_x * clamped_x * z_inv2);
+  }
 
-  // Backprop from Clip to Camera
-  // xc = p00*x + p01*y + p02*z + p03
-  // yc = p10*x + p11*y + p12*z + p13
-  // wc = p30*x + p31*y + p32*z + p33
+  // J11 = focal_y / z
+  dz += dJ_11 * (-focal_y * z_inv2);
 
-  float dx = dxc * p00 + dyc * p10 + dwc * p30;
-  float dy = dxc * p01 + dyc * p11 + dwc * p31;
-  float dz = dxc * p02 + dyc * p12 + dwc * p32;
+  // J12 = -focal_y * clamp(y/z) / z
+  if (fabsf(tytz) <= limy) {
+    dy += dJ_12 * (-focal_y * z_inv2);
+    dz += dJ_12 * (2.0f * focal_y * y * z_inv3);
+  } else {
+    const float clamped_y = (tytz > 0.0f ? limy : -limy);
+    dz += dJ_12 * (focal_y * clamped_y * z_inv2);
+  }
 
   xyz_grad_in[i * XYZ_STRIDE + 0] += dx;
   xyz_grad_in[i * XYZ_STRIDE + 1] += dy;
   xyz_grad_in[i * XYZ_STRIDE + 2] += dz;
 }
 
-void compute_projection_jacobian_backward(const float *const xyz_c, const float *const proj,
-                                          const float *const J_grad_out, const int N, float *xyz_c_grad_in,
-                                          cudaStream_t stream) {
+void compute_projection_jacobian_backward(const float *const xyz_c, const float focal_x, const float focal_y,
+                                          const float tan_fovx, const float tan_fovy, const float *const J_grad_out,
+                                          const int N, float *xyz_c_grad_in, cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(xyz_c);
-  ASSERT_DEVICE_POINTER(proj);
   ASSERT_DEVICE_POINTER(J_grad_out);
   ASSERT_DEVICE_POINTER(xyz_c_grad_in);
 
@@ -128,8 +90,8 @@ void compute_projection_jacobian_backward(const float *const xyz_c, const float 
   dim3 gridsize(num_blocks, 1, 1);
   dim3 blocksize(threads_per_block, 1, 1);
 
-  compute_projection_jacobian_backward_kernel<<<gridsize, blocksize, 0, stream>>>(xyz_c, proj, J_grad_out, N,
-                                                                                  xyz_c_grad_in);
+  compute_projection_jacobian_backward_kernel<<<gridsize, blocksize, 0, stream>>>(
+      xyz_c, focal_x, focal_y, tan_fovx, tan_fovy, J_grad_out, N, xyz_c_grad_in);
 }
 
 __global__ void conic_backward_kernel(const float *__restrict__ J, const float *__restrict__ sigma,

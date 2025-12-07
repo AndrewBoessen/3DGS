@@ -189,23 +189,27 @@ TEST_F(CudaBackwardKernelTest, ProjectionJacobianBackward) {
 
   // Device data
   float *d_xyz_c = device_alloc<float>(N * 3);
-  float *d_proj = device_alloc<float>(16);
   float *d_J_grad_in = device_alloc<float>(N * 6);
   float *d_xyz_c_grad_out = device_alloc<float>(N * 3);
 
+  // Focal length and tan_fov derived from Identity-like proj where P00=1, P11=1, P32=1
+  const float focal_x = 1.0f;
+  const float focal_y = 1.0f;
+  const float tan_fovx = 1.0f;
+  const float tan_fovy = 1.0f;
+
   CUDA_CHECK(cudaMemcpy(d_xyz_c, h_xyz_c.data(), N * 3 * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_proj, h_proj.data(), 16 * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_J_grad_in, h_J_grad_in.data(), N * 6 * sizeof(float), cudaMemcpyHostToDevice));
 
   // Run kernel
-  compute_projection_jacobian_backward(d_xyz_c, d_proj, d_J_grad_in, N, d_xyz_c_grad_out);
+  compute_projection_jacobian_backward(d_xyz_c, focal_x, focal_y, tan_fovx, tan_fovy, d_J_grad_in, N, d_xyz_c_grad_out);
 
   CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(cudaMemcpy(h_xyz_c_grad_out.data(), d_xyz_c_grad_out, N * 3 * sizeof(float), cudaMemcpyDeviceToHost));
 
   // Numerical gradient check
-  auto forward_jacobian = [&](const std::vector<float> &xyz_c, const std::vector<float> &proj) {
+  auto forward_jacobian = [&](const std::vector<float> &xyz_c) {
     std::vector<float> J(N * 6);
     for (int i = 0; i < N; ++i) {
       float x = xyz_c[i * 3 + 0];
@@ -234,8 +238,8 @@ TEST_F(CudaBackwardKernelTest, ProjectionJacobianBackward) {
     xyz_c_p[i] += h;
     std::vector<float> xyz_c_m = h_xyz_c;
     xyz_c_m[i] -= h;
-    auto J_p = forward_jacobian(xyz_c_p, h_proj);
-    auto J_m = forward_jacobian(xyz_c_m, h_proj);
+    auto J_p = forward_jacobian(xyz_c_p);
+    auto J_m = forward_jacobian(xyz_c_m);
     float numerical_grad = 0;
     for (int j = 0; j < N * 6; ++j)
       numerical_grad += (J_p[j] - J_m[j]) / (2 * h) * h_J_grad_in[j];
@@ -243,7 +247,6 @@ TEST_F(CudaBackwardKernelTest, ProjectionJacobianBackward) {
   }
 
   CUDA_CHECK(cudaFree(d_xyz_c));
-  CUDA_CHECK(cudaFree(d_proj));
   CUDA_CHECK(cudaFree(d_J_grad_in));
   CUDA_CHECK(cudaFree(d_xyz_c_grad_out));
 }
