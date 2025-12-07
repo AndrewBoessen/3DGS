@@ -43,7 +43,7 @@ __global__ void render_tiles_kernel(const int num_tiles_x, const int num_tiles_y
   unsigned int any_active = 0xFFFFFFFF;
   int index_in_tile = 0;
   const int *splats_in_tile = &gaussian_idx_by_splat_idx[splat_idx_start];
-  bool done = false;
+  bool done[PIXELS_PER_THREAD] = {false};
 
   // Iterate on splats in the tile front to back
   for (; (index_in_tile < total_splats) && (any_active != 0); index_in_tile++) {
@@ -70,12 +70,12 @@ __global__ void render_tiles_kernel(const int num_tiles_x, const int num_tiles_y
       const float power = fminf(0.0f, basic + linear * i + quad * i * i);
 
       float alpha = fminf(0.99f, opa * __expf(power));
-      alpha = (alpha > 0.00392156862f) ? !done * alpha : 0.0f;
+      alpha = (alpha > 0.00392156862f) ? !done[i] * alpha : 0.0f;
 
       const float test_T = T[i] * (1.0f - alpha);
-      done = test_T < 0.0001f;
+      done[i] = test_T < 0.0001f;
 
-      any_active |= __ballot_sync(0xFFFFFFFF, !done);
+      any_active |= __ballot_sync(0xFFFFFFFF, !done[i]);
 
       const float weight = alpha * T[i];
 
@@ -84,7 +84,7 @@ __global__ void render_tiles_kernel(const int num_tiles_x, const int num_tiles_y
       accumulated_rgb[i].z += color.z * weight;
 
       T[i] = test_T;
-      num_splats[i] += !done;
+      num_splats[i] += !done[i];
     }
   }
 
