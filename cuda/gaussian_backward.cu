@@ -172,6 +172,8 @@ __global__ void conic_backward_kernel(const float *__restrict__ J, const float *
 
   // Compute dSigma_prime = - C * dC * C
   // T = C * dC
+  // Compute dSigma_prime = - C * dC * C
+  // T = C * dC
   const float t00 = c00 * dc00_out + c01 * dc01_out;
   const float t01 = c00 * dc01_out + c01 * dc11_out;
   const float t10 = c01 * dc00_out + c11 * dc01_out;
@@ -325,16 +327,18 @@ __global__ void sigma_backward_kernel(const float *__restrict__ q, const float *
   // --- 2. Backpropagate ---
 
   // Load dSigma and reconstruct the full symmetric matrix
+  // Load dSigma and reconstruct the full symmetric matrix
+  // Factor 0.5 for off-diagonal terms when converting from variable derivative to matrix derivative
   float dSigma[9];
-  dSigma[0] = dSigma_in[idx * 6 + 0]; // xx
-  dSigma[1] = dSigma_in[idx * 6 + 1]; // xy
-  dSigma[2] = dSigma_in[idx * 6 + 2]; // xz
-  dSigma[3] = dSigma_in[idx * 6 + 1]; // yx = xy
-  dSigma[4] = dSigma_in[idx * 6 + 3]; // yy
-  dSigma[5] = dSigma_in[idx * 6 + 4]; // yz
-  dSigma[6] = dSigma_in[idx * 6 + 2]; // zx = xz
-  dSigma[7] = dSigma_in[idx * 6 + 4]; // zy = yz
-  dSigma[8] = dSigma_in[idx * 6 + 5]; // zz
+  dSigma[0] = dSigma_in[idx * 6 + 0];        // xx
+  dSigma[1] = 0.5f * dSigma_in[idx * 6 + 1]; // xy
+  dSigma[2] = 0.5f * dSigma_in[idx * 6 + 2]; // xz
+  dSigma[3] = 0.5f * dSigma_in[idx * 6 + 1]; // yx = xy
+  dSigma[4] = dSigma_in[idx * 6 + 3];        // yy
+  dSigma[5] = 0.5f * dSigma_in[idx * 6 + 4]; // yz
+  dSigma[6] = 0.5f * dSigma_in[idx * 6 + 2]; // zx = xz
+  dSigma[7] = 0.5f * dSigma_in[idx * 6 + 4]; // zy = yz
+  dSigma[8] = dSigma_in[idx * 6 + 5];        // zz
 
   // dM = 2 * dSigma * M
   float dM[9];
@@ -404,10 +408,10 @@ __global__ void sigma_backward_kernel(const float *__restrict__ q, const float *
 
   // The gradient of the norm is zero for directions orthogonal to the vector.
   // We subtract the parallel component (the projection) and scale by the inverse norm.
-  dQ_in[idx * 4 + 0] = inv_norm * 0.5f * (d_norm_q[0] - dot * w);
-  dQ_in[idx * 4 + 1] = inv_norm * 0.5f * (d_norm_q[1] - dot * x);
-  dQ_in[idx * 4 + 2] = inv_norm * 0.5f * (d_norm_q[2] - dot * y);
-  dQ_in[idx * 4 + 3] = inv_norm * 0.5f * (d_norm_q[3] - dot * z);
+  dQ_in[idx * 4 + 0] = inv_norm * (d_norm_q[0] - dot * w);
+  dQ_in[idx * 4 + 1] = inv_norm * (d_norm_q[1] - dot * x);
+  dQ_in[idx * 4 + 2] = inv_norm * (d_norm_q[2] - dot * y);
+  dQ_in[idx * 4 + 3] = inv_norm * (d_norm_q[3] - dot * z);
 }
 
 void compute_sigma_backward(const float *const quaternion, const float *const scale, const float *const sigma_grad_out,
