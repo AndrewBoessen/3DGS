@@ -76,6 +76,7 @@ struct ForwardPassData {
   // Temporary buffers for processing
   thrust::device_vector<float> d_uv, d_xyz_c;
   thrust::device_vector<bool> d_mask;
+  thrust::device_vector<float4> d_radius;
 
   // Buffers for sorting
   thrust::device_vector<int> d_sorted_gaussians, d_splat_start_end_idx_by_tile_idx;

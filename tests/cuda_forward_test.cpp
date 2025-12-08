@@ -327,9 +327,11 @@ TEST_F(CudaKernelTest, ComputeConic) {
   // Host-side output buffers
   std::vector<float> h_J(N * 6);
   std::vector<float> h_conic(N * 3);
+  std::vector<float4> h_radius(N);
 
   // Device-side pointers
   float *d_xyz, *d_proj, *d_sigma, *d_view, *d_J, *d_conic;
+  float4 *d_radius;
 
   // Allocate memory on the device
   CUDA_CHECK(cudaMalloc(&d_xyz, h_xyz.size() * sizeof(float)));
@@ -338,6 +340,7 @@ TEST_F(CudaKernelTest, ComputeConic) {
   CUDA_CHECK(cudaMalloc(&d_view, h_view.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_J, h_J.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_conic, h_conic.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_radius, N * sizeof(float4)));
 
   // Copy input data from host to device
   CUDA_CHECK(cudaMemcpy(d_xyz, h_xyz.data(), h_xyz.size() * sizeof(float), cudaMemcpyHostToDevice));
@@ -346,11 +349,12 @@ TEST_F(CudaKernelTest, ComputeConic) {
   CUDA_CHECK(cudaMemcpy(d_view, h_view.data(), h_view.size() * sizeof(float), cudaMemcpyHostToDevice));
 
   // Launch the function to be tested
-  compute_conic(d_xyz, d_view, d_sigma, 1.0f, 1.0f, 1.0f, 1.0f, N, d_J, d_conic);
+  compute_conic(d_xyz, d_view, d_sigma, 1.0f, 1.0f, 1.0f, 1.0f, 3.0f, N, d_J, d_conic, d_radius);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // Copy result from device to host
   CUDA_CHECK(cudaMemcpy(h_conic.data(), d_conic, h_conic.size() * sizeof(float), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_radius.data(), d_radius, h_radius.size() * sizeof(float4), cudaMemcpyDeviceToHost));
 
   // --- Calculate expected results on the host for verification ---
   const float x = h_xyz[0], y = h_xyz[1], z = h_xyz[2];
@@ -393,6 +397,13 @@ TEST_F(CudaKernelTest, ComputeConic) {
     ASSERT_NEAR(h_conic[i], expected_conic[i], 1e-5);
   }
 
+  for (int i = 0; i < N; i++) {
+    EXPECT_NEAR(h_radius[i].x, 3.0f, 1e-5);
+    EXPECT_NEAR(h_radius[i].y, 1.0f, 1e-5);
+    EXPECT_NEAR(h_radius[i].z, sqrt(0.8), 1e-5);
+    EXPECT_NEAR(h_radius[i].w, sqrt(0.2), 1e-5);
+  }
+
   // Free device memory
   CUDA_CHECK(cudaFree(d_xyz));
   CUDA_CHECK(cudaFree(d_proj));
@@ -433,30 +444,30 @@ TEST_F(CudaKernelTest, GetSortedGaussianList) {
       0.0f, 0.0f, 5.0f   // G2
   };
   // Conic parameters a,b,c. For a circle, b=0, a=c. Radius ~ mh_dist * sqrt(a).
-  // G0 & G2 radius = 4 => 3*sqrt(a)=4 => a=16/9 ~= 1.78
-  // G1 radius = 6 => 3*sqrt(a)=6 => a=36/9 = 4
-  const std::vector<float> h_conic = {
-      1.78f, 0.0f, 1.78f, // G0
-      4.0f,  0.0f, 4.0f,  // G1
-      1.78f, 0.0f, 1.78f  // G2
+  // G0 & G2 radius = 4
+  // G1 radius = 6
+  const std::vector<float4> h_radius = {
+      {4.0f, 4.0f, 0.f, 1.f}, // G0
+      {4.0f, 4.0f, 0.f, 1.f}, // G1
+      {6.0f, 6.0f, 0.f, 1.f}  // G2
   };
 
   // Device-side pointers
-  float *d_uvs, *d_xyz, *d_conic;
+  float *d_uvs, *d_xyz;
+  float4 *d_radius;
   int *d_sorted_gaussians, *d_splat_boundaries;
 
   // Allocate and copy inputs to device
   CUDA_CHECK(cudaMalloc(&d_uvs, h_uvs.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_xyz, h_xyz.size() * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&d_conic, h_conic.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_radius, h_radius.size() * sizeof(float4)));
   CUDA_CHECK(cudaMemcpy(d_uvs, h_uvs.data(), h_uvs.size() * sizeof(float), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_xyz, h_xyz.data(), h_xyz.size() * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_conic, h_conic.data(), h_conic.size() * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_radius, h_radius.data(), h_radius.size() * sizeof(float4), cudaMemcpyHostToDevice));
 
   // --- PASS 1: Get required buffer size ---
   size_t sorted_gaussian_bytes = 0;
-  get_sorted_gaussian_list(d_uvs, d_xyz, d_conic, n_tiles_x, n_tiles_y, mh_dist, N, sorted_gaussian_bytes, nullptr,
-                           nullptr);
+  get_sorted_gaussian_list(d_uvs, d_xyz, d_radius, n_tiles_x, n_tiles_y, N, sorted_gaussian_bytes, nullptr, nullptr);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // Expected splats:
@@ -472,8 +483,8 @@ TEST_F(CudaKernelTest, GetSortedGaussianList) {
   CUDA_CHECK(cudaMalloc(&d_sorted_gaussians, sorted_gaussian_bytes * sizeof(int)));
   CUDA_CHECK(cudaMalloc(&d_splat_boundaries, (num_tiles + 1) * sizeof(int)));
 
-  get_sorted_gaussian_list(d_uvs, d_xyz, d_conic, n_tiles_x, n_tiles_y, mh_dist, N, sorted_gaussian_bytes,
-                           d_sorted_gaussians, d_splat_boundaries);
+  get_sorted_gaussian_list(d_uvs, d_xyz, d_radius, n_tiles_x, n_tiles_y, N, sorted_gaussian_bytes, d_sorted_gaussians,
+                           d_splat_boundaries);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // --- Verification ---
@@ -521,7 +532,7 @@ TEST_F(CudaKernelTest, GetSortedGaussianList) {
   // --- Cleanup ---
   CUDA_CHECK(cudaFree(d_uvs));
   CUDA_CHECK(cudaFree(d_xyz));
-  CUDA_CHECK(cudaFree(d_conic));
+  CUDA_CHECK(cudaFree(d_radius));
   CUDA_CHECK(cudaFree(d_sorted_gaussians));
   CUDA_CHECK(cudaFree(d_splat_boundaries));
 }

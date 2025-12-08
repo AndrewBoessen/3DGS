@@ -75,7 +75,8 @@ __global__ void compute_sigma_fused_kernel(const float *__restrict__ quaternion,
 }
 
 __global__ void compute_conic_kernel(const float *__restrict__ sigma, const float *__restrict__ view,
-                                     const float *__restrict__ J, const int N, float *conic) {
+                                     const float *__restrict__ J, const int N, const float mh_dist, float *conic,
+                                     float4 *radius) {
   constexpr int SIGMA_STRIDE = 6;
   constexpr int J_STRIDE = 6;
   constexpr int CONIC_STRIDE = 3;
@@ -156,6 +157,21 @@ __global__ void compute_conic_kernel(const float *__restrict__ sigma, const floa
   conic[conic_base_idx + 0] = cov11 * inv_det;
   conic[conic_base_idx + 1] = -cov01 * inv_det;
   conic[conic_base_idx + 2] = cov00 * inv_det;
+
+  // Eigenvalues
+  const float mid = 0.5f * (cov00 + cov11);
+  // Ensure the term inside sqrt is non-negative using max(0.1f, ...)
+  const float lambda_term = sqrt(max(0.1f, mid * mid - det));
+  const float lambda1 = mid + lambda_term;
+  const float lambda2 = mid - lambda_term;
+
+  const float r_major = ceil(mh_dist * sqrt(lambda1));
+  const float r_minor = ceil(mh_dist * sqrt(lambda2));
+
+  float cos_theta, sin_theta;
+  sincosf(0.5f * atan2f(2.0f * cov01, cov00 - cov11), &sin_theta, &cos_theta);
+
+  radius[i] = {r_major, r_minor, sin_theta, cos_theta};
 }
 
 __global__ void compute_projection_jacobian_kernel(const float *__restrict__ xyz, const float *__restrict__ view,
@@ -219,8 +235,8 @@ void compute_sigma(float *const quaternion, float *const scale, const int N, flo
 }
 
 void compute_conic(float *const xyz, const float *view, float *const sigma, const float focal_x, const float focal_y,
-                   const float tan_fovx, const float tan_fovy, const int N, float *J, float *conic,
-                   cudaStream_t stream) {
+                   const float tan_fovx, const float tan_fovy, const float mh_dist, const int N, float *J, float *conic,
+                   float4 *radius, cudaStream_t stream) {
   // Ensure all provided pointers are valid GPU device pointers.
   ASSERT_DEVICE_POINTER(xyz);
   ASSERT_DEVICE_POINTER(sigma);
@@ -242,5 +258,5 @@ void compute_conic(float *const xyz, const float *view, float *const sigma, cons
 
   // This kernel uses the world-space covariance (sigma), the camera transform (View),
   // and the Jacobian (J) computed in the previous step to find the 2D conic.
-  compute_conic_kernel<<<gridsize, blocksize, 0, stream>>>(sigma, view, J, N, conic);
+  compute_conic_kernel<<<gridsize, blocksize, 0, stream>>>(sigma, view, J, N, mh_dist, conic, radius);
 }

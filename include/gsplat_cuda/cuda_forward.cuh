@@ -16,14 +16,16 @@ inline constexpr int TILE_SIZE_FWD = 16;
  * @param[in]  focal_y  Camera focal length y
  * @param[in]  tan_fovx 3D Gaussian covariance matrix
  * @param[in]  tan_fovy 3D Gaussian covariance matrix
+ * @param[in]  mh_dist  Mahalanobis distance to define bounding box
  * @param[in]  N        The total number of points
  * @param[out] J        A device pointer to ouput Jacobian
  * @param[out] conic    A device pointer to output conic values
+ * @param[out] radius   A device pointer to output major and minor radius with rotation
  * @param[in]  stream   The CUDA stream to execute kernel on
  */
 void compute_conic(float *const xyz, const float *view, float *const sigma, const float focal_x, const float focal_y,
-                   const float tan_fovx, const float tan_fovy, const int N, float *J, float *conic,
-                   cudaStream_t stream = 0);
+                   const float tan_fovx, const float tan_fovy, const float mh_dist, const int N, float *J, float *conic,
+                   float4 *radius, cudaStream_t stream = 0);
 
 /**
  * @brief Compute covariance matrix of Gaussian from quaternion and scale vector
@@ -78,19 +80,18 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
  * @brief Lanuches CUDA kernels to get gaussian tile intersections sorted by depth
  * @param[in]  uv                               A device pointer to gaussian coordinates in image frame
  * @param[in]  xyz                              A device pointer to 3D corrdinates of gaussians in camera perspective
- * @param[in]  conic                            A device pointer to 2D gaussian conic
+ * @param[in]  radius                           A device pointer to major and minor radius with rotation
  * @param[in]  n_tiles_x                        Number of tiles in image x axis
  * @param[in]  n_tiles_y                        Number of tiles in image y axis
- * @param[in]  mh_dist                          Mahalanobis distance to define bounding box
  * @param[in]  N                                The total number of points
  * @param[out] sorted_gaussian_bytes            Pointer to store bytes to allocate for sorted_gaussians
  * @param[out] sorted_gaussians                 A device array to ouput gaussians sorted by z depth
  * @param[out] splat_start_end_idx_by_tile_idx  A device array to index into sorted_gaussian by tile id
  * @param[in]  stream                           The CUDA stream to execute kernel on
  */
-void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *conic, const int n_tiles_x,
-                              const int n_tiles_y, const float mh_dist, const int N, size_t &sorted_gaussian_bytes,
-                              int *sorted_gaussians, int *splat_start_end_idx_by_tile_idx, cudaStream_t stream = 0);
+void get_sorted_gaussian_list(const float *uv, const float *xyz, const float4 *radius, const int n_tiles_x,
+                              const int n_tiles_y, const int N, size_t &sorted_gaussian_bytes, int *sorted_gaussians,
+                              int *splat_start_end_idx_by_tile_idx, cudaStream_t stream = 0);
 
 /**
  * @brief Launches CUDA kernels to precompute spherical harmonic values and calculate rgb values

@@ -79,6 +79,7 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
   pass_data.d_sigma.resize(pass_data.num_culled * 9);
   pass_data.d_conic.resize(pass_data.num_culled * 3);
   pass_data.d_J.resize(pass_data.num_culled * 6);
+  pass_data.d_radius.resize(pass_data.num_culled);
 
   const float focal_x = camera.params[0];
   const float focal_y = camera.params[1];
@@ -91,8 +92,9 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
                 thrust::raw_pointer_cast(pass_data.d_sigma.data()));
   compute_conic(
       thrust::raw_pointer_cast(d_xyz_c_selected.data()), thrust::raw_pointer_cast(camera_parameters.d_view.data()),
-      thrust::raw_pointer_cast(pass_data.d_sigma.data()), focal_x, focal_y, tan_fovx, tan_fovy, pass_data.num_culled,
-      thrust::raw_pointer_cast(pass_data.d_J.data()), thrust::raw_pointer_cast(pass_data.d_conic.data()));
+      thrust::raw_pointer_cast(pass_data.d_sigma.data()), focal_x, focal_y, tan_fovx, tan_fovy, config.mh_dist,
+      pass_data.num_culled, thrust::raw_pointer_cast(pass_data.d_J.data()),
+      thrust::raw_pointer_cast(pass_data.d_conic.data()), thrust::raw_pointer_cast(pass_data.d_radius.data()));
 
   // Step 5: Sort Gaussians by tile
   const int n_tiles_x = (width + TILE_SIZE_FWD - 1) / TILE_SIZE_FWD;
@@ -101,7 +103,7 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
   size_t sorted_gaussian_size = 0;
   get_sorted_gaussian_list(thrust::raw_pointer_cast(d_uv_selected.data()),
                            thrust::raw_pointer_cast(d_xyz_c_selected.data()),
-                           thrust::raw_pointer_cast(pass_data.d_conic.data()), n_tiles_x, n_tiles_y, config.mh_dist,
+                           thrust::raw_pointer_cast(pass_data.d_radius.data()), n_tiles_x, n_tiles_y,
                            pass_data.num_culled, sorted_gaussian_size, nullptr, nullptr);
 
   pass_data.d_splat_start_end_idx_by_tile_idx.resize(n_tiles + 1);
@@ -109,7 +111,7 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
 
   get_sorted_gaussian_list(
       thrust::raw_pointer_cast(d_uv_selected.data()), thrust::raw_pointer_cast(d_xyz_c_selected.data()),
-      thrust::raw_pointer_cast(pass_data.d_conic.data()), n_tiles_x, n_tiles_y, config.mh_dist, pass_data.num_culled,
+      thrust::raw_pointer_cast(pass_data.d_radius.data()), n_tiles_x, n_tiles_y, pass_data.num_culled,
       sorted_gaussian_size, thrust::raw_pointer_cast(pass_data.d_sorted_gaussians.data()),
       thrust::raw_pointer_cast(pass_data.d_splat_start_end_idx_by_tile_idx.data()));
 
