@@ -32,6 +32,12 @@ Eigen::Matrix3d Image::QvecToRotMat() const {
   return q.toRotationMatrix();
 }
 
+Eigen::Vector3d Image::CamPos() const {
+  Eigen::Matrix3d rot_mat_d = QvecToRotMat();
+  Eigen::Vector3d t_vec_d = tvec;
+  return -rot_mat_d.transpose() * t_vec_d;
+}
+
 std::optional<std::unordered_map<int, Camera>> ReadCamerasBinary(const std::filesystem::path &path,
                                                                  const int downsample_factor) {
   std::ifstream file(path, std::ios::binary);

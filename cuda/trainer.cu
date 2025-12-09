@@ -344,7 +344,7 @@ void TrainerImpl::evaluate() {
     ForwardPassData pass_data;
     float bg_color = 0.0f; // Black background for eval
 
-    rasterize_image(num_gaussians, cam, config, cuda.camera, cuda.gaussians, pass_data, bg_color, l_max);
+    rasterize_image(num_gaussians, cam, img, config, cuda.camera, cuda.gaussians, pass_data, bg_color, l_max);
 
     // Compute PSNR
     float psnr = compute_psnr(thrust::raw_pointer_cast(pass_data.d_image_buffer.data()),
@@ -782,6 +782,8 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
   const int width = (int)curr_camera.width;
   const int height = (int)curr_camera.height;
 
+  Eigen::Vector3d campos = curr_image.CamPos();
+
   thrust::device_vector<float> d_grad_image(height * width * 3);
 
   float loss =
@@ -1197,7 +1199,8 @@ void TrainerImpl::train() {
       add_sh_band();
 
     // --- FORWARD PASS via RASTERIZE MODULE ---
-    rasterize_image(num_gaussians, curr_camera, config, cuda.camera, cuda.gaussians, pass_data, bg_color, l_max);
+    rasterize_image(num_gaussians, curr_camera, curr_image, config, cuda.camera, cuda.gaussians, pass_data, bg_color,
+                    l_max);
 
     if (pass_data.num_culled == 0) {
       std::cerr << "WARNING Image " << curr_image.id << " has no Gaussians in view" << std::endl;

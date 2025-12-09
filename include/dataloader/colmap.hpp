@@ -38,6 +38,8 @@ struct Image {
 
   // Member function to convert quaternion to rotation matrix.
   [[nodiscard]] Eigen::Matrix3d QvecToRotMat() const;
+  // Member function to get camera position.
+  [[nodiscard]] Eigen::Vector3d CamPos() const;
 };
 
 struct Point3D {

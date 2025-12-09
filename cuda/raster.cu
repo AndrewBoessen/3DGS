@@ -5,10 +5,11 @@
 #include "gsplat_cuda/cuda_data.cuh"
 #include "gsplat_cuda/cuda_forward.cuh"
 
+#include <Eigen/Dense>
 #include <thrust/count.h>
 #include <thrust/device_vector.h>
 
-void rasterize_image(const int num_gaussians, const Camera &camera, const ConfigParameters &config,
+void rasterize_image(const int num_gaussians, const Camera &camera, const Image &image, const ConfigParameters &config,
                      CameraParameters &camera_parameters, GaussianParameters &gaussians, ForwardPassData &pass_data,
                      const float bg_color, const int l_max) {
   const int width = (int)camera.width;
@@ -69,6 +70,8 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Config
 
   // Step 3; Compute final RGB values from spherical harmonics
   pass_data.d_precomputed_rgb.resize(pass_data.num_culled * 3);
+
+  Eigen::Vector3d campos = image.CamPos();
 
   precompute_spherical_harmonics(thrust::raw_pointer_cast(d_xyz_c_selected.data()),
                                  thrust::raw_pointer_cast(d_sh_selected.data()),
