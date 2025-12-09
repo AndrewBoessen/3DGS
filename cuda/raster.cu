@@ -71,12 +71,14 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Image 
   // Step 3; Compute final RGB values from spherical harmonics
   pass_data.d_precomputed_rgb.resize(pass_data.num_culled * 3);
 
-  Eigen::Vector3d campos = image.CamPos();
+  Eigen::Vector3f campos = image.CamPos().cast<float>();
+
+  float3 campos_vec = make_float3(campos.x(), campos.y(), campos.z());
 
   precompute_spherical_harmonics(thrust::raw_pointer_cast(d_xyz_c_selected.data()),
                                  thrust::raw_pointer_cast(d_sh_selected.data()),
-                                 thrust::raw_pointer_cast(d_rgb_selected.data()), l_max, pass_data.num_culled,
-                                 thrust::raw_pointer_cast(pass_data.d_precomputed_rgb.data()));
+                                 thrust::raw_pointer_cast(d_rgb_selected.data()), campos_vec, l_max,
+                                 pass_data.num_culled, thrust::raw_pointer_cast(pass_data.d_precomputed_rgb.data()));
 
   // Step 4: Compute Covariance and Conics
   pass_data.d_sigma.resize(pass_data.num_culled * 9);

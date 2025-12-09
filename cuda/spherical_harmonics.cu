@@ -5,6 +5,26 @@
 #include "sphericart_cuda.hpp"
 #include <thrust/device_vector.h>
 
+__global__ void compute_dir_kernel(const float *xyz, const float3 campos, const int N, float *dir) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= N) {
+    return;
+  }
+
+  const float *pos = xyz + idx * 3;
+  float *d = dir + idx * 3;
+
+  float dx = pos[0] - campos.x;
+  float dy = pos[1] - campos.y;
+  float dz = pos[2] - campos.z;
+
+  float len = sqrtf(dx * dx + dy * dy + dz * dz) + 1e-9f;
+
+  d[0] = dx / len;
+  d[1] = dy / len;
+  d[2] = dz / len;
+}
+
 __global__ void compute_rgb_from_sh_kernel(const float *sh_coefficients, const float *sh_coeffs_band_0,
                                            const float *d_sph, const int n_coeffs, const int N, float *rgb) {
   // Determine the unique index for this thread
@@ -40,7 +60,8 @@ __global__ void compute_rgb_from_sh_kernel(const float *sh_coefficients, const f
 }
 
 void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficients, const float *sh_coeffs_band_0,
-                                    const int l_max, const int N, float *rgb, cudaStream_t stream) {
+                                    const float3 campos, const int l_max, const int N, float *rgb,
+                                    cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(xyz);
   ASSERT_DEVICE_POINTER(sh_coeffs_band_0);
   ASSERT_DEVICE_POINTER(rgb);
@@ -54,12 +75,18 @@ void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficien
 
   thrust::device_vector<float> d_sph(N * n_coeffs);
 
-  // compute SH values
-  calculator_cuda.compute(xyz, N, thrust::raw_pointer_cast(d_sph.data()));
+  // Allocate memory for direction vectors
+  thrust::device_vector<float> d_dir(N * 3);
 
   // Define CUDA kernel launch parameters
   const int blockSize = 256;
   const int gridSize = (N + blockSize - 1) / blockSize;
+
+  // Compute direction vectors
+  compute_dir_kernel<<<gridSize, blockSize, 0, stream>>>(xyz, campos, N, thrust::raw_pointer_cast(d_dir.data()));
+
+  // compute SH values using direction vectors
+  calculator_cuda.compute(thrust::raw_pointer_cast(d_dir.data()), N, thrust::raw_pointer_cast(d_sph.data()));
 
   // Launch the kernel to compute the final RGB values
   compute_rgb_from_sh_kernel<<<gridSize, blockSize, 0, stream>>>(

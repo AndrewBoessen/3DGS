@@ -571,6 +571,10 @@ TEST_F(CudaKernelTest, PrecomputeSphericalHarmonics) {
 
   // 3. Device-side data setup
   float *d_xyz, *d_sh_coefficients, *d_band_0, *d_rgb;
+
+  // Allocate dummy campos at origin
+  float3 campos = {0.0f, 0.0f, 0.0f};
+
   CUDA_CHECK(cudaMalloc(&d_xyz, h_xyz.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_sh_coefficients, h_sh_coefficients.size() * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_band_0, h_band_0.size() * sizeof(float)));
@@ -582,7 +586,8 @@ TEST_F(CudaKernelTest, PrecomputeSphericalHarmonics) {
   CUDA_CHECK(cudaMemcpy(d_band_0, h_band_0.data(), h_band_0.size() * sizeof(float), cudaMemcpyHostToDevice));
 
   // 4. Call the function to be tested
-  precompute_spherical_harmonics(d_xyz, d_sh_coefficients, d_band_0, l_max, N, d_rgb);
+  // 4. Call the function to be tested
+  precompute_spherical_harmonics(d_xyz, d_sh_coefficients, d_band_0, campos, l_max, N, d_rgb);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // 5. Copy results back to host

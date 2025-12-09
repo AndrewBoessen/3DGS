@@ -5,10 +5,30 @@
 #include "sphericart_cuda.hpp"
 #include <thrust/device_vector.h>
 
+__global__ void compute_dir_kernel_bwd(const float *xyz, const float3 campos, const int N, float *dir) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= N) {
+    return;
+  }
+
+  const float *pos = xyz + idx * 3;
+  float *d = dir + idx * 3;
+
+  float dx = pos[0] - campos.x;
+  float dy = pos[1] - campos.y;
+  float dz = pos[2] - campos.z;
+
+  float len = sqrtf(dx * dx + dy * dy + dz * dz) + 1e-9f;
+
+  d[0] = dx / len;
+  d[1] = dy / len;
+  d[2] = dz / len;
+}
+
 __global__ void compute_sh_gradients_kernel(const float *d_sph, const float *d_dsph, const float *d_rgb_vals,
-                                            const float *d_sh_coeffs, const float *rgb_grad_out, const int n_coeffs,
-                                            const int N, float *sh_grad_in, float *sh_grad_band_0_in,
-                                            float *xyz_c_grad_in) {
+                                            const float *d_sh_coeffs, const float *rgb_grad_out, const float *xyz,
+                                            const float3 campos, const int n_coeffs, const int N, float *sh_grad_in,
+                                            float *sh_grad_band_0_in, float *xyz_c_grad_in) {
   // Determine the unique index for this thread, corresponding to a single point/Gaussian.
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= N) {
@@ -107,11 +127,38 @@ __global__ void compute_sh_gradients_kernel(const float *d_sph, const float *d_d
     }
   }
 
-  // Accumulate total gradient w.r.t xyz_c
-  // dL/d(xyz) = dL/dR * dR/d(xyz) + dL/dG * dG/d(xyz) + dL/dB * dB/d(xyz)
-  float total_grad_x = point_rgb_grad[0] * dR_dx + point_rgb_grad[1] * dG_dx + point_rgb_grad[2] * dB_dx;
-  float total_grad_y = point_rgb_grad[0] * dR_dy + point_rgb_grad[1] * dG_dy + point_rgb_grad[2] * dB_dy;
-  float total_grad_z = point_rgb_grad[0] * dR_dz + point_rgb_grad[1] * dG_dz + point_rgb_grad[2] * dB_dz;
+  // Accumulate total gradient w.r.t direction (dir)
+  // dL/d(dir) = dL/dR * dR/d(dir) + dL/dG * dG/d(dir) + dL/dB * dB/d(dir)
+  // Note: d_dsph contains d_SH/d_dir, not d_SH/d_xyz, because we passed normalized directions to sphericart.
+  float total_grad_dir_x = point_rgb_grad[0] * dR_dx + point_rgb_grad[1] * dG_dx + point_rgb_grad[2] * dB_dx;
+  float total_grad_dir_y = point_rgb_grad[0] * dR_dy + point_rgb_grad[1] * dG_dy + point_rgb_grad[2] * dB_dy;
+  float total_grad_dir_z = point_rgb_grad[0] * dR_dz + point_rgb_grad[1] * dG_dz + point_rgb_grad[2] * dB_dz;
+
+  // Propagate gradient from direction to position
+  // dir = (pos - campos) / |pos - campos|
+  // Let diff = pos - campos, dist = |diff|
+  // d(dir)/d(pos) = (I * dist - diff * diff^T / dist) / dist^2
+  //               = (I - dir * dir^T) / dist
+
+  const float *pos = xyz + idx * 3;
+  float diff_x = pos[0] - campos.x;
+  float diff_y = pos[1] - campos.y;
+  float diff_z = pos[2] - campos.z;
+  float dist_sq = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+  float dist = sqrtf(dist_sq) + 1e-9f; // Avoid division by zero
+
+  // dir (recomputed here to save memory read/write)
+  float dir_x = diff_x / dist;
+  float dir_y = diff_y / dist;
+  float dir_z = diff_z / dist;
+
+  // Dot product of gradient and direction
+  float dot = total_grad_dir_x * dir_x + total_grad_dir_y * dir_y + total_grad_dir_z * dir_z;
+
+  // dL/d(pos) = (dL/d(dir) - dot * dir) / dist
+  float total_grad_x = (total_grad_dir_x - dot * dir_x) / dist;
+  float total_grad_y = (total_grad_dir_y - dot * dir_y) / dist;
+  float total_grad_z = (total_grad_dir_z - dot * dir_z) / dist;
 
   xyz_c_grad_in[idx * 3 + 0] += total_grad_x;
   xyz_c_grad_in[idx * 3 + 1] += total_grad_y;
@@ -119,9 +166,10 @@ __global__ void compute_sh_gradients_kernel(const float *d_sph, const float *d_d
 }
 
 void precompute_spherical_harmonics_backward(const float *const xyz_c, const float *const rgb_vals,
-                                             const float *const sh_coeffs, const float *const rgb_grad_out,
-                                             const int l_max, const int N, float *sh_grad_in, float *sh_grad_band_0_in,
-                                             float *xyz_c_grad_in, cudaStream_t stream) {
+                                             const float *const sh_coeffs, const float3 campos,
+                                             const float *const rgb_grad_out, const int l_max, const int N,
+                                             float *sh_grad_in, float *sh_grad_band_0_in, float *xyz_c_grad_in,
+                                             cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(xyz_c);
   ASSERT_DEVICE_POINTER(rgb_vals);
   if (l_max > 0)
@@ -142,18 +190,20 @@ void precompute_spherical_harmonics_backward(const float *const xyz_c, const flo
   // Memory is automatically allocated here.
   thrust::device_vector<float> d_sph(N * n_coeffs);
   thrust::device_vector<float> d_dsph(N * n_coeffs * 3);
-
-  // Use the sphericart library to compute the SH basis values.
-  // We pass the raw pointers from the device_vectors.
-  calculator_cuda.compute_with_gradients(xyz_c, N, thrust::raw_pointer_cast(d_sph.data()),
-                                         thrust::raw_pointer_cast(d_dsph.data()), stream);
+  thrust::device_vector<float> d_dir(N * 3);
 
   // Define CUDA kernel launch parameters.
   const int blockSize = 256;
   const int gridSize = (N + blockSize - 1) / blockSize;
 
+  compute_dir_kernel_bwd<<<gridSize, blockSize, 0, stream>>>(xyz_c, campos, N, thrust::raw_pointer_cast(d_dir.data()));
+
+  calculator_cuda.compute_with_gradients(thrust::raw_pointer_cast(d_dir.data()), N,
+                                         thrust::raw_pointer_cast(d_sph.data()),
+                                         thrust::raw_pointer_cast(d_dsph.data()), stream);
+
   // Launch the kernel to compute the final SH coefficient gradients.
   compute_sh_gradients_kernel<<<gridSize, blockSize, 0, stream>>>(
       thrust::raw_pointer_cast(d_sph.data()), thrust::raw_pointer_cast(d_dsph.data()), rgb_vals, sh_coeffs,
-      rgb_grad_out, n_coeffs, N, sh_grad_in, sh_grad_band_0_in, xyz_c_grad_in);
+      rgb_grad_out, xyz_c, campos, n_coeffs, N, sh_grad_in, sh_grad_band_0_in, xyz_c_grad_in);
 }

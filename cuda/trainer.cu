@@ -782,7 +782,9 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
   const int width = (int)curr_camera.width;
   const int height = (int)curr_camera.height;
 
-  Eigen::Vector3d campos = curr_image.CamPos();
+  Eigen::Vector3f campos = curr_image.CamPos().cast<float>();
+
+  float3 campos_vec = make_float3(campos.x(), campos.y(), campos.z());
 
   thrust::device_vector<float> d_grad_image(height * width * 3);
 
@@ -830,7 +832,7 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
 
   precompute_spherical_harmonics_backward(
       thrust::raw_pointer_cast(d_xyz_c_selected.data()), thrust::raw_pointer_cast(d_rgb_selected.data()),
-      thrust::raw_pointer_cast(d_sh_selected.data()),
+      thrust::raw_pointer_cast(d_sh_selected.data()), campos_vec,
       thrust::raw_pointer_cast(cuda.gradients.d_grad_precompute_rgb.data()), l_max, pass_data.num_culled,
       thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
       thrust::raw_pointer_cast(cuda.gradients.d_grad_rgb.data()),
