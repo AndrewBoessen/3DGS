@@ -121,7 +121,7 @@ __global__ void render_tiles_backward_kernel(
       // Mask out low alpha and depth
       bool valid_splat = valid_pixel;
       valid_splat &= (alpha >= 0.00392156862f);
-      valid_splat &= (index_in_tile <= _splats_per_pixel[i][threadIdx.y * blockDim.x + threadIdx.x]);
+      valid_splat &= (index_in_tile < _splats_per_pixel[i][threadIdx.y * blockDim.x + threadIdx.x]);
 
       const unsigned int valid_mask = __any_sync(0xFFFFFFFF, valid_splat);
 

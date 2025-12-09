@@ -67,6 +67,7 @@ __global__ void render_tiles_kernel(const int num_tiles_x, const int num_tiles_y
 
     any_active = 0;
     for (int i = 0; i < PIXELS_PER_THREAD; i++) {
+      num_splats[i] += !done[i];
       const float power = fminf(0.0f, basic + linear * i + quad * i * i);
 
       float alpha = fminf(0.99f, opa * __expf(power));
@@ -84,7 +85,6 @@ __global__ void render_tiles_kernel(const int num_tiles_x, const int num_tiles_y
       accumulated_rgb[i].z += color.z * weight;
 
       T[i] = test_T;
-      num_splats[i] += !done[i];
     }
   }
 
