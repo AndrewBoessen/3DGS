@@ -131,9 +131,9 @@ __global__ void compute_camera_space_points_backward_kernel(const float *__restr
   // d(xyz_w) = View^T * d(xyz_c) (ignoring translation part for direction vectors, but xyz_w is point)
   // Actually, d(xyz_w) = R^T * d(xyz_c) because translation is constant w.r.t. xyz_w.
   // The View matrix upper-left 3x3 is the rotation R.
-  xyz_w_grad_in[i * XYZ_STRIDE + 0] = v00 * grad_x_c + v10 * grad_y_c + v20 * grad_z_c;
-  xyz_w_grad_in[i * XYZ_STRIDE + 1] = v01 * grad_x_c + v11 * grad_y_c + v21 * grad_z_c;
-  xyz_w_grad_in[i * XYZ_STRIDE + 2] = v02 * grad_x_c + v12 * grad_y_c + v22 * grad_z_c;
+  xyz_w_grad_in[i * XYZ_STRIDE + 0] += v00 * grad_x_c + v10 * grad_y_c + v20 * grad_z_c;
+  xyz_w_grad_in[i * XYZ_STRIDE + 1] += v01 * grad_x_c + v11 * grad_y_c + v21 * grad_z_c;
+  xyz_w_grad_in[i * XYZ_STRIDE + 2] += v02 * grad_x_c + v12 * grad_y_c + v22 * grad_z_c;
 }
 
 void compute_camera_space_points_backward(const float *const xyz_w, const float *const view,

@@ -75,7 +75,7 @@ void rasterize_image(const int num_gaussians, const Camera &camera, const Image 
 
   float3 campos_vec = make_float3(campos.x(), campos.y(), campos.z());
 
-  precompute_spherical_harmonics(thrust::raw_pointer_cast(d_xyz_c_selected.data()),
+  precompute_spherical_harmonics(thrust::raw_pointer_cast(d_xyz_selected.data()),
                                  thrust::raw_pointer_cast(d_sh_selected.data()),
                                  thrust::raw_pointer_cast(d_rgb_selected.data()), campos_vec, l_max,
                                  pass_data.num_culled, thrust::raw_pointer_cast(pass_data.d_precomputed_rgb.data()));

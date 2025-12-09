@@ -831,12 +831,12 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
       thrust::raw_pointer_cast(cuda.gradients.d_grad_conic.data()));
 
   precompute_spherical_harmonics_backward(
-      thrust::raw_pointer_cast(d_xyz_c_selected.data()), thrust::raw_pointer_cast(d_rgb_selected.data()),
+      thrust::raw_pointer_cast(d_xyz_selected.data()), thrust::raw_pointer_cast(d_rgb_selected.data()),
       thrust::raw_pointer_cast(d_sh_selected.data()), campos_vec,
       thrust::raw_pointer_cast(cuda.gradients.d_grad_precompute_rgb.data()), l_max, pass_data.num_culled,
       thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
       thrust::raw_pointer_cast(cuda.gradients.d_grad_rgb.data()),
-      thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz_c.data()));
+      thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz.data()));
   compute_conic_backward(
       thrust::raw_pointer_cast(pass_data.d_J.data()), thrust::raw_pointer_cast(pass_data.d_sigma.data()),
       thrust::raw_pointer_cast(cuda.camera.d_view.data()), thrust::raw_pointer_cast(pass_data.d_conic.data()),
