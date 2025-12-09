@@ -739,20 +739,20 @@ TEST_F(CudaKernelTest, RenderImageMultipleGaussians) {
   // Check the central pixel: (7, 7), which is close to the first gaussian
   int idx_center = (7 * width + 7) * 3;
   std::vector<float> expected_center = calculate_expected_color(7.0f, 7.0f);
-  ASSERT_NEAR(h_image[idx_center + 0], expected_center[0], 1e-2);
-  ASSERT_NEAR(h_image[idx_center + 1], expected_center[1], 1e-2);
-  ASSERT_NEAR(h_image[idx_center + 2], expected_center[2], 1e-2);
+  ASSERT_NEAR(h_image[idx_center + 0], expected_center[0], 1e-3);
+  ASSERT_NEAR(h_image[idx_center + 1], expected_center[1], 1e-3);
+  ASSERT_NEAR(h_image[idx_center + 2], expected_center[2], 1e-3);
 
   // Check a pixel far from all gaussians: (0, 0)
   // Its color should be nearly pure white background.
   int idx_corner = (0 * width + 0) * 3;
   std::vector<float> expected_corner = calculate_expected_color(0.0f, 0.0f);
-  ASSERT_NEAR(h_image[idx_corner + 0], expected_corner[0], 1e-2);
-  ASSERT_NEAR(h_image[idx_corner + 1], expected_corner[1], 1e-2);
-  ASSERT_NEAR(h_image[idx_corner + 2], expected_corner[2], 1e-2);
-  ASSERT_NEAR(h_image[idx_corner + 0], 1.0f, 1e-2); // Check against white
-  ASSERT_NEAR(h_image[idx_corner + 1], 1.0f, 1e-2);
-  ASSERT_NEAR(h_image[idx_corner + 2], 1.0f, 1e-2);
+  ASSERT_NEAR(h_image[idx_corner + 0], expected_corner[0], 1e-3);
+  ASSERT_NEAR(h_image[idx_corner + 1], expected_corner[1], 1e-3);
+  ASSERT_NEAR(h_image[idx_corner + 2], expected_corner[2], 1e-3);
+  ASSERT_NEAR(h_image[idx_corner + 0], 1.0f, 1e-3); // Check against white
+  ASSERT_NEAR(h_image[idx_corner + 1], 1.0f, 1e-3);
+  ASSERT_NEAR(h_image[idx_corner + 2], 1.0f, 1e-3);
 
   // 8. Cleanup
   CUDA_CHECK(cudaFree(d_uv));

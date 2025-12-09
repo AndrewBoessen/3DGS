@@ -257,12 +257,29 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
   const float h = 1e-4f;
 
   // Host data
-  std::vector<float> h_J = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f};
-  std::vector<float> h_sigma_world = {1.0f, 0.1f, 0.2f, 2.0f, 0.3f, 3.0f}; // xx, xy, xz, yy, yz, zz
-  // View matrix (4x4)
-  std::vector<float> h_view = {0.8f, -0.6f, 0.0f, 0.1f, 0.6f, 0.8f, 0.0f, 0.2f,
-                               0.0f, 0.0f,  1.0f, 0.3f, 0.0f, 0.0f, 0.0f, 1.0f};
-  std::vector<float> h_conic_grad_out = {0.5f, -0.2f, 0.8f};
+  std::vector<float> h_J = {
+      0.6f, 0.0f, -0.1f, // Row 0: d(screen_x)/d(xyz)
+      0.0f, 0.6f, -0.2f  // Row 1: d(screen_y)/d(xyz)
+  };
+  std::vector<float> h_sigma_world = {
+      0.5f,  // xx (Variance X) -> Large enough to be dominant
+      0.1f,  // xy (Covariance XY) -> Small enough: 0.1^2 < 0.5*0.5
+      0.05f, // xz
+      0.5f,  // yy
+      0.1f,  // yz
+      0.5f   // zz
+  };
+  std::vector<float> h_view = {
+      1.0f, 0.0f, 0.0f, 0.0f, // Right
+      0.0f, 1.0f, 0.0f, 0.0f, // Up
+      0.0f, 0.0f, 1.0f, 2.0f, // Forward (Translated)
+      0.0f, 0.0f, 0.0f, 1.0f  // Homogeneous
+  };
+  std::vector<float> h_conic_grad_out = {
+      0.5f,  // dL/dA
+      -0.2f, // dL/dB (Half of off-diagonal usually)
+      0.8f   // dL/dC
+  };
   std::vector<float> h_J_grad_in(N * 6);
   std::vector<float> h_sigma_world_grad_in(N * 6); // Kernel has i*6 indexing, so allocate 6 floats
 
@@ -362,8 +379,6 @@ TEST_F(CudaBackwardKernelTest, ConicBackward) {
 
   // Reconstruct full symmetric gradient for sigma from kernel output (which is 6 params)
   // The kernel accumulates gradients into the 6 unique elements.
-  // dL/dS_ij_full = dL/dS_ij_stored (if i==j)
-  // dL/dS_ij_full = 0.5 * dL/dS_ij_stored (if i!=j, because stored accumulates both ij and ji)
   std::vector<float> h_sigma_grad_analytic_full(6);
   h_sigma_grad_analytic_full[0] = h_sigma_world_grad_in[0]; // xx
   h_sigma_grad_analytic_full[1] = h_sigma_world_grad_in[1]; // xy
@@ -497,7 +512,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float loss_m = compute_loss(sigma_m);
 
     float numerical_grad = (loss_p - loss_m) / (2 * h);
-    EXPECT_NEAR(h_dQ_in[i], numerical_grad, 1e-2);
+    EXPECT_NEAR(h_dQ_in[i], numerical_grad, 1e-3);
   }
 
   // Check grad w.r.t s
@@ -514,7 +529,7 @@ TEST_F(CudaBackwardKernelTest, SigmaBackward) {
     float loss_m = compute_loss(sigma_m);
 
     float numerical_grad = (loss_p - loss_m) / (2 * h);
-    EXPECT_NEAR(h_dS_in[i], numerical_grad, 1e-2);
+    EXPECT_NEAR(h_dS_in[i], numerical_grad, 1e-3);
   }
 
   CUDA_CHECK(cudaFree(d_q));
