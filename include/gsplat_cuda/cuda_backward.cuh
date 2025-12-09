@@ -86,9 +86,10 @@ void compute_sigma_backward(const float *const quaternion, const float *const sc
  * @param[out] sh_grad_band_0_in  Spherical harmonic gradients
  * @param[in]  stream             The CUDA stream to execute the kernel on.
  */
-void precompute_spherical_harmonics_backward(const float *const xyz_c, const float *const rgb_grad_out, const int l_max,
-                                             const int N, float *sh_grad_in, float *sh_grad_band_0_in,
-                                             cudaStream_t stream = 0);
+void precompute_spherical_harmonics_backward(const float *const xyz_c, const float *const rgb_vals,
+                                             const float *const sh_coeffs, const float *const rgb_grad_out,
+                                             const int l_max, const int N, float *sh_grad_in, float *sh_grad_band_0_in,
+                                             float *xyz_c_grad_in, cudaStream_t stream = 0);
 
 /**
  * @brief Launch the CUDA kernel to compute rendering gradients.

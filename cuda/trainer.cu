@@ -795,6 +795,24 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
       compact_masked_array<4>(cuda.gaussians.d_quaternion, pass_data.d_mask, pass_data.num_culled);
   auto d_scale_selected = compact_masked_array<3>(cuda.gaussians.d_scale, pass_data.d_mask, pass_data.num_culled);
   auto d_xyz_selected = compact_masked_array<3>(cuda.gaussians.d_xyz, pass_data.d_mask, pass_data.num_culled);
+  auto d_rgb_selected = compact_masked_array<3>(cuda.gaussians.d_rgb, pass_data.d_mask, pass_data.num_culled);
+  thrust::device_vector<float> d_sh_selected;
+  switch (l_max) {
+  case 0:
+    break;
+  case 1:
+    d_sh_selected = compact_masked_array<9>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
+    break;
+  case 2:
+    d_sh_selected = compact_masked_array<24>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
+    break;
+  case 3:
+    d_sh_selected = compact_masked_array<45>(cuda.gaussians.d_sh, pass_data.d_mask, pass_data.num_culled);
+    break;
+  default:
+    fprintf(stderr, "Error SH band is invalid\n");
+    exit(EXIT_FAILURE);
+  }
 
   render_image_backward(
       thrust::raw_pointer_cast(d_uv_selected.data()), thrust::raw_pointer_cast(d_opacity_selected.data()),
@@ -808,11 +826,13 @@ float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_cam
       thrust::raw_pointer_cast(cuda.gradients.d_grad_uv.data()),
       thrust::raw_pointer_cast(cuda.gradients.d_grad_conic.data()));
 
-  precompute_spherical_harmonics_backward(thrust::raw_pointer_cast(d_xyz_c_selected.data()),
-                                          thrust::raw_pointer_cast(cuda.gradients.d_grad_precompute_rgb.data()), l_max,
-                                          pass_data.num_culled,
-                                          thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
-                                          thrust::raw_pointer_cast(cuda.gradients.d_grad_rgb.data()));
+  precompute_spherical_harmonics_backward(
+      thrust::raw_pointer_cast(d_xyz_c_selected.data()), thrust::raw_pointer_cast(d_rgb_selected.data()),
+      thrust::raw_pointer_cast(d_sh_selected.data()),
+      thrust::raw_pointer_cast(cuda.gradients.d_grad_precompute_rgb.data()), l_max, pass_data.num_culled,
+      thrust::raw_pointer_cast(cuda.gradients.d_grad_sh.data()),
+      thrust::raw_pointer_cast(cuda.gradients.d_grad_rgb.data()),
+      thrust::raw_pointer_cast(cuda.gradients.d_grad_xyz_c.data()));
   compute_conic_backward(
       thrust::raw_pointer_cast(pass_data.d_J.data()), thrust::raw_pointer_cast(pass_data.d_sigma.data()),
       thrust::raw_pointer_cast(cuda.camera.d_view.data()), thrust::raw_pointer_cast(pass_data.d_conic.data()),
