@@ -65,7 +65,7 @@ The main executable, `gaussian_splatting`, will be located in the `build/` direc
 ## Using
 
 ![bicycle rendering](./assets/bicycle.gif)
-![bonsai training](./assets/bonsai.gif)
+![garden training](./assets/garden.gif)
 
 ### Mip-NeRF 360
 
