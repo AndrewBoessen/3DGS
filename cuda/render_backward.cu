@@ -20,7 +20,7 @@ __global__ void render_tiles_backward_kernel(
   const int PIXELS_PER_THREAD = (TILE_SIZE_BWD * TILE_SIZE_BWD) / 32;
   const int tile_idx = blockIdx.x * blockDim.y + threadIdx.y;
 
-  cg::thread_block tile_thread_group = cg::this_thread_block();
+  auto tile_thread_group = cg::this_thread_block();
   auto warp = cg::tiled_partition<32>(tile_thread_group);
 
   // Tile outside of image
@@ -36,8 +36,8 @@ __global__ void render_tiles_backward_kernel(
 
   // Per-pixel variables stored in registers
   float T[PIXELS_PER_THREAD];
+  float T_final[PIXELS_PER_THREAD];
   float3 color_accum[PIXELS_PER_THREAD];
-  bool background_initialized[PIXELS_PER_THREAD];
 
   const int in_tile_x = threadIdx.x % TILE_SIZE_BWD;                     // local tile x
   const int in_tile_y = threadIdx.x / TILE_SIZE_BWD * PIXELS_PER_THREAD; // local tile y
@@ -68,8 +68,8 @@ __global__ void render_tiles_backward_kernel(
       T[i] = 0.0f;
       _splats_per_pixel[i][threadIdx.y * blockDim.x + threadIdx.x] = 0;
     }
+    T_final[i] = T[i];
     color_accum[i] = {0.0f, 0.0f, 0.0f};
-    background_initialized[i] = false;
   }
   index_in_tile = cg::reduce(warp, index_in_tile, cg::greater<int>()) - 1; // max depth in tile
 
@@ -85,18 +85,13 @@ __global__ void render_tiles_backward_kernel(
     float basic;
     float linear;
     float quad;
-    float inv_det;
     float2 d = {0.0f, 0.0f};
 
     d.x = uvs[gaussian_idx * 2 + 0] - (float)base_pixel_x;
     d.y = uvs[gaussian_idx * 2 + 1] - (float)base_pixel_y;
-    const float a = conic[gaussian_idx * 3 + 0] + 0.3f;
-    const float b = conic[gaussian_idx * 3 + 1];
-    const float c = conic[gaussian_idx * 3 + 2] + 0.3f;
-    inv_det = 1.0f / (a * c - b * b);
-    const float inv_cov00 = c * inv_det;
-    const float inv_cov01 = -b * inv_det;
-    const float inv_cov11 = a * inv_det;
+    const float inv_cov00 = conic[gaussian_idx * 3 + 0];
+    const float inv_cov01 = conic[gaussian_idx * 3 + 1];
+    const float inv_cov11 = conic[gaussian_idx * 3 + 2];
     basic = -0.5f * (inv_cov00 * d.x * d.x + 2.0f * inv_cov01 * d.x * d.y + inv_cov11 * d.y * d.y);
     linear = inv_cov11 * d.y + inv_cov01 * d.x;
     quad = -0.5f * inv_cov11;
@@ -134,20 +129,7 @@ __global__ void render_tiles_backward_kernel(
         alpha *= valid_splat;
         g *= valid_splat;
 
-        if (valid_splat && !background_initialized[i]) {
-          const float background_weight = 1.0f - (alpha * T[i] + 1.0f - T[i]);
-          if (background_weight > 0.001f) {
-            color_accum[i].x += background_opacity * background_weight;
-            color_accum[i].y += background_opacity * background_weight;
-            color_accum[i].z += background_opacity * background_weight;
-          }
-          background_initialized[i] = true;
-        }
-        // alpha reciprical
-        float ra = 1.0f / (1.0f - alpha);
-
-        if (index_in_tile < _splats_per_pixel[i][threadIdx.y * blockDim.x + threadIdx.x] - 1)
-          T[i] *= ra;
+        T[i] *= 1.0f / (1.0f - alpha);
 
         // RGB gradients
         grad_rgb_tile.x += alpha * T[i] * _image_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
@@ -156,19 +138,24 @@ __global__ void render_tiles_backward_kernel(
 
         float grad_alpha = 0.0f;
         // alpha gradient
-        grad_alpha +=
-            (T[i] * color.x - color_accum[i].x * ra) * _image_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
-        grad_alpha +=
-            (T[i] * color.y - color_accum[i].y * ra) * _image_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
-        grad_alpha +=
-            (T[i] * color.z - color_accum[i].z * ra) * _image_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
+        grad_alpha += (color.x - color_accum[i].x) * _image_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
+        grad_alpha += (color.y - color_accum[i].y) * _image_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
+        grad_alpha += (color.z - color_accum[i].z) * _image_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
+        grad_alpha *= T[i];
+
+        // account for background contribution
+        float bg_dot_pixel = 0;
+        bg_dot_pixel += background_opacity * _image_grad[0][i][threadIdx.y * blockDim.x + threadIdx.x];
+        bg_dot_pixel += background_opacity * _image_grad[1][i][threadIdx.y * blockDim.x + threadIdx.x];
+        bg_dot_pixel += background_opacity * _image_grad[2][i][threadIdx.y * blockDim.x + threadIdx.x];
+        grad_alpha += (-T_final[i] / (1.0f - alpha)) * bg_dot_pixel;
 
         // opacity gradient
         grad_opacity_tile += g * grad_alpha * opa * (1.0f - opa);
 
-        color_accum[i].x += alpha * T[i] * color.x;
-        color_accum[i].y += alpha * T[i] * color.y;
-        color_accum[i].z += alpha * T[i] * color.z;
+        color_accum[i].x = alpha * color.x + (1.0f - alpha) * color_accum[i].x;
+        color_accum[i].y = alpha * color.y + (1.0f - alpha) * color_accum[i].y;
+        color_accum[i].z = alpha * color.z + (1.0f - alpha) * color_accum[i].z;
 
         // G gradient
         const float grad_g = grad_alpha * opa;
@@ -193,11 +180,11 @@ __global__ void render_tiles_backward_kernel(
       float grad_u_tile = 0.0f;
       float grad_v_tile = 0.0f;
 
-      grad_u_tile = grad_basic * -(inv_cov00 * d.x + inv_cov01 * d.y) + (grad_linear * inv_cov01);
-      grad_v_tile = grad_basic * -(inv_cov01 * d.x + inv_cov11 * d.y) + (grad_linear * inv_cov11);
+      grad_u_tile = (-inv_cov00 * d.x - inv_cov01 * d.y) * grad_basic + inv_cov01 * grad_linear;
+      grad_v_tile = (-inv_cov11 * d.y - inv_cov01 * d.x) * grad_basic + inv_cov11 * grad_linear;
 
-      // grad_u_tile *= 0.5f * image_width;
-      // grad_v_tile *= 0.5f * image_height;
+      grad_u_tile *= 0.5f * image_width;
+      grad_v_tile *= 0.5f * image_height;
 
       grad_u_tile = cg::reduce(warp, grad_u_tile, cg::plus<float>());
       grad_v_tile = cg::reduce(warp, grad_v_tile, cg::plus<float>());
@@ -209,11 +196,9 @@ __global__ void render_tiles_backward_kernel(
       const float grad_inv_cov11 = grad_basic * (-0.5f * d.y * d.y) + (grad_linear * d.y) - (0.5f * grad_quad);
       const float grad_inv_cov01 = grad_basic * (-d.x * d.y) + grad_linear * d.x;
 
-      const float S = inv_det * inv_det * (grad_inv_cov00 * c + grad_inv_cov11 * a - grad_inv_cov01 * b);
-
-      grad_conic_tile.x = (grad_inv_cov11 * inv_det) - (c * S);
-      grad_conic_tile.y = (-grad_inv_cov01 * inv_det) + (2.0f * b * S);
-      grad_conic_tile.z = (grad_inv_cov00 * inv_det) - (a * S);
+      grad_conic_tile.x = grad_inv_cov00;
+      grad_conic_tile.y = grad_inv_cov01;
+      grad_conic_tile.z = grad_inv_cov11;
 
       grad_conic_tile.x = cg::reduce(warp, grad_conic_tile.x, cg::plus<float>());
       grad_conic_tile.y = cg::reduce(warp, grad_conic_tile.y, cg::plus<float>());

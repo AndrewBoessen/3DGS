@@ -89,37 +89,8 @@ split_axis_test(const float *__restrict__ obb,        // [tl_x, tl_y, tr_x, tr_y
   return true;
 }
 
-__device__ __forceinline__ float compute_obb(const float u, const float v, const float a, const float b, const float c,
-                                             const float mh_dist, float *obb) {
-  const float t_sum = a + c;
-  const float t_diff = a - c;
-  const float discriminant = t_diff * t_diff + 4.f * b * b;
-  const float root = sqrtf(discriminant);      // Guaranteed non-negative
-  const float lambda1 = 0.5f * (t_sum + root); // Major eigenvalue
-  const float lambda2 = 0.5f * (t_sum - root); // Minor eigenvalue
-
-  const float r_major = mh_dist * sqrtf(fmaxf(0.f, lambda1));
-  const float r_minor = mh_dist * sqrtf(fmaxf(0.f, lambda2));
-
-  float cos_theta, sin_theta;
-  if (fabsf(root) < 1e-7f) {
-    // Handle the case of a circle (a=c, b=0), where rotation is arbitrary.
-    cos_theta = 1.f;
-    sin_theta = 0.f;
-  } else {
-    // Use half-angle trigonometric identities:
-    // cos^2(t) = (1 + cos(2t))/2, sin^2(t) = (1 - cos(2t))/2
-    // where cos(2t) = (a-c)/root and sin(2t) = 2b/root.
-    const float inv_root = 1.f / root;
-    const float cos2theta = t_diff * inv_root;
-
-    cos_theta = sqrtf(0.5f * (1.f + cos2theta));
-    sin_theta = sqrtf(0.5f * (1.f - cos2theta));
-
-    // The sign of sin(theta) is the same as the sign of b.
-    sin_theta = copysignf(sin_theta, b);
-  }
-
+__device__ __forceinline__ void compute_obb(const float u, const float v, const float r_major, const float r_minor,
+                                            const float sin_theta, const float cos_theta, float *obb) {
   // Calculate the two orthogonal vectors defining the OBB's orientation and size
   const float v1_x = r_major * cos_theta;
   const float v1_y = r_major * sin_theta;
@@ -135,9 +106,6 @@ __device__ __forceinline__ float compute_obb(const float u, const float v, const
   obb[5] = v - v1_y + v2_y;
   obb[6] = u + v1_x + v2_x; // Top-right corner
   obb[7] = v + v1_y + v2_y;
-
-  // Return major axis radius
-  return r_major;
 }
 
 __device__ __forceinline__ int get_write_index(const bool write, const int lane, const unsigned int active_mask,
@@ -170,9 +138,9 @@ __device__ __forceinline__ int warpSum(unsigned mask, int val) {
   return val;
 }
 
-__global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float *__restrict__ conic,
-                                      const float mh_dist, const int n_tiles_x, const int n_tiles_y, const int N,
-                                      int *buffer_size, int2 *pairs, int *global_index) {
+__global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float4 *__restrict__ radius,
+                                      const int n_tiles_x, const int n_tiles_y, const int N, int *buffer_size,
+                                      int2 *pairs, int *global_index) {
   const int gaussian_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
   // mask active threads for warpSum
@@ -183,13 +151,9 @@ __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float
 
   const float u = uvs[gaussian_idx * 2];
   const float v = uvs[gaussian_idx * 2 + 1];
-  const float a = conic[gaussian_idx * 3 + 0] + 0.3f;
-  const float b = conic[gaussian_idx * 3 + 1];
-  const float c = conic[gaussian_idx * 3 + 2] + 0.3f;
 
-  float obb[8];
-  const float radius = compute_obb(u, v, a, b, c, mh_dist, obb);
-  const int radius_tiles = ceilf(radius * 0.0625f) + 1;
+  const float r_major = radius[gaussian_idx].x;
+  const int radius_tiles = ceilf(r_major * 0.0625f) + 1;
 
   const int projected_tile_x = floorf(u / 16.0f);
   const int start_tile_x = max(0, projected_tile_x - radius_tiles);
@@ -225,10 +189,10 @@ __global__ void coarse_binning_kernel(const float *__restrict__ uvs, const float
 }
 
 __global__ void generate_splats_kernel(const float *__restrict__ uvs, const float *__restrict__ xyz_camera_frame,
-                                       const float *__restrict__ conic, const int2 *__restrict__ pairs,
-                                       const float mh_dist, const int num_pairs, const int num_tiles_x,
-                                       const int num_tiles_y, const float max_z, int *gaussian_idx_by_splat_idx,
-                                       double *sort_keys, int *global_splat_counter) {
+                                       const float4 *__restrict__ radius, const int2 *__restrict__ pairs,
+                                       const int num_pairs, const int num_tiles_x, const int num_tiles_y,
+                                       const float max_z, int *gaussian_idx_by_splat_idx, double *sort_keys,
+                                       int *global_splat_counter) {
   int pair_id = blockIdx.x * blockDim.x + threadIdx.x;
 
   // Mask of all active threads
@@ -246,13 +210,13 @@ __global__ void generate_splats_kernel(const float *__restrict__ uvs, const floa
   const float u = uvs[gaussian_idx * 2];
   const float v = uvs[gaussian_idx * 2 + 1];
   const double z = (double)(xyz_camera_frame[gaussian_idx * 3 + 2]);
-  const float a = conic[gaussian_idx * 3 + 0] + 0.3f;
-  const float b = conic[gaussian_idx * 3 + 1];
-  const float c = conic[gaussian_idx * 3 + 2] + 0.3f;
+  const float r_major = radius[gaussian_idx].x;
+  const float r_minor = radius[gaussian_idx].y;
+  const float sin_theta = radius[gaussian_idx].z;
+  const float cos_theta = radius[gaussian_idx].w;
 
   float obb[8];
-  const float radius = compute_obb(u, v, a, b, c, mh_dist, obb);
-  const int radius_tiles = ceilf(radius * 0.0625f) + 1;
+  compute_obb(u, v, r_major, r_minor, sin_theta, cos_theta, obb);
 
   const int tile_x = tile_idx % num_tiles_x;
   const int tile_y = tile_idx / num_tiles_x;
@@ -347,12 +311,11 @@ struct copy_z_functor {
   }
 };
 
-void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *conic, const int n_tiles_x,
-                              const int n_tiles_y, const float mh_dist, const int N, size_t &sorted_gaussian_size,
-                              int *sorted_gaussians, int *splat_start_end_idx_by_tile_idx, cudaStream_t stream) {
+void get_sorted_gaussian_list(const float *uv, const float *xyz, const float4 *radius, const int n_tiles_x,
+                              const int n_tiles_y, const int N, size_t &sorted_gaussian_size, int *sorted_gaussians,
+                              int *splat_start_end_idx_by_tile_idx, cudaStream_t stream) {
   ASSERT_DEVICE_POINTER(uv);
   ASSERT_DEVICE_POINTER(xyz);
-  ASSERT_DEVICE_POINTER(conic);
 
   const int threads_per_block = 256;
   const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
@@ -365,7 +328,7 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
     thrust::device_vector<int> d_buffer_size(1, 0);
 
     coarse_binning_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
-        uv, conic, mh_dist, n_tiles_x, n_tiles_y, N, thrust::raw_pointer_cast(d_buffer_size.data()), nullptr, nullptr);
+        uv, radius, n_tiles_x, n_tiles_y, N, thrust::raw_pointer_cast(d_buffer_size.data()), nullptr, nullptr);
     sorted_gaussian_size = d_buffer_size[0];
 
     return;
@@ -379,8 +342,8 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
   // store pairs of gaussians and tiles
   thrust::device_vector<int2> d_pairs(sorted_gaussian_size);
 
-  coarse_binning_kernel<<<num_blocks, threads_per_block, 0, stream>>>(uv, conic, mh_dist, n_tiles_x, n_tiles_y, N,
-                                                                      nullptr, thrust::raw_pointer_cast(d_pairs.data()),
+  coarse_binning_kernel<<<num_blocks, threads_per_block, 0, stream>>>(uv, radius, n_tiles_x, n_tiles_y, N, nullptr,
+                                                                      thrust::raw_pointer_cast(d_pairs.data()),
                                                                       thrust::raw_pointer_cast(d_buffer_index.data()));
   assert(d_buffer_index[0] == sorted_gaussian_size);
 
@@ -406,9 +369,9 @@ void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *co
 
   const int num_blocks_pairs = (num_pairs + threads_per_block - 1) / threads_per_block;
   generate_splats_kernel<<<num_blocks_pairs, threads_per_block, 0, stream>>>(
-      uv, xyz, conic, thrust::raw_pointer_cast(d_pairs.data()), mh_dist, num_pairs, n_tiles_x, n_tiles_y, max_z,
-      sorted_gaussians, // Pass through the raw pointer from caller
-      thrust::raw_pointer_cast(d_sort_keys.data()), thrust::raw_pointer_cast(d_global_splat_counter.data()));
+      uv, xyz, radius, thrust::raw_pointer_cast(d_pairs.data()), num_pairs, n_tiles_x, n_tiles_y, max_z,
+      sorted_gaussians, thrust::raw_pointer_cast(d_sort_keys.data()),
+      thrust::raw_pointer_cast(d_global_splat_counter.data()));
 
   int num_splats = d_global_splat_counter[0]; // Device-to-host copy
 

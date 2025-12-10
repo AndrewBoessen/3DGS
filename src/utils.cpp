@@ -77,7 +77,6 @@ ConfigParameters parseConfig(const std::string &filename) {
     params.delete_opacity_threshold = getNodeValue<float>(config, "delete_opacity_threshold");
     params.uv_grad_threshold = getNodeValue<float>(config, "uv_grad_threshold");
     params.split_scale_factor = getNodeValue<float>(config, "split_scale_factor");
-    params.max_anisotropy = getNodeValue<float>(config, "max_anisotropy");
 
   } catch (const YAML::Exception &e) {
     // Re-throw as a standard exception for the caller to handle.

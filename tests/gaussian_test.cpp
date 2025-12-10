@@ -65,7 +65,7 @@ TEST_F(GaussiansStandaloneTest, Initialize) {
   const float C0 = 0.28209479177387814;
   EXPECT_TRUE(g.rgb[0].isApprox(
       (Eigen::Vector3f(128.0f / 255.0f, 64.0f / 255.0f, 32.0f / 255.0f) - Eigen::Vector3f(0.5f, 0.5f, 0.5f)) / C0));
-  EXPECT_FLOAT_EQ(g.opacity[0], 0.1f);
+  EXPECT_FLOAT_EQ(g.opacity[0], log(0.2f) - log(1.0f - 0.2f));
 }
 
 // ===================================================================

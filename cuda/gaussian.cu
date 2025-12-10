@@ -64,44 +64,42 @@ __global__ void compute_sigma_fused_kernel(const float *__restrict__ quaternion,
   float rs22 = r22 * sz;
 
   // Sigma is symmetric, so we can compute the upper-triangular part
-  // and reflect it to the lower-triangular part.
-  const int sigma_base_idx = 9 * i;
-  sigma[sigma_base_idx + 0] = rs00 * rs00 + rs01 * rs01 + rs02 * rs02; // S_00
-  sigma[sigma_base_idx + 1] = rs00 * rs10 + rs01 * rs11 + rs02 * rs12; // S_01
-  sigma[sigma_base_idx + 2] = rs00 * rs20 + rs01 * rs21 + rs02 * rs22; // S_02
-  sigma[sigma_base_idx + 3] = sigma[sigma_base_idx + 1];               // S_10 = S_01
-  sigma[sigma_base_idx + 4] = rs10 * rs10 + rs11 * rs11 + rs12 * rs12; // S_11
-  sigma[sigma_base_idx + 5] = rs10 * rs20 + rs11 * rs21 + rs12 * rs22; // S_12
-  sigma[sigma_base_idx + 6] = sigma[sigma_base_idx + 2];               // S_20 = S_02
-  sigma[sigma_base_idx + 7] = sigma[sigma_base_idx + 5];               // S_21 = S_12
-  sigma[sigma_base_idx + 8] = rs20 * rs20 + rs21 * rs21 + rs22 * rs22; // S_22
+  // and store only the unique 6 elements.
+  const int sigma_base_idx = 6 * i;
+  sigma[sigma_base_idx + 0] = rs00 * rs00 + rs01 * rs01 + rs02 * rs02; // S_00 (xx)
+  sigma[sigma_base_idx + 1] = rs00 * rs10 + rs01 * rs11 + rs02 * rs12; // S_01 (xy)
+  sigma[sigma_base_idx + 2] = rs00 * rs20 + rs01 * rs21 + rs02 * rs22; // S_02 (xz)
+  sigma[sigma_base_idx + 3] = rs10 * rs10 + rs11 * rs11 + rs12 * rs12; // S_11 (yy)
+  sigma[sigma_base_idx + 4] = rs10 * rs20 + rs11 * rs21 + rs12 * rs22; // S_12 (yz)
+  sigma[sigma_base_idx + 5] = rs20 * rs20 + rs21 * rs21 + rs22 * rs22; // S_22 (zz)
 }
 
-__global__ void compute_conic_kernel(const float *__restrict__ sigma, const float *__restrict__ T,
-                                     const float *__restrict__ J, const int N, float *conic) {
-  constexpr int SIGMA_STRIDE = 9;
+__global__ void compute_conic_kernel(const float *__restrict__ sigma, const float *__restrict__ view,
+                                     const float *__restrict__ J, const int N, const float mh_dist, float *conic,
+                                     float4 *radius) {
+  constexpr int SIGMA_STRIDE = 6;
   constexpr int J_STRIDE = 6;
   constexpr int CONIC_STRIDE = 3;
 
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   const int lane_id = threadIdx.x & 0x1f; // lane_id in warp (0-31)
 
-  // Load and broadcast Extrinsic Matrix T (3x4) within warp
-  float t_val = 0.0f;
-  if (lane_id < 12) {
-    t_val = T[lane_id];
+  // Load and broadcast View Matrix (4x4) within warp
+  float v_val = 0.0f;
+  if (lane_id < 16) {
+    v_val = view[lane_id];
   }
-  // T = [r00, r01, r02, t0, r10, r11, r12, t1, r20, r21, r22, t2]
-  // W = [r00, r01, r02, r10, r11, r12, r20, r21, r22]
-  const float w00 = __shfl_sync(0xffffffff, t_val, 0);
-  const float w01 = __shfl_sync(0xffffffff, t_val, 1);
-  const float w02 = __shfl_sync(0xffffffff, t_val, 2);
-  const float w10 = __shfl_sync(0xffffffff, t_val, 4);
-  const float w11 = __shfl_sync(0xffffffff, t_val, 5);
-  const float w12 = __shfl_sync(0xffffffff, t_val, 6);
-  const float w20 = __shfl_sync(0xffffffff, t_val, 8);
-  const float w21 = __shfl_sync(0xffffffff, t_val, 9);
-  const float w22 = __shfl_sync(0xffffffff, t_val, 10);
+  // View = [r00, r01, r02, t0, r10, r11, r12, t1, r20, r21, r22, t2, 0, 0, 0, 1]
+  // W (rotation part) = [r00, r01, r02, r10, r11, r12, r20, r21, r22]
+  const float w00 = __shfl_sync(0xffffffff, v_val, 0);
+  const float w01 = __shfl_sync(0xffffffff, v_val, 1);
+  const float w02 = __shfl_sync(0xffffffff, v_val, 2);
+  const float w10 = __shfl_sync(0xffffffff, v_val, 4);
+  const float w11 = __shfl_sync(0xffffffff, v_val, 5);
+  const float w12 = __shfl_sync(0xffffffff, v_val, 6);
+  const float w20 = __shfl_sync(0xffffffff, v_val, 8);
+  const float w21 = __shfl_sync(0xffffffff, v_val, 9);
+  const float w22 = __shfl_sync(0xffffffff, v_val, 10);
 
   if (i >= N) {
     return;
@@ -115,9 +113,9 @@ __global__ void compute_conic_kernel(const float *__restrict__ sigma, const floa
   const float s00 = sigma[sigma_base_idx + 0];
   const float s01 = sigma[sigma_base_idx + 1];
   const float s02 = sigma[sigma_base_idx + 2];
-  const float s11 = sigma[sigma_base_idx + 4];
-  const float s12 = sigma[sigma_base_idx + 5];
-  const float s22 = sigma[sigma_base_idx + 8];
+  const float s11 = sigma[sigma_base_idx + 3];
+  const float s12 = sigma[sigma_base_idx + 4];
+  const float s22 = sigma[sigma_base_idx + 5];
 
   // Load the per-Gaussian 2x3 projection Jacobian (J) into registers.
   const int j_base_idx = i * J_STRIDE;
@@ -145,34 +143,44 @@ __global__ void compute_conic_kernel(const float *__restrict__ sigma, const floa
   const float v21 = s02 * m10 + s12 * m11 + s22 * m12;
 
   // 3. Compute conic = M @ V. The resulting conic is a 2x2 symmetric matrix.
-  // We only need to compute and store the 3 unique elements of the upper triangle.
-  const float c00 = m00 * v00 + m01 * v10 + m02 * v20;
-  const float c01 = m00 * v01 + m01 * v11 + m02 * v21; // Also equals c10
-  const float c11 = m10 * v01 + m11 * v11 + m12 * v21;
+  // Covariance is symmetric, so we only need to store the upper triangle
+  // cov = [cov00, cov01, cov11]
+  const float cov00 = m00 * v00 + m01 * v10 + m02 * v20 + 0.3f;
+  const float cov01 = m00 * v01 + m01 * v11 + m02 * v21;
+  const float cov11 = m10 * v01 + m11 * v11 + m12 * v21 + 0.3f;
 
-  // 4. Store the 3 unique components of the conic matrix into global memory.
+  // Invert covariance matrix (2x2)
+  const float det = cov00 * cov11 - cov01 * cov01;
+  const float inv_det = 1.0f / det;
+
   const int conic_base_idx = i * CONIC_STRIDE;
-  conic[conic_base_idx + 0] = c00;
-  conic[conic_base_idx + 1] = c01;
-  conic[conic_base_idx + 2] = c11;
+  conic[conic_base_idx + 0] = cov11 * inv_det;
+  conic[conic_base_idx + 1] = -cov01 * inv_det;
+  conic[conic_base_idx + 2] = cov00 * inv_det;
+
+  // Eigenvalues
+  const float mid = 0.5f * (cov00 + cov11);
+  // Ensure the term inside sqrt is non-negative using max(0.1f, ...)
+  const float lambda_term = sqrt(max(0.1f, mid * mid - det));
+  const float lambda1 = mid + lambda_term;
+  const float lambda2 = mid - lambda_term;
+
+  const float r_major = ceil(mh_dist * sqrt(lambda1));
+  const float r_minor = ceil(mh_dist * sqrt(lambda2));
+
+  float cos_theta, sin_theta;
+  sincosf(0.5f * atan2f(2.0f * cov01, cov00 - cov11), &sin_theta, &cos_theta);
+
+  radius[i] = {r_major, r_minor, sin_theta, cos_theta};
 }
 
-__global__ void compute_projection_jacobian_kernel(const float *__restrict__ xyz, const float *__restrict__ K,
-                                                   const int N, float *J) {
+__global__ void compute_projection_jacobian_kernel(const float *__restrict__ xyz, const float *__restrict__ view,
+                                                   const float focal_x, const float focal_y, const float tan_fovx,
+                                                   const float tan_fovy, const int N, float *J) {
   constexpr int XYZ_STRIDE = 3;
   constexpr int J_STRIDE = 6;
 
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
-  const int lane_id = threadIdx.x & 0x1f;
-
-  // load and broadcast K to all threads in warp
-  float k_val = 0.0f;
-  if (lane_id < 9) {
-    k_val = K[lane_id];
-  }
-  // K = [fx, 0, cx, 0, fy, cy, 0, 0, 1]
-  const float fx = __shfl_sync(0xffffffff, k_val, 0);
-  const float fy = __shfl_sync(0xffffffff, k_val, 4);
 
   if (i >= N) {
     return;
@@ -182,12 +190,31 @@ __global__ void compute_projection_jacobian_kernel(const float *__restrict__ xyz
   float y = xyz[i * XYZ_STRIDE + 1];
   float z = xyz[i * XYZ_STRIDE + 2];
 
-  J[i * J_STRIDE + 0] = fx / z;
-  J[i * J_STRIDE + 1] = 0;
-  J[i * J_STRIDE + 2] = -fx * x / (z * z);
+  // Avoid division by zero
+  if (fabsf(z) < 1e-6f) {
+    J[i * J_STRIDE + 0] = 0;
+    J[i * J_STRIDE + 1] = 0;
+    J[i * J_STRIDE + 2] = 0;
+    J[i * J_STRIDE + 3] = 0;
+    J[i * J_STRIDE + 4] = 0;
+    J[i * J_STRIDE + 5] = 0;
+    return;
+  }
+
+  const float limx = 1.3f * tan_fovx;
+  const float limy = 1.3f * tan_fovy;
+  const float txtz = x / z;
+  const float tytz = y / z;
+  x = min(limx, max(-limx, txtz)) * z;
+  y = min(limy, max(-limy, tytz)) * z;
+
+  // Jacobian of NDC coordinates (x/w, y/w) w.r.t. camera coordinates (x, y, z)
+  J[i * J_STRIDE + 0] = focal_x / z;
+  J[i * J_STRIDE + 1] = 0.0f;
+  J[i * J_STRIDE + 2] = -(focal_x * x) / (z * z);
   J[i * J_STRIDE + 3] = 0;
-  J[i * J_STRIDE + 4] = fy / z;
-  J[i * J_STRIDE + 5] = -fy * y / (z * z);
+  J[i * J_STRIDE + 4] = focal_y / z;
+  J[i * J_STRIDE + 5] = -(focal_y * y) / (z * z);
 }
 
 void compute_sigma(float *const quaternion, float *const scale, const int N, float *sigma, cudaStream_t stream) {
@@ -207,13 +234,13 @@ void compute_sigma(float *const quaternion, float *const scale, const int N, flo
   compute_sigma_fused_kernel<<<gridsize, blocksize, 0, stream>>>(quaternion, scale, N, sigma);
 }
 
-void compute_conic(float *const xyz, const float *K, float *const sigma, const float *T, const int N, float *J,
-                   float *conic, cudaStream_t stream) {
+void compute_conic(float *const xyz, const float *view, float *const sigma, const float focal_x, const float focal_y,
+                   const float tan_fovx, const float tan_fovy, const float mh_dist, const int N, float *J, float *conic,
+                   float4 *radius, cudaStream_t stream) {
   // Ensure all provided pointers are valid GPU device pointers.
   ASSERT_DEVICE_POINTER(xyz);
-  ASSERT_DEVICE_POINTER(K);
   ASSERT_DEVICE_POINTER(sigma);
-  ASSERT_DEVICE_POINTER(T);
+  ASSERT_DEVICE_POINTER(view);
   ASSERT_DEVICE_POINTER(J);
   ASSERT_DEVICE_POINTER(conic);
 
@@ -226,9 +253,10 @@ void compute_conic(float *const xyz, const float *K, float *const sigma, const f
   const dim3 blocksize(threads_per_block, 1, 1);
 
   // This kernel computes the Jacobian (J) for each Gaussian.
-  compute_projection_jacobian_kernel<<<gridsize, blocksize, 0, stream>>>(xyz, K, N, J);
+  compute_projection_jacobian_kernel<<<gridsize, blocksize, 0, stream>>>(xyz, view, focal_x, focal_y, tan_fovx,
+                                                                         tan_fovy, N, J);
 
-  // This kernel uses the world-space covariance (sigma), the camera transform (T),
+  // This kernel uses the world-space covariance (sigma), the camera transform (View),
   // and the Jacobian (J) computed in the previous step to find the 2D conic.
-  compute_conic_kernel<<<gridsize, blocksize, 0, stream>>>(sigma, T, J, N, conic);
+  compute_conic_kernel<<<gridsize, blocksize, 0, stream>>>(sigma, view, J, N, mh_dist, conic, radius);
 }

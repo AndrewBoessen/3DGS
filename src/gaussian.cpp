@@ -92,7 +92,7 @@ Gaussians Gaussians::Initialize(const std::unordered_map<uint64_t, Point3D> &poi
     // Convert RGB to SH band 0
     const float C0 = 0.28209479177387814;
     rgb_vec[i] = (rgb_vec[i] - Eigen::Vector3f(0.5f, 0.5f, 0.5f)) / C0;
-    opacity_vec[i] = 0.1f;
+    opacity_vec[i] = log(0.2f) - log(1.0f - 0.2f);
     scale_vec[i] = Eigen::Vector3f(logf(avg_dist), logf(avg_dist), logf(avg_dist));
     quaternion_vec[i] = Eigen::Quaternionf::Identity();
   }

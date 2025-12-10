@@ -9,17 +9,23 @@ inline constexpr int TILE_SIZE_FWD = 16;
 
 /**
  * @brief Compute conic of projected 2D covariance matrix
- * @param[in]  xyz    A device pointer to 3D points
- * @param[in]  K      Camera intrinsic projection matrix
- * @param[in]  sigma  3D Gaussian covariance matrix
- * @param[in]  T      Camera extrinsic projection matrix
- * @param[in]  N      The total number of points
- * @param[out] J      A device pointer to ouput Jacobian
- * @param[out] conic  A device pointer to output conic values
- * @param[in]  stream The CUDA stream to execute kernel on
+ * @param[in]  xyz      A device pointer to 3D points
+ * @param[in]  view     Camera view matrix
+ * @param[in]  sigma    3D Gaussian covariance matrix
+ * @param[in]  focal_x  Camera focal length x
+ * @param[in]  focal_y  Camera focal length y
+ * @param[in]  tan_fovx 3D Gaussian covariance matrix
+ * @param[in]  tan_fovy 3D Gaussian covariance matrix
+ * @param[in]  mh_dist  Mahalanobis distance to define bounding box
+ * @param[in]  N        The total number of points
+ * @param[out] J        A device pointer to ouput Jacobian
+ * @param[out] conic    A device pointer to output conic values
+ * @param[out] radius   A device pointer to output major and minor radius with rotation
+ * @param[in]  stream   The CUDA stream to execute kernel on
  */
-void compute_conic(float *const xyz, const float *K, float *const sigma, const float *T, const int N, float *J,
-                   float *conic, cudaStream_t stream = 0);
+void compute_conic(float *const xyz, const float *view, float *const sigma, const float focal_x, const float focal_y,
+                   const float tan_fovx, const float tan_fovy, const float mh_dist, const int N, float *J, float *conic,
+                   float4 *radius, cudaStream_t stream = 0);
 
 /**
  * @brief Compute covariance matrix of Gaussian from quaternion and scale vector
@@ -32,25 +38,28 @@ void compute_conic(float *const xyz, const float *K, float *const sigma, const f
 void compute_sigma(float *const quaternion, float *const scale, const int N, float *sigma, cudaStream_t stream = 0);
 
 /**
- * @brief Compute camera view of points from rotation matrix and translation vector
+ * @brief Compute camera view of points from View matrix
  * @param[in]  xyz_w  A device pointer to world view of points
- * @param[in]  T      A device pointer to camera extrinsic matrix
+ * @param[in]  view   A device pointer to camera view matrix (4x4)
  * @param[in]  N      The total number of points
  * @param[out] xyz_c  A device porinter to output camera view
  * @param[in]  stream The CUDA stream to execute kernel on
  */
-void camera_extrinsic_projection(float *const xyz_w, const float *T, const int N, float *xyz_c,
+void compute_camera_space_points(float *const xyz_w, const float *view, const int N, float *xyz_c,
                                  cudaStream_t stream = 0);
 
 /**
  * @brief Launches the CUDA kernel for projecting 3D points to 2D image coordinates.
- * @param[in]  xyz  A device pointer to the input array of 3D points.
- * @param[in]  K    A device pointer to the camera intrinsic matrix.
- * @param[in]  N    The total number of points.
- * @param[out] uv   A device pointer to the output array for 2D coordinates.
+ * @param[in]  xyz    A device pointer to the input array of 3D points.
+ * @param[in]  proj   A device pointer to the camera projection matrix (4x4).
+ * @param[in]  N      The total number of points.
+ * @param[in]  width  Image width.
+ * @param[in]  height Image height.
+ * @param[out] uv     A device pointer to the output array for 2D coordinates.
  * @param[in]  stream The CUDA stream to execute kernel on
  */
-void camera_intrinsic_projection(float *const xyz, const float *K, const int N, float *uv, cudaStream_t stream = 0);
+void project_to_screen(float *const xyz, const float *proj, const int N, const int width, const int height, float *uv,
+                       cudaStream_t stream = 0);
 
 /**
  * @brief Lauches CUDA kernel to perform frustum culling on guassians.
@@ -71,32 +80,33 @@ void cull_gaussians(float *const uv, float *const xyz, const int N, const float 
  * @brief Lanuches CUDA kernels to get gaussian tile intersections sorted by depth
  * @param[in]  uv                               A device pointer to gaussian coordinates in image frame
  * @param[in]  xyz                              A device pointer to 3D corrdinates of gaussians in camera perspective
- * @param[in]  conic                            A device pointer to 2D gaussian conic
+ * @param[in]  radius                           A device pointer to major and minor radius with rotation
  * @param[in]  n_tiles_x                        Number of tiles in image x axis
  * @param[in]  n_tiles_y                        Number of tiles in image y axis
- * @param[in]  mh_dist                          Mahalanobis distance to define bounding box
  * @param[in]  N                                The total number of points
  * @param[out] sorted_gaussian_bytes            Pointer to store bytes to allocate for sorted_gaussians
  * @param[out] sorted_gaussians                 A device array to ouput gaussians sorted by z depth
  * @param[out] splat_start_end_idx_by_tile_idx  A device array to index into sorted_gaussian by tile id
  * @param[in]  stream                           The CUDA stream to execute kernel on
  */
-void get_sorted_gaussian_list(const float *uv, const float *xyz, const float *conic, const int n_tiles_x,
-                              const int n_tiles_y, const float mh_dist, const int N, size_t &sorted_gaussian_bytes,
-                              int *sorted_gaussians, int *splat_start_end_idx_by_tile_idx, cudaStream_t stream = 0);
+void get_sorted_gaussian_list(const float *uv, const float *xyz, const float4 *radius, const int n_tiles_x,
+                              const int n_tiles_y, const int N, size_t &sorted_gaussian_bytes, int *sorted_gaussians,
+                              int *splat_start_end_idx_by_tile_idx, cudaStream_t stream = 0);
 
 /**
  * @brief Launches CUDA kernels to precompute spherical harmonic values and calculate rgb values
  * @param[in]  xyz                     A device pointer to 3D corrdinates of gaussians in camera perspective
  * @param[in]  sh_coefficients         A device pointer to SH params for each Gaussian
  * @param[in]  sh_coefficients_band_0  A device pointer to RGB values i.e. band 0
+ * @param[in]  campos                  The camera position
  * @param[in]  l_max                   The max degree of SH
  * @param[in]  N                       The total number of points
  * @param[out] rgb                     A device pointer to output rgb values
  * @param[in]  stream                  The CUDA stream to execute kernel on
  */
 void precompute_spherical_harmonics(const float *xyz, const float *sh_coefficients, const float *sh_coeffs_band_0,
-                                    const int l_max, const int N, float *rgb, cudaStream_t stream = 0);
+                                    const float3 campos, const int l_max, const int N, float *rgb,
+                                    cudaStream_t stream = 0);
 
 /**
  * @brief Launch CUDA kernels to render image pixel values from Gaussians

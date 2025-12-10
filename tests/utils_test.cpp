@@ -54,8 +54,7 @@ protected:
         << "max_gaussians: 1000000\n"
         << "delete_opacity_threshold: 0.005\n"
         << "uv_grad_threshold: 0.0002\n"
-        << "split_scale_factor: 1.5\n"
-        << "max_anisotropy: 20.0\n";
+        << "split_scale_factor: 1.5\n";
     out.close();
 
     // Create a YAML file that is missing a required key.
