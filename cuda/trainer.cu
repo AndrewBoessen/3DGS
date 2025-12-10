@@ -331,11 +331,11 @@ void TrainerImpl::evaluate() {
     std::fill(h_proj, h_proj + 16, 0.0f);
     h_proj[0] = 2.0f * znear / (right - left);
     h_proj[5] = 2.0f * znear / (top - bottom);
-    h_proj[8] = (right + left) / (right - left);
-    h_proj[9] = (top + bottom) / (top - bottom);
-    h_proj[10] = (zfar + znear) / (zfar - znear);
-    h_proj[11] = -(2.0f * zfar * znear) / (zfar - znear);
+    h_proj[2] = (right + left) / (right - left);
+    h_proj[6] = (top + bottom) / (top - bottom);
     h_proj[14] = 1.0f;
+    h_proj[10] = zfar / (zfar - znear);
+    h_proj[11] = -(zfar * znear) / (zfar - znear);
 
     thrust::copy(h_proj, h_proj + 16, cuda.camera.d_proj.begin());
     thrust::copy(h_view, h_view + 16, cuda.camera.d_view.begin());
@@ -1165,11 +1165,11 @@ void TrainerImpl::train() {
     std::fill(h_proj, h_proj + 16, 0.0f);
     h_proj[0] = 2.0f * znear / (right - left);
     h_proj[5] = 2.0f * znear / (top - bottom);
-    h_proj[8] = (right + left) / (right - left);
-    h_proj[9] = (top + bottom) / (top - bottom);
-    h_proj[10] = (zfar + znear) / (zfar - znear);
-    h_proj[11] = -(2.0f * zfar * znear) / (zfar - znear);
+    h_proj[2] = (right + left) / (right - left);
+    h_proj[6] = (top + bottom) / (top - bottom);
     h_proj[14] = 1.0f;
+    h_proj[10] = zfar / (zfar - znear);
+    h_proj[11] = -(zfar * znear) / (zfar - znear);
 
     Eigen::Matrix3d rot_mat_d = curr_image.QvecToRotMat();
     Eigen::Vector3d t_vec_d = curr_image.tvec;
