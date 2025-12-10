@@ -219,9 +219,8 @@ void TrainerImpl::test_train_split() {
     for (size_t i = 0; i < all_images.size(); ++i) {
       if (i % split == 0) {
         test_images.push_back(all_images[i]);
-      } else {
-        train_images.push_back(all_images[i]);
       }
+      train_images.push_back(all_images[i]);
     }
   }
 }
@@ -431,15 +430,13 @@ struct ComputeScaleMax {
   }
 };
 
-// Identifies Gaussians to be pruned based on low opacity, large scale, or high anisotropy.
+// Identifies Gaussians to be pruned based on low opacity or large scale
 struct IdentifyPrune {
   const float op_threshold;
   const float scale_max_thresh;
-  const float max_anisotropy;
   const float grad_threshold;
 
-  IdentifyPrune(float ot, float sm, float ma, float gt)
-      : op_threshold(ot), scale_max_thresh(sm), max_anisotropy(ma), grad_threshold(gt) {}
+  IdentifyPrune(float ot, float sm, float gt) : op_threshold(ot), scale_max_thresh(sm), grad_threshold(gt) {}
 
   __host__ __device__ bool operator()(const thrust::tuple<float, float, float, float, float> &t) const {
     float opacity_logit = thrust::get<0>(t);
@@ -453,11 +450,6 @@ struct IdentifyPrune {
       return true;
 
     float max_s = fmaxf(s1, fmaxf(s2, s3));
-
-    // Prune if too anisotropic
-    float min_s = fminf(s1, fminf(s2, s3));
-    if (max_s > max_anisotropy * min_s)
-      return true;
 
     // Dont prune if split or clone
     if (grad_uv > grad_threshold && (max_s / 1.6f) <= scale_max_thresh) {
@@ -552,7 +544,7 @@ void TrainerImpl::adaptive_density_step() {
 
   thrust::device_vector<bool> d_prune_mask(num_gaussians);
   thrust::transform(prune_iter_start, prune_iter_end, d_prune_mask.begin(),
-                    IdentifyPrune(op_threshold, max_scale, config.max_anisotropy, config.uv_grad_threshold));
+                    IdentifyPrune(op_threshold, max_scale, config.uv_grad_threshold));
 
   int num_to_prune = thrust::count(d_prune_mask.begin(), d_prune_mask.end(), true);
 
@@ -1154,7 +1146,7 @@ void TrainerImpl::train() {
     const float fov_y = 2 * atan(curr_camera.height / (2 * curr_camera.params[1]));
 
     const float tan_half_fov_x = tan(fov_x / 2.0f);
-    const float tan_half_fov_y = tan(fov_x / 2.0f);
+    const float tan_half_fov_y = tan(fov_y / 2.0f);
 
     const float top = tan_half_fov_y * znear;
     const float bottom = -top;
