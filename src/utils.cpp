@@ -164,10 +164,10 @@ void save_ply(const Gaussians &gaussians, const std::string &filename) {
     outfile.write(reinterpret_cast<const char *>(&gaussians.scale[i].z()), sizeof(float));
 
     // Rotation (Quaternion)
-    outfile.write(reinterpret_cast<const char *>(&gaussians.quaternion[i].w()), sizeof(float));
     outfile.write(reinterpret_cast<const char *>(&gaussians.quaternion[i].x()), sizeof(float));
     outfile.write(reinterpret_cast<const char *>(&gaussians.quaternion[i].y()), sizeof(float));
     outfile.write(reinterpret_cast<const char *>(&gaussians.quaternion[i].z()), sizeof(float));
+    outfile.write(reinterpret_cast<const char *>(&gaussians.quaternion[i].w()), sizeof(float));
   }
 
   outfile.close();
