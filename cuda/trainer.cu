@@ -25,8 +25,11 @@
 #include <thrust/count.h>
 #include <thrust/device_vector.h>
 #include <thrust/functional.h>
+#include <thrust/gather.h>
 #include <thrust/host_vector.h>
 #include <thrust/scan.h>
+#include <thrust/sequence.h>
+#include <thrust/sort.h>
 #include <thrust/transform.h>
 
 /**
@@ -76,6 +79,7 @@ private:
   void optimizer_step(ForwardPassData pass_data);
   void add_sh_band();
   void adaptive_density_step();
+  void sort_gaussians();
 
   // --- Async Loading Members ---
   std::thread loader_thread;
@@ -769,6 +773,95 @@ void TrainerImpl::adaptive_density_step() {
   }
 }
 
+struct BoundingBox {
+  float min_x, max_x;
+  float min_y, max_y;
+  float min_z, max_z;
+};
+
+struct TupleToBox {
+  __host__ __device__ BoundingBox operator()(const thrust::tuple<float, float, float> &t) const {
+    float x = thrust::get<0>(t);
+    float y = thrust::get<1>(t);
+    float z = thrust::get<2>(t);
+    return BoundingBox{x, x, y, y, z, z};
+  }
+};
+
+struct MergeBoxes {
+  __host__ __device__ BoundingBox operator()(const BoundingBox &a, const BoundingBox &b) const {
+    return BoundingBox{min(a.min_x, b.min_x), max(a.max_x, b.max_x), min(a.min_y, b.min_y),
+                       max(a.max_y, b.max_y), min(a.min_z, b.min_z), max(a.max_z, b.max_z)};
+  }
+};
+
+struct StridedAddressMap {
+  const int *sorted_indices;
+  int stride;
+
+  __host__ __device__ int operator()(int i) const {
+    int logical_block = i / stride;
+    int offset = i % stride;
+    int target_block = sorted_indices[logical_block];
+
+    return (target_block * stride) + offset;
+  }
+};
+
+template <typename T>
+void gather_with_stride(thrust::device_vector<T> &data, thrust::device_vector<int> &indices, int stride, int size) {
+  if (data.size() == 0 || indices.size() == 0)
+    return;
+
+  // Allocate temporary storage for the result
+  // (Physical gathering always requires a copy)
+  thrust::device_vector<T> output(data.size());
+
+  const int *raw_indices = thrust::raw_pointer_cast(indices.data());
+
+  auto map_iter =
+      thrust::make_transform_iterator(thrust::make_counting_iterator(0), StridedAddressMap{raw_indices, stride});
+
+  // Perform the gather
+  thrust::gather(map_iter, map_iter + size * stride, data.begin(), output.begin());
+
+  // Swap the output back into the input vector
+  data.swap(output);
+}
+
+void TrainerImpl::sort_gaussians() {
+  thrust::device_vector<uint64_t> morton_codes(num_gaussians);
+
+  auto x_it = thrust::make_strided_iterator(cuda.gaussians.d_xyz.begin(), 3);
+  auto y_it = thrust::make_strided_iterator(cuda.gaussians.d_xyz.begin() + 1, 3);
+  auto z_it = thrust::make_strided_iterator(cuda.gaussians.d_xyz.begin() + 2, 3);
+
+  auto points_iter_start = thrust::make_zip_iterator(thrust::make_tuple(x_it, y_it, z_it));
+  auto points_iter_end = points_iter_start + num_gaussians;
+
+  const float inf = std::numeric_limits<float>::infinity();
+  BoundingBox init = {inf, -inf, inf, -inf, inf, -inf};
+
+  BoundingBox bb = thrust::transform_reduce(points_iter_start, points_iter_end, TupleToBox(), init, MergeBoxes());
+
+  compute_morton_codes(num_gaussians, thrust::raw_pointer_cast(cuda.gaussians.d_xyz.data()), bb.max_x, bb.max_y,
+                       bb.max_z, bb.min_x, bb.min_y, bb.min_z, thrust::raw_pointer_cast(morton_codes.data()));
+
+  thrust::device_vector<int> sort_ids(num_gaussians);
+
+  thrust::sequence(sort_ids.begin(), sort_ids.end());
+
+  thrust::sort_by_key(morton_codes.begin(), morton_codes.end(), sort_ids.begin());
+
+  const int num_sh_coeffs = (l_max + 1) * (l_max + 1) - 1;
+  gather_with_stride(cuda.gaussians.d_xyz, sort_ids, 3, num_gaussians);
+  gather_with_stride(cuda.gaussians.d_rgb, sort_ids, 3, num_gaussians);
+  gather_with_stride(cuda.gaussians.d_opacity, sort_ids, 1, num_gaussians);
+  gather_with_stride(cuda.gaussians.d_scale, sort_ids, 3, num_gaussians);
+  gather_with_stride(cuda.gaussians.d_quaternion, sort_ids, 4, num_gaussians);
+  gather_with_stride(cuda.gaussians.d_sh, sort_ids, num_sh_coeffs, num_gaussians);
+}
+
 float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_camera, ForwardPassData &pass_data,
                                  const float bg_color, const thrust::device_vector<float> &d_gt_image) {
   const int width = (int)curr_camera.width;
@@ -1239,6 +1332,7 @@ void TrainerImpl::train() {
     if (iter > config.adaptive_control_start && iter % config.adaptive_control_interval == 0 &&
         iter < config.adaptive_control_end) {
       adaptive_density_step();
+      sort_gaussians();
       reset_grad_accum();
     }
 
