@@ -11,6 +11,62 @@
 #include <thrust/reduce.h>
 #include <thrust/transform.h>
 
+// Constants for 64-bit Morton code (21 bits per component)
+constexpr uint32_t BITS_PER_COORD = 21;
+constexpr uint32_t MAX_COORD_VAL = (1 << BITS_PER_COORD) - 1; // 2^21 - 1 = 2097151
+
+__device__ __forceinline__ uint64_t spread_bits(uint64_t n) {
+  // Ensure only the lower 21 bits are used.
+  n &= MAX_COORD_VAL;
+
+  // Perform the bit spreading using shifts and masks.
+  // The sequence is designed to efficiently insert two zero bits
+  // between every original bit.
+
+  // Pattern: 0 Z Z Z Z Z Z Z Z Z Z Z Z Z Z Z Z Z Z Z Z Z
+  // Final goal: x_20 00 x_19 00 x_18 00 ... 00 x_0
+
+  // Mask constants derived from Hacker's Delight (Chapter 7)
+  // The constants are carefully calculated to group operations.
+
+  n = (n | (n << 32)) & 0x1F000000FFFF;
+  n = (n | (n << 16)) & 0x1F0000FF0000FF;
+  n = (n | (n << 8)) & 0x100F807C0F807C0F;
+  n = (n | (n << 4)) & 0x1084210842108421;
+  n = (n | (n << 2)) & 0x1249249249249249;
+
+  return n;
+}
+
+__global__ void morton_codes_kernel(const int N, const float *__restrict__ d_xyz, const float x_max, const float y_max,
+                                    const float z_max, const float x_min, const float y_min, const float z_min,
+                                    uint64_t *__restrict__ codes) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (i >= N)
+    return;
+
+  // load unormalized corrdinates
+  const float x = d_xyz[i * 3 + 0];
+  const float y = d_xyz[i * 3 + 1];
+  const float z = d_xyz[i * 3 + 2];
+
+  // normalize and quantize using k=21 bit depth
+  const uint64_t x_q = (uint64_t)((x - x_min) * (MAX_COORD_VAL / (x_max - x_min)));
+  const uint64_t y_q = (uint64_t)((y - y_min) * (MAX_COORD_VAL / (y_max - y_min)));
+  const uint64_t z_q = (uint64_t)((z - z_min) * (MAX_COORD_VAL / (z_max - z_min)));
+
+  // spread bits to interleave
+  const uint64_t x_spread = spread_bits(x_q);
+  const uint64_t y_spread = spread_bits(y_q);
+  const uint64_t z_spread = spread_bits(z_q);
+
+  // interleave bits
+  const uint64_t code = (z_spread << 2) | (y_spread << 1) | x_spread;
+
+  codes[i] = code;
+}
+
 __device__ __forceinline__ bool z_distance_culling(const float z, const float near_thresh) { return z >= near_thresh; }
 
 __device__ __forceinline__ bool frustum_culling(const float u, const float v, const int padding, const int width,
@@ -284,6 +340,22 @@ __global__ void find_tile_boundaries_kernel(const double *__restrict__ sorted_ke
       splat_start_end_idx_by_tile_idx[i] = num_splats;
     }
   }
+}
+
+void compute_morton_codes(const int N, const float *d_xyz, const float x_max, const float y_max, const float z_max,
+                          const float x_min, const float y_min, const float z_min, uint64_t *codes,
+                          cudaStream_t stream) {
+  ASSERT_DEVICE_POINTER(d_xyz);
+  ASSERT_DEVICE_POINTER(codes);
+
+  const int threads_per_block = 256;
+  // Calculate the number of blocks needed to cover all N points
+  const int num_blocks = (N + threads_per_block - 1) / threads_per_block;
+
+  dim3 gridsize(num_blocks, 1, 1);
+  dim3 blocksize(threads_per_block, 1, 1);
+
+  morton_codes_kernel<<<gridsize, blocksize, 0, stream>>>(N, d_xyz, x_max, y_max, z_max, x_min, y_min, z_min, codes);
 }
 
 void cull_gaussians(float *const uv, float *const xyz, const int N, const float near_thresh, const int padding,

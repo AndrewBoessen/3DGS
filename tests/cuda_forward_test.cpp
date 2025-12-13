@@ -913,3 +913,108 @@ TEST_F(CudaKernelTest, FusedLossKernel_RGB_Correctness) {
   CUDA_CHECK(cudaFree(d_gt));
   CUDA_CHECK(cudaFree(d_grad));
 }
+
+// Test case for the compute_morton_codes kernel.
+TEST_F(CudaKernelTest, ComputeMortonCodes) {
+  const int N = 5; // Number of points
+  // Define bounding box
+  const float x_min = -10.0f, x_max = 10.0f;
+  const float y_min = -5.0f, y_max = 5.0f;
+  const float z_min = 0.0f, z_max = 20.0f;
+
+  // Bits per coordinate (must match kernel)
+  const uint32_t BITS_PER_COORD = 21;
+  const uint32_t MAX_COORD_VAL = (1 << BITS_PER_COORD) - 1;
+
+  // Host-side input data
+  // 1. Min bounds -> 0
+  // 2. Max bounds -> MAX_COORD_VAL
+  // 3. Center -> Middle
+  // 4. Random point 1
+  // 5. Random point 2
+  const std::vector<float> h_xyz = {
+      x_min, y_min, z_min, // Min
+      x_max, y_max, z_max, // Max
+      0.0f,  0.0f,  10.0f, // Center
+      5.0f,  2.0f,  5.0f,  // P1
+      -5.0f, -2.0f, 15.0f  // P2
+  };
+
+  std::vector<uint64_t> h_codes(N);
+
+  // Device-side pointers
+  float *d_xyz;
+  uint64_t *d_codes;
+
+  // Allocate memory
+  CUDA_CHECK(cudaMalloc(&d_xyz, h_xyz.size() * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_codes, h_codes.size() * sizeof(uint64_t)));
+
+  // Copy inputs
+  CUDA_CHECK(cudaMemcpy(d_xyz, h_xyz.data(), h_xyz.size() * sizeof(float), cudaMemcpyHostToDevice));
+
+  // Run kernel
+  compute_morton_codes(N, d_xyz, x_max, y_max, z_max, x_min, y_min, z_min, d_codes);
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  // Copy results
+  CUDA_CHECK(cudaMemcpy(h_codes.data(), d_codes, h_codes.size() * sizeof(uint64_t), cudaMemcpyDeviceToHost));
+
+  // Helper to compute expected code on host
+  auto spread_bits = [&](uint64_t n) -> uint64_t {
+    n &= MAX_COORD_VAL;
+    n = (n | (n << 32)) & 0x1F000000FFFF;
+    n = (n | (n << 16)) & 0x1F0000FF0000FF;
+    n = (n | (n << 8)) & 0x100F807C0F807C0F;
+    n = (n | (n << 4)) & 0x1084210842108421;
+    n = (n | (n << 2)) & 0x1249249249249249;
+    return n;
+  };
+
+  std::vector<uint64_t> expected_codes(N);
+  for (int i = 0; i < N; ++i) {
+    float x = h_xyz[i * 3 + 0];
+    float y = h_xyz[i * 3 + 1];
+    float z = h_xyz[i * 3 + 2];
+
+    // Clamp to bounds (kernel doesn't explicitly clamp but logic assumes valid input,
+    // however for robustness we should likely clamp if input is slightly out due to float precision,
+    // but here we just pass perfect inputs).
+    // Logic from kernel:
+    // const uint64_t x_q = (uint64_t)((x - x_min) * (MAX_COORD_VAL / (x_max - x_min)));
+    // Note: The kernel does integer cast.
+
+    // Warning: Potential precision issues if we don't match exactly.
+    // Let's rely on the fact that these are simple floats.
+    // "MAX_COORD_VAL / (x_max - x_min)" might be computed in float.
+
+    float norm_x = (x - x_min) / (x_max - x_min);
+    float norm_y = (y - y_min) / (y_max - y_min);
+    float norm_z = (z - z_min) / (z_max - z_min);
+
+    // Clamp to [0, 1] to be safe
+    norm_x = std::min(std::max(norm_x, 0.0f), 1.0f);
+    norm_y = std::min(std::max(norm_y, 0.0f), 1.0f);
+    norm_z = std::min(std::max(norm_z, 0.0f), 1.0f);
+
+    uint64_t x_q = (uint64_t)(norm_x * MAX_COORD_VAL);
+    uint64_t y_q = (uint64_t)(norm_y * MAX_COORD_VAL);
+    uint64_t z_q = (uint64_t)(norm_z * MAX_COORD_VAL);
+
+    uint64_t x_s = spread_bits(x_q);
+    uint64_t y_s = spread_bits(y_q);
+    uint64_t z_s = spread_bits(z_q);
+
+    expected_codes[i] = (z_s << 2) | (y_s << 1) | x_s;
+  }
+
+  // Verify
+  for (int i = 0; i < N; ++i) {
+    EXPECT_EQ(h_codes[i], expected_codes[i]) << "Mismatch at index " << i << " (P=" << h_xyz[i * 3] << ","
+                                             << h_xyz[i * 3 + 1] << "," << h_xyz[i * 3 + 2] << ")";
+  }
+
+  // Cleanup
+  CUDA_CHECK(cudaFree(d_xyz));
+  CUDA_CHECK(cudaFree(d_codes));
+}
