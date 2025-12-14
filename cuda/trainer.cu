@@ -808,25 +808,63 @@ struct StridedAddressMap {
   }
 };
 
+template <int STRIDE> struct StridedAddressMapTemplate {
+  const int *sorted_indices;
+
+  __host__ __device__ int operator()(int i) const {
+    int logical_block = i / STRIDE;
+    int offset = i % STRIDE;
+    int target_block = sorted_indices[logical_block];
+
+    return (target_block * STRIDE) + offset;
+  }
+};
+
+// Dynamic stride version (legacy name for compatibility with dynamic calls)
 template <typename T>
 void gather_with_stride(thrust::device_vector<T> &data, thrust::device_vector<int> &indices, int stride, int size) {
   if (data.size() == 0 || indices.size() == 0)
     return;
 
-  // Allocate temporary storage for the result
-  // (Physical gathering always requires a copy)
   thrust::device_vector<T> output(data.size());
-
   const int *raw_indices = thrust::raw_pointer_cast(indices.data());
 
   auto map_iter =
       thrust::make_transform_iterator(thrust::make_counting_iterator(0), StridedAddressMap{raw_indices, stride});
 
-  // Perform the gather
   thrust::gather(map_iter, map_iter + size * stride, data.begin(), output.begin());
-
-  // Swap the output back into the input vector
   data.swap(output);
+}
+
+// Templated stride version with optimizations
+template <int STRIDE, typename T>
+void gather_with_stride(thrust::device_vector<T> &data, thrust::device_vector<int> &indices, int size) {
+  if (data.size() == 0 || indices.size() == 0)
+    return;
+
+  if constexpr (STRIDE == 1) {
+    // Direct gather
+    thrust::device_vector<T> output(data.size());
+    thrust::gather(indices.begin(), indices.end(), data.begin(), output.begin());
+    data.swap(output);
+  } else if constexpr (std::is_same_v<T, float> && STRIDE == 4) {
+    // float4 optimization (quaternions)
+    thrust::device_vector<float> output(data.size());
+    const float4 *raw_data = reinterpret_cast<const float4 *>(thrust::raw_pointer_cast(data.data()));
+    float4 *raw_output = reinterpret_cast<float4 *>(thrust::raw_pointer_cast(output.data()));
+    thrust::gather(indices.begin(), indices.end(), raw_data, raw_output);
+    data.swap(output);
+  } else {
+    // Generic templated stride (e.g. 3 for XYZ/RGB/Scale) - benefits from const stride mod/div
+    thrust::device_vector<T> output(data.size());
+    const int *raw_indices = thrust::raw_pointer_cast(indices.data());
+
+    auto map_iter = thrust::make_transform_iterator(thrust::make_counting_iterator(0),
+                                                    StridedAddressMapTemplate<STRIDE>{raw_indices});
+
+    thrust::gather(map_iter, map_iter + size * STRIDE, data.begin(), output.begin());
+    data.swap(output);
+  }
 }
 
 void TrainerImpl::sort_gaussians() {
@@ -854,12 +892,34 @@ void TrainerImpl::sort_gaussians() {
   thrust::sort_by_key(morton_codes.begin(), morton_codes.end(), sort_ids.begin());
 
   const int num_sh_coeffs = (l_max + 1) * (l_max + 1) - 1;
-  gather_with_stride(cuda.gaussians.d_xyz, sort_ids, 3, num_gaussians);
-  gather_with_stride(cuda.gaussians.d_rgb, sort_ids, 3, num_gaussians);
-  gather_with_stride(cuda.gaussians.d_opacity, sort_ids, 1, num_gaussians);
-  gather_with_stride(cuda.gaussians.d_scale, sort_ids, 3, num_gaussians);
-  gather_with_stride(cuda.gaussians.d_quaternion, sort_ids, 4, num_gaussians);
+
+  // Use templated versions for fixed-size components
+  gather_with_stride<3>(cuda.gaussians.d_xyz, sort_ids, num_gaussians);
+  gather_with_stride<3>(cuda.gaussians.d_rgb, sort_ids, num_gaussians);
+  gather_with_stride<1>(cuda.gaussians.d_opacity, sort_ids, num_gaussians);
+  gather_with_stride<3>(cuda.gaussians.d_scale, sort_ids, num_gaussians);
+  gather_with_stride<4>(cuda.gaussians.d_quaternion, sort_ids, num_gaussians);
+
+  // Keep dynamic version for SH
   gather_with_stride(cuda.gaussians.d_sh, sort_ids, num_sh_coeffs, num_gaussians);
+
+  gather_with_stride<3>(cuda.optimizer.m_grad_xyz, sort_ids, num_gaussians);
+  gather_with_stride<3>(cuda.optimizer.v_grad_xyz, sort_ids, num_gaussians);
+
+  gather_with_stride<3>(cuda.optimizer.m_grad_rgb, sort_ids, num_gaussians);
+  gather_with_stride<3>(cuda.optimizer.v_grad_rgb, sort_ids, num_gaussians);
+
+  gather_with_stride<1>(cuda.optimizer.m_grad_opacity, sort_ids, num_gaussians);
+  gather_with_stride<1>(cuda.optimizer.v_grad_opacity, sort_ids, num_gaussians);
+
+  gather_with_stride<3>(cuda.optimizer.m_grad_scale, sort_ids, num_gaussians);
+  gather_with_stride<3>(cuda.optimizer.v_grad_scale, sort_ids, num_gaussians);
+
+  gather_with_stride<4>(cuda.optimizer.m_grad_quaternion, sort_ids, num_gaussians);
+  gather_with_stride<4>(cuda.optimizer.v_grad_quaternion, sort_ids, num_gaussians);
+
+  gather_with_stride(cuda.optimizer.m_grad_sh, sort_ids, num_sh_coeffs, num_gaussians);
+  gather_with_stride(cuda.optimizer.v_grad_sh, sort_ids, num_sh_coeffs, num_gaussians);
 }
 
 float TrainerImpl::backward_pass(const Image &curr_image, const Camera &curr_camera, ForwardPassData &pass_data,
