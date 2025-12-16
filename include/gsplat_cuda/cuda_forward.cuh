@@ -169,3 +169,20 @@ float compute_psnr(const float *predicted_data, const float *gt_data, int rows, 
 void accumulate_gradients(const int N, const float u_scale, const float v_scale, const bool *d_mask,
                           const float *d_grad_xyz, const float *d_grad_uv, float *d_xyz_grad_accum,
                           float *d_uv_grad_acuum, int *d_grad_accum_dur, cudaStream_t stream = 0);
+
+/**
+ * @brief Launch CUDA kernel to compute morton codes of xyz corrdinates
+ * @param[in] N Total number of coordinates
+ * @param[in] d_xyz Device pointer to array of xyz values
+ * @param[in] x_max Max x value
+ * @param[in] y_max Max y value
+ * @param[in] z_max Max z value
+ * @param[in] x_min Min x value
+ * @param[in] y_min Min y value
+ * @param[in] z_min Min z value
+ * @param[out] codes Morton codes
+ * @param[in] stream The CUDA stream to execute on
+ */
+void compute_morton_codes(const int N, const float *d_xyz, const float x_max, const float y_max, const float z_max,
+                          const float x_min, const float y_min, const float z_min, uint64_t *codes,
+                          cudaStream_t stream = 0);
