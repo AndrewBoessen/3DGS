@@ -24,6 +24,7 @@
 #include <thread>
 #include <thrust/count.h>
 #include <thrust/device_vector.h>
+#include <thrust/execution_policy.h>
 #include <thrust/functional.h>
 #include <thrust/gather.h>
 #include <thrust/host_vector.h>
@@ -832,7 +833,7 @@ void gather_with_stride(thrust::device_vector<T> &data, thrust::device_vector<in
   auto map_iter =
       thrust::make_transform_iterator(thrust::make_counting_iterator(0), StridedAddressMap{raw_indices, stride});
 
-  thrust::gather(map_iter, map_iter + size * stride, data.begin(), output.begin());
+  thrust::gather(thrust::device, map_iter, map_iter + size * stride, data.begin(), output.begin());
   data.swap(output);
 }
 
@@ -845,14 +846,14 @@ void gather_with_stride(thrust::device_vector<T> &data, thrust::device_vector<in
   if constexpr (STRIDE == 1) {
     // Direct gather
     thrust::device_vector<T> output(data.size());
-    thrust::gather(indices.begin(), indices.end(), data.begin(), output.begin());
+    thrust::gather(thrust::device, indices.begin(), indices.end(), data.begin(), output.begin());
     data.swap(output);
   } else if constexpr (std::is_same_v<T, float> && STRIDE == 4) {
     // float4 optimization (quaternions)
     thrust::device_vector<float> output(data.size());
     const float4 *raw_data = reinterpret_cast<const float4 *>(thrust::raw_pointer_cast(data.data()));
     float4 *raw_output = reinterpret_cast<float4 *>(thrust::raw_pointer_cast(output.data()));
-    thrust::gather(indices.begin(), indices.end(), raw_data, raw_output);
+    thrust::gather(thrust::device, indices.begin(), indices.end(), raw_data, raw_output);
     data.swap(output);
   } else {
     // Generic templated stride (e.g. 3 for XYZ/RGB/Scale) - benefits from const stride mod/div
@@ -862,7 +863,7 @@ void gather_with_stride(thrust::device_vector<T> &data, thrust::device_vector<in
     auto map_iter = thrust::make_transform_iterator(thrust::make_counting_iterator(0),
                                                     StridedAddressMapTemplate<STRIDE>{raw_indices});
 
-    thrust::gather(map_iter, map_iter + size * STRIDE, data.begin(), output.begin());
+    thrust::gather(thrust::device, map_iter, map_iter + size * STRIDE, data.begin(), output.begin());
     data.swap(output);
   }
 }
