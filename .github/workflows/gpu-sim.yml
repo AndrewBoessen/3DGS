@@ -1,0 +1,76 @@
+name: CUDA tests (simulated H100)
+
+# Optional, non-required check. The hosted runners have no GPU, so this builds
+# the CUDA kernels and runs the forward, backward, optimizer and adaptive
+# density gtests on a simulated NVIDIA H100
+# (https://github.com/pantheongpu/pantheonsim). A simulator cannot reproduce
+# hardware-specific behavior or timing, so it complements real-GPU testing and
+# does not replace it.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "cuda/**"
+      - "include/**"
+      - "tests/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/gpu-sim.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cuda-sim:
+    name: CUDA 13.0 tests, simulated H100
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up the simulated GPU and CUDA toolkit
+        uses: pantheongpu/setup-pantheonsim@656f502ef4782d94d34d8ddd368e333960609639 # v0.1.8
+        with:
+          gpu: nvidia/h100
+          cuda-toolkit: "13.0"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++-12 libopencv-dev
+
+      # The simulator runs PTX only (90-virtual) and needs a shared CUDA
+      # runtime. The project pins CMAKE_CUDA_ARCHITECTURES to native, which
+      # needs a real GPU, so that one line is rewritten for this job.
+      - name: Configure project
+        run: |
+          sed -i 's/set(CMAKE_CUDA_ARCHITECTURES native)/set(CMAKE_CUDA_ARCHITECTURES 90-virtual)/' CMakeLists.txt
+          cmake -B build -S . -GNinja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_CXX_COMPILER=g++-12 \
+                -DCMAKE_CUDA_HOST_COMPILER=g++-12 \
+                -DCMAKE_CUDA_COMPILER=/usr/local/cuda-13.0/bin/nvcc \
+                -DCUDAToolkit_ROOT=/usr/local/cuda-13.0 \
+                -DCMAKE_CUDA_RUNTIME_LIBRARY=Shared
+
+      - name: Build GPU tests
+        run: |
+          cmake --build build -j3 --target \
+            cuda_forward_tests cuda_backward_tests cuda_optimizer_tests adaptive_density_tests
+
+      - name: Run GPU tests
+        run: |
+          set -o pipefail
+          vgpu run ctest --test-dir build --output-on-failure \
+            -R '^(CudaKernelTest|CudaBackwardKernelTest|AdaptiveDensityTest|AdamOptimizerTest)\.' | tee ctest.log
+          # Fail if nothing ran or anything was skipped.
+          grep -Eq '100% tests passed, 0 tests failed out of [1-9]' ctest.log
+          ! grep -qi 'skipped' ctest.log
